@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { renameSync } from "node:fs";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -10,6 +11,7 @@ import { createFinalVideoJobHandler, exportFinalVideo, FINAL_VIDEO_JOB_TYPE } fr
 import { createJob, getJob } from "./job-store.js";
 import { JobCancelledError, JobWorker } from "./job-worker.js";
 import { loadRenderPlanSnapshot } from "./render-chunk-job.js";
+import { changeScriptApproval, getScriptApproval } from "./script-approval-store.js";
 
 const TIMELINE = "a".repeat(64);
 const hash = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
@@ -99,6 +101,118 @@ test("最终导出严格复验当前分片并成对生成可复用视频与版�
   }
 });
 
+test("复用旧 final 的异步探测期间撤回批准时不得返回 reused", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  try {
+    const old = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    let withdrawn = false;
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, probe: async (path) => {
+        const measured = await base.probe(path);
+        if (path === old.finalPath && !withdrawn) {
+          withdrawn = true;
+          changeScriptApproval(current.connection.database, "episode", { action: "withdraw", expectedRevision: 1 });
+        }
+        return measured;
+      } }), /不能开始.*视频生产/u);
+    assert.equal(withdrawn, true);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("最终身份复核与同步目录切换共享数据库写事务", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  try {
+    const old = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    await writeFile(old.manifestPath, "force-rebuild");
+    let withdrawBlocked = false;
+    const rebuilt = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRenameSync: (from, to) => {
+        if (from.toString().includes(".tmp")) {
+          try { changeScriptApproval(current.connection.database, "episode", { action: "withdraw", expectedRevision: 1 }); }
+          catch (error) { withdrawBlocked = /transaction within a transaction/u.test(String(error)); }
+        }
+        renameSync(from, to);
+      } });
+    assert.equal(rebuilt.reused, false);
+    assert.equal(withdrawBlocked, true);
+    assert.equal(getScriptApproval(current.connection.database, "episode").status, "approved");
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("崩溃残留只按完整 pair 恢复且非 ENOENT 与清理失败原样返回", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  try {
+    const first = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    const target = dirname(first.finalPath);
+    const backup = `${target}.backup`;
+    await rename(target, backup);
+    assert.equal((await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base)).reused, true);
+
+    await cp(target, backup, { recursive: true });
+    assert.equal((await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base)).reused, true);
+    await assert.rejects(stat(backup), { code: "ENOENT" });
+
+    await cp(target, backup, { recursive: true });
+    await writeFile(first.manifestPath, "changed-identity");
+    assert.equal((await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base)).reused, true);
+
+    await cp(target, backup, { recursive: true });
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRemove: async (path, options) => {
+        if (path === backup) throw Object.assign(new Error("cleanup-denied"), { code: "EACCES" });
+        await rm(path, options);
+      } }), /cleanup-denied/u);
+    assert.equal((await stat(target)).isDirectory(), true);
+    assert.equal((await stat(backup)).isDirectory(), true);
+    await rm(backup, { recursive: true });
+
+    await cp(target, backup, { recursive: true });
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishLstat: ((path: string) => {
+        if (path === backup) throw Object.assign(new Error("stat-denied"), { code: "EACCES" });
+        return lstat(path);
+      }) as typeof lstat }), /stat-denied/u);
+    assert.equal((await stat(target)).isDirectory(), true);
+    assert.equal((await stat(backup)).isDirectory(), true);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("成对发布失败会恢复旧目录且不留下撕裂版本", async () => {
   const current = await fixture();
   const base = {
@@ -115,9 +229,9 @@ test("成对发布失败会恢复旧目录且不留下撕裂版本", async () =>
     await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
       { episodeId: "episode", timelineHash: TIMELINE }, {
         ...base,
-        publishRename: async (from, to) => {
+        publishRenameSync: (from, to) => {
           if (from.toString().includes(".tmp") && to.toString() === dirname(first.finalPath)) throw new Error("publish-failure");
-          await rename(from, to);
+          renameSync(from, to);
         },
       }), /publish-failure/);
     assert.equal(await readFile(first.manifestPath, "utf8"), "invalid-old-manifest");

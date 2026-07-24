@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, createReadStream } from "node:fs";
+import { constants, createReadStream, renameSync, rmSync } from "node:fs";
 import { copyFile, lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -57,6 +57,10 @@ interface FinalVideoDependencies {
   run: typeof runVideoProcess;
   probe: typeof probeNineSixteenVideo;
   publishRename: typeof rename;
+  publishRemove: typeof rm;
+  publishLstat: typeof lstat;
+  publishRenameSync: typeof renameSync;
+  publishRemoveSync: typeof rmSync;
 }
 
 function sha256(content: string | Buffer) {
@@ -132,27 +136,85 @@ function exportIdentity(snapshot: ReturnType<typeof loadRenderPlanSnapshot>, row
   } as const;
 }
 
-async function recoverPublish(target: string, backup: string, publishRename: typeof rename) {
-  const exists = async (path: string) => lstat(path).then(() => true, () => false);
-  if (!await exists(backup)) return;
-  if (await exists(target)) await rm(backup, { recursive: true, force: true });
-  else await publishRename(backup, target);
-}
-
-async function publishDirectory(target: string, staging: string, publishRename: typeof rename) {
-  const backup = `${target}.backup`;
-  await recoverPublish(target, backup, publishRename);
-  let oldMoved = false;
-  try {
-    try { await publishRename(target, backup); oldMoved = true; } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await publishRename(staging, target);
-  } catch (error) {
-    if (oldMoved) await publishRename(backup, target).catch(() => undefined);
+async function exists(path: string, publishLstat: typeof lstat) {
+  try { await publishLstat(path); return true; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  if (oldMoved) await rm(backup, { recursive: true, force: true });
+}
+
+async function validPublishedPair(
+  dataRoot: string,
+  directory: string,
+  manifestBase: Omit<FinalVideoManifest, "finalVideo">,
+  finalRelativePath: string,
+  probe: typeof probeNineSixteenVideo,
+) {
+  try {
+    const videoPath = join(directory, "video.mp4");
+    const manifestPath = join(directory, "manifest.json");
+    await assertOrdinaryDataFile(dataRoot, videoPath);
+    await assertOrdinaryDataFile(dataRoot, manifestPath);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as FinalVideoManifest;
+    if (JSON.stringify({ ...manifest, finalVideo: undefined }) !==
+        JSON.stringify({ ...manifestBase, finalVideo: undefined }) ||
+        manifest.finalVideo.relativePath !== finalRelativePath) return false;
+    const measured = await probe(videoPath);
+    return measured.bytes === manifest.finalVideo.bytes && measured.durationMs === manifest.finalVideo.durationMs &&
+      await sha256File(videoPath) === manifest.finalVideo.fileHash;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return false;
+    throw error;
+  }
+}
+
+async function recoverPublish(
+  dataRoot: string,
+  target: string,
+  backup: string,
+  manifestBase: Omit<FinalVideoManifest, "finalVideo">,
+  finalRelativePath: string,
+  probe: typeof probeNineSixteenVideo,
+  publishRename: typeof rename,
+  publishRemove: typeof rm,
+  publishLstat: typeof lstat,
+) {
+  if (!await exists(backup, publishLstat)) return;
+  const backupValid = await validPublishedPair(dataRoot, backup, manifestBase, finalRelativePath, probe);
+  if (!await exists(target, publishLstat)) {
+    if (!backupValid) throw new Error("最终导出备份不完整，拒绝恢复");
+    await publishRename(backup, target);
+    return;
+  }
+  if (await validPublishedPair(dataRoot, target, manifestBase, finalRelativePath, probe)) {
+    await publishRemove(backup, { recursive: true });
+    return;
+  }
+  if (!backupValid) throw new Error("最终导出目标与备份均不完整，拒绝恢复");
+  await publishRemove(target, { recursive: true });
+  await publishRename(backup, target);
+}
+
+function publishDirectorySync(
+  target: string,
+  staging: string,
+  publishRename: typeof renameSync,
+  publishRemove: typeof rmSync,
+) {
+  const backup = `${target}.backup`;
+  let oldMoved = false;
+  try {
+    try { publishRename(target, backup); oldMoved = true; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    publishRename(staging, target);
+  } catch (error) {
+    if (oldMoved) {
+      try { publishRename(backup, target); } catch { /* 保留原始发布错误和可恢复 backup。 */ }
+    }
+    throw error;
+  }
+  if (oldMoved) publishRemove(backup, { recursive: true });
 }
 
 export async function exportFinalVideo(
@@ -164,6 +226,10 @@ export async function exportFinalVideo(
   const run = dependencies.run ?? runVideoProcess;
   const probe = dependencies.probe ?? probeNineSixteenVideo;
   const publishRename = dependencies.publishRename ?? rename;
+  const publishRemove = dependencies.publishRemove ?? rm;
+  const publishLstat = dependencies.publishLstat ?? lstat;
+  const publishRenameNow = dependencies.publishRenameSync ?? renameSync;
+  const publishRemoveNow = dependencies.publishRemoveSync ?? rmSync;
   const snapshot = loadRenderPlanSnapshot(database, input.episodeId, input.timelineHash);
   const rows = database.prepare(
     `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
@@ -196,7 +262,8 @@ export async function exportFinalVideo(
   await ensureSafeOutputDirectory(dataRoot, dirname(target));
   await assertSafeDirectoryIfPresent(dataRoot, target);
   await assertSafeDirectoryIfPresent(dataRoot, `${target}.backup`);
-  await recoverPublish(target, `${target}.backup`, publishRename);
+  await recoverPublish(dataRoot, target, `${target}.backup`, { ...manifestBase, exportHash }, finalRelativePath,
+    probe, publishRename, publishRemove, publishLstat);
 
   const validatedChunks = [];
   for (const row of rows) {
@@ -225,9 +292,24 @@ export async function exportFinalVideo(
     } };
     if (Math.abs(measured.durationMs - rows.at(-1)!.end_ms) <= MAX_DURATION_DRIFT_MS &&
         await readFile(manifestPath, "utf8") === manifestText(manifest)) {
+      if (input.signal?.aborted) throw new JobCancelledError();
+      const currentSnapshot = loadRenderPlanSnapshot(database, input.episodeId, input.timelineHash);
+      const currentRows = database.prepare(
+        `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
+                relative_path, file_hash, bytes, duration_ms
+         FROM render_chunks WHERE episode_id = ? AND timeline_hash = ? AND chunk_index < ? ORDER BY chunk_index`,
+      ).all(input.episodeId, input.timelineHash, currentSnapshot.chunks.length) as unknown as ChunkRow[];
+      if (JSON.stringify(currentSnapshot) !== JSON.stringify(snapshot) || JSON.stringify(currentRows) !== JSON.stringify(rows) ||
+          sha256(JSON.stringify(exportIdentity(currentSnapshot, currentRows))) !== exportHash) {
+        throw new Error("最终导出复用检查期间当前渲染身份已变化");
+      }
+      if (input.signal?.aborted) throw new JobCancelledError();
       return { manifest, manifestPath, finalPath, reused: true };
     }
-  } catch { /* 缺失或损坏的同身份导出必须重建。 */ }
+  } catch (error) {
+    if (input.signal?.aborted || error instanceof JobCancelledError) throw new JobCancelledError();
+    /* 缺失、损坏或过期的同身份导出必须重建。 */
+  }
 
   const staging = join(dirname(target), `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`);
   await mkdir(staging);
@@ -270,19 +352,26 @@ export async function exportFinalVideo(
       }
     }
     if (input.signal?.aborted) throw new JobCancelledError();
-    const currentSnapshot = loadRenderPlanSnapshot(database, input.episodeId, input.timelineHash);
-    const currentRows = database.prepare(
-      `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
-              relative_path, file_hash, bytes, duration_ms
-       FROM render_chunks WHERE episode_id = ? AND timeline_hash = ? AND chunk_index < ? ORDER BY chunk_index`,
-    ).all(input.episodeId, input.timelineHash, currentSnapshot.chunks.length) as unknown as ChunkRow[];
-    if (JSON.stringify(currentSnapshot.chunks) !== JSON.stringify(snapshot.chunks) ||
-        sha256(JSON.stringify(exportIdentity(currentSnapshot, currentRows))) !== exportHash ||
-        JSON.stringify(currentRows) !== JSON.stringify(rows)) {
-      throw new Error("最终导出期间当前渲染身份已变化");
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const currentSnapshot = loadRenderPlanSnapshot(database, input.episodeId, input.timelineHash);
+      const currentRows = database.prepare(
+        `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
+                relative_path, file_hash, bytes, duration_ms
+         FROM render_chunks WHERE episode_id = ? AND timeline_hash = ? AND chunk_index < ? ORDER BY chunk_index`,
+      ).all(input.episodeId, input.timelineHash, currentSnapshot.chunks.length) as unknown as ChunkRow[];
+      if (JSON.stringify(currentSnapshot) !== JSON.stringify(snapshot) ||
+          sha256(JSON.stringify(exportIdentity(currentSnapshot, currentRows))) !== exportHash ||
+          JSON.stringify(currentRows) !== JSON.stringify(rows)) {
+        throw new Error("最终导出期间当前渲染身份已变化");
+      }
+      if (input.signal?.aborted) throw new JobCancelledError();
+      publishDirectorySync(target, staging, publishRenameNow, publishRemoveNow);
+      database.exec("COMMIT");
+    } catch (error) {
+      try { database.exec("ROLLBACK"); } catch { /* 保留原始发布错误。 */ }
+      throw error;
     }
-    if (input.signal?.aborted) throw new JobCancelledError();
-    await publishDirectory(target, staging, publishRename);
     return { manifest, manifestPath, finalPath, reused: false };
   } finally {
     await rm(staging, { recursive: true, force: true });

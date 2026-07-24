@@ -26,16 +26,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`8010dcb`（P6-04 集成业务提交；本收口控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P6-04 临时 Junction 已安全移除且目标依赖目录完好，独立 worktree 待清理；P7-01 worktree 待从 `8010dcb` 建立。
+- 工作区：`dev` 仅本 Ledger 待提交；P6-04 worktree 已清理；P7-01 worktree 已从 `8010dcb` 建立，临时 Junction 指向主仓库依赖；P7-02/Core worktree 待建立。
 - 最近验证：2026-07-25 P6-04 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，硬退出恢复、定向失效、final 当前性、缺片/缺音频/取消、完整解码与异常等待进程树零残留全部 GREEN。
-- 当前 Task：`P7-01`
-- 唯一下一动作：提交并推送 Phase 6 收口/P7-01 启动控制点；建立 P7-01 worktree，复用 P1-P6 核心完成持久真实《红楼梦》3～5 分钟样片 E2E。
+- 当前 Task：`P7-01` 与不重叠的 `P7-02/Core` 并行实现；P7-02 真实验收仍依赖 P7-01 产物。
+- 唯一下一动作：P7-01 完成持久真实《红楼梦》3～5 分钟样片 E2E；P7-02 同时完成目录包创建/恢复安全核心，二者分别冻结后按风险审查。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | P7-01/Gate | Gate Writer | `D:\code3\Narralume-worktrees\P7-01` / `codex/p7-01` / `8010dcb` | `apps/server/src/gates/p3-real-episode-gate.ts`、`apps/server/src/gates/p7-real-sample-gate.ts`、`apps/server/package.json` | 持久真实原文→批准稿→TTS/字幕→真实审核图→视觉段→chunks→final | P7 真实样片 data root / Gutenberg 下载 / System.Speech / ffmpeg | `leased` |
+| P7-02/Core | Package Writer | `D:\code3\Narralume-worktrees\P7-02` / `codex/p7-02` / `8010dcb` | `apps/server/src/project-package.ts`、`apps/server/src/project-package.test.ts` | 目录包 manifest、SQLite backup、受控文件枚举、路径/hash/bytes/链接校验、耐久发布与空目标恢复 | P7 package test roots；真实 P7 dataRoot 待 P7-01 完成后只读 | `leased` |
 
 ## Phase 依赖
 
@@ -71,7 +72,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P6-03 concat 与导出清单 | `complete` | P6-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:ebe2f45d4aa5fa0ee6b77d528d2d044b6bf979a3`；首版失效 | `546c2a921a537bd5ad92793dd4f06d29aa91b2f6`；首版 `2d501c074d3884f90834d629a5e96c0dcdd3986d` | PASS；同一 P1 关闭，无新 findings | PASS；同一 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 final 220,579ms/3,343,332 bytes，重启稳定、旧行忽略、缺片/篡改阻断 | 冻结 `08c78da`；集成 `918fadf` | 无新 findings；进入 P6-04 |
 | P6-04 真实渲染恢复门禁 | `complete` | P6-03 | Coordinator / 已释放 | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100` | `19849805ec5a4448eef4efa7d1a4c064f113c666` | PASS，首轮综合 Review + 第二版最小复审 | PASS，绑定同一次 Review | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，恢复/定向重做/final/负向阻断/完整解码/异常清理全部 GREEN | `8010dcb`（冻结业务提交 `0e8e017`） | Node SQLite 实验性警告；Phase 6 complete，进入 P7-01 |
 | P7-01 真实样片 E2E | `leased` | P6-04 | Gate Writer；Ledger 仅 Coordinator；允许路径见当前租约 | - | - | - | - | - | - | 只编排已审核心；复用真实 Seedream 图片，不新增模型调用、运行时依赖或生产抽象 |
-| P7-02 可恢复项目包 | `queued` | P7-01 | - | - | - | - | - | - | - | - |
+| P7-02 可恢复项目包 | `implementing` | P7-01（真实验收）；安全核心与 P7-01 并行 | Package Writer；Ledger 仅 Coordinator；允许路径见当前租约 | - | - | - | - | - | - | 首版仅支持隔离单项目数据根；目录包足够，不新增 ZIP/API/Job/migration/依赖 |
 | P7-03 空目录恢复演练 | `queued` | P7-02 | - | - | - | - | - | - | - | - |
 | P7-04 最终验收 | `queued` | P7-03 | - | - | - | - | - | - | - | - |
 
@@ -205,6 +206,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P6-04 第二版 candidate | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100`；仍恰好 3 个 staged 路径，零 unstaged/untracked，只改 Gate。统一 `withChildLifecycle` 将硬退出/取消 Worker 的完整 action 包进 finally；仍存活时 `/T /F` 回收进程树并等待 exit，action 已失败时清理异常不覆盖原异常。checkpoint/status 两类等待失败故障注入真实启动 Node→FFmpeg 树，返回后 Worker/FFmpeg PID 均不存在；完整 220,579ms 真实 Gate、server typecheck/diff GREEN，结束残留进程 0；首版其他全量验证与规格范围继续有效。 |
 | 2026-07-25 P6-04 第二版最小复审 | PASS，绑定 Ledger `19849805ec5a4448eef4efa7d1a4c064f113c666` 与第二版 revision，Review 前后 tree 不变。两个 spawn 的完整 try/finally 生命周期、树回收/等待 exit、原异常优先级与 checkpoint/status 两类真实 Node→FFmpeg 故障注入均通过；定向环境门禁、server typecheck/cached diff GREEN，零残留；首轮 P1 关闭，无新 findings。 |
 | 2026-07-25 Phase 6 完成并启动 P7-01 | P6-04 冻结业务提交 `0e8e017`，集成提交 `8010dcb`；安全移除 P6-04 Junction 后目标 `D:\code3\Narralume\node_modules` 完好。集成态全量 typecheck/test/build/diff GREEN，server 102/102、web 6/6；真实恢复 Gate 220,579ms/2 chunks，最终视频 SHA-256 `5b8fe8e12714e1cf8d5610e6ffa35e39a0ff47d131c530f77cca5e1100b41080`，完整解码 GREEN。Phase 6 complete；P7-01 只编排现有真实原文、批准、System.Speech、真实 Seedream 审核图、视觉段、chunks 与 final 核心。 |
+| 2026-07-25 P7 并行启动 | 用户已授权多 Agent 并行；P7-01 Gate 与 P7-02 安全核心写路径不重叠，均从 `8010dcb` 建立独立 worktree。P7-02 只新增 `project-package.ts/test.ts`，使用 Node 原生 `node:sqlite.backup()` 与文件系统能力；不新增 ZIP、API、Job、migration、表或依赖。P7-02 真实目录包验收仍等待 P7-01 的自包含真实 dataRoot，不提前宣称完成。 |
 
 ## 决策与剩余风险
 

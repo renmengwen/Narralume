@@ -26,16 +26,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`b546c60b408587e7d64ff37856348b3e7876d2c1`（P5-02 核心并行租约控制提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-02 第三版 13 个业务/来源路径全部 staged，零额外 unstaged/untracked，candidate tree 已重新冻结；真实生成候选图保留在 Worker 忽略目录，`node_modules` 为临时 Junction。
-- 最近验证：2026-07-25 P5-02 第三版 candidate；Coordinator 独立全量 `typecheck/test/build` 与 diff GREEN，server 74/74、web 6/6；批准/配置漂移和末次重定向释放回归 GREEN，未调用真实模型。
+- 工作区：`dev` 仅本 Ledger 待提交；P5-02 第三版 13 个业务/来源路径全部 staged，零额外 unstaged/untracked，双 Review 已完成；真实生成候选图保留在 Worker 忽略目录，`node_modules` 为临时 Junction。
+- 最近验证：2026-07-25 P5-02 第三版 Code Quality 最小复审 PASS；全量 `typecheck/test/build` 与 diff GREEN，server 74/74、web 6/6；冻结 tree 保持不变，未调用真实模型。
 - 当前 Task：`P5-02`
-- 唯一下一动作：完成第三版冻结控制提交并推送后，只读复审 P5-02 第二轮失效的身份漂移与末次重定向释放范围；不重复 Spec、DNS 绑定或有界读取审查。
+- 唯一下一动作：完成本 Review 结论控制提交并推送后，核验并只删除 P5-02 `node_modules` Junction 本身，创建中文业务提交并 cherry-pick 到 `dev`，随后执行主仓库集成态三门和真实 gate。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-02 | Coordinator | `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` / `b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff` | 13 个第三版冻结业务/来源路径；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `frozen_for_review` |
+| P5-02 | Coordinator | `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` / `b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff` | 13 个第三版冻结业务/来源路径；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `verified` |
 
 ## Phase 依赖
 
@@ -63,7 +63,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
 | P5-01 资产合同 | `complete` | P4-03 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 集成态 `typecheck/test/build`、diff GREEN；server 64/64、web 6/6；INSERT/UPDATE 层级约束、真实资产 gate、重启与级联 GREEN | 冻结 `c8bef59`；集成 `ff38e6d` | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入 P5-02 |
-| P5-02 候选图与来源 | `frozen_for_review` | P5-01 | Coordinator / 写租约见上 | 第三版 `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:61fec58a9aff498dcb5a8f836f2ef0ab40a28f1f`；前两版失效 | 本冻结控制提交；第二版 `c54baab25852bc0a779b3e7e5766ab55ef64cb5e`；首版 `deb7f346562363c2925372a0a29a4c68d2955692` | PASS，绑定首版 Ledger/revision；继续有效 | 前两版 FAIL；等待绑定第三版 Ledger/revision 的两项失效范围复审 | Coordinator 独立全量 `typecheck/test/build`、cached/unstaged diff GREEN；server 74/74、web 6/6；冻结 Job payload、批准/配置漂移 generate=0、第六个 3xx cancel 回归 GREEN；未调用真实模型 | - | 第三版只复审身份漂移与末次重定向释放，不重复已关闭范围 |
+| P5-02 候选图与来源 | `verified` | P5-01 | Coordinator / 写租约见上 | 第三版 `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:61fec58a9aff498dcb5a8f836f2ef0ab40a28f1f`；前两版失效 | `e2fe95f75177f6609cf465d8eabc4dbf438259c7`；前两版见事件日志 | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第三版 Ledger/revision；前两轮 findings 全部关闭，无新 findings | 独立全量 `typecheck/test/build`、cached diff GREEN；server 74/74、web 6/6；冻结身份漂移 generate=0、6/6 3xx cancel；真实图片只读 hash/ffprobe 一致，未重复调用模型 | - | 进入业务提交与集成态真实 gate；不增加第三次 Review |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |
 | P6-01 唯一 9:16 模板 | `queued` | P5-04 | - | - | - | - | - | - | - | - |
@@ -168,6 +168,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P5-02 第二版 candidate | `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:00a35d28ade25fbc7a2c92259053ccf2e2f5cb48`；图片下载每跳解析公网地址并把该 IP 直接绑定 Node `http/https` socket，原 hostname 仅用于 Host/SNI；provider generation JSON 在 parse 前执行 Content-Length 与流式上限，30 MiB base64 膨胀上限另加 1 MiB JSON 余量；统一 enqueue helper 以 `job_image_<requestHash>` 作为 SQLite 持久幂等主键，重复/并发 API 复用同一 Job 和既有 lease/retry，handler 复用候选时读回数据库真实审核派生状态。Coordinator 独立全量三门/diff GREEN，server 73/73、web 6/6；未调用真实 provider。首轮 Spec PASS 继续有效，只复审 Code Quality 失效范围。 |
 | 2026-07-25 P5-02 第二版 Code Quality 复审 | FAIL，绑定 Ledger `c54baab25852bc0a779b3e7e5766ab55ef64cb5e` 与第二版 revision。DNS 到 socket 绑定、generation JSON/base64 有界读取、SQLite Job 主键竞争和真实审核状态回读主体均已关闭；新 P1：确定性 Job ID 在入队时绑定批准/requestHash/provider/model，但持久 payload 只有 episode/asset/prompt，handler 按执行时最新批准与配置重算，排队期间身份变化会让旧 Job 执行新请求并可能与新 Job 重复调用；直接 P2：第六个 3xx 响应在抛出重定向超限前未 cancel。第二版失效，只开放持久冻结身份+handler 拒绝漂移，以及所有 3xx 先释放的两项最小修复；不复审已关闭范围。三门仍 GREEN，未调用真实 provider。 |
 | 2026-07-25 P5-02 第三版 candidate | `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:61fec58a9aff498dcb5a8f836f2ef0ab40a28f1f`；Job payload 持久化 episode/asset/prompt/requestHash/scriptVersionId/approvalRevision/contentHash/providerId/model 完整冻结身份，handler 在 generate 前核对确定性 job ID、重算 hash、当前批准、当前 provider/model 与系列关系，任一漂移明确失败且 generate=0；checkpoint writer 内再次核对同一冻结身份。所有 3xx 响应进入分支立即 cancel，再判断次数/location；第六次重定向累计 6 次 cancel。Coordinator 独立全量三门/diff GREEN，server 74/74、web 6/6；未调用真实 provider。只复审这两个失效范围。 |
+| 2026-07-25 P5-02 第三版 Code Quality 复审 | PASS，绑定 Ledger `e2fe95f75177f6609cf465d8eabc4dbf438259c7` 与第三版 revision；13 个 staged 路径、零额外改动，复审后 tree 不变。冻结 Job payload、job ID/hash、当前批准/provider/model/系列的 generate 前与 checkpoint 内双校验通过；排队后批准/配置漂移均 failed 且 generate=0；六个 3xx 响应全部 cancel。全量三门、server 74/74、web 6/6、cached diff GREEN，未调用真实 provider，无新 findings。首轮 Spec PASS 与已关闭的 DNS/有界读取范围继续有效，不增加第三次 Review。 |
 
 ## 决策与剩余风险
 

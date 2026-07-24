@@ -61,6 +61,11 @@ import {
 } from "./image-candidate-job.js";
 import type { OpenAiImageConfig } from "./image-provider.js";
 import {
+  ContactSheetError,
+  exportContactSheet,
+  resolveVerifiedCandidateFile,
+} from "./contact-sheet.js";
+import {
   listVisualSegments,
   putVisualSegment,
   type PutVisualSegmentInput,
@@ -130,6 +135,7 @@ interface PutVisualSegmentBody {
   expectedRevision?: unknown;
   assets?: unknown;
 }
+interface ExportContactSheetBody { timelineHash?: unknown }
 
 function imageProviderFromEnvironment(): OpenAiImageConfig | null {
   const config = {
@@ -407,6 +413,28 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
   );
 
+  app.get<{ Params: { candidateId: string } }>(
+    "/api/candidates/:candidateId/image",
+    async (request, reply) => {
+      try {
+        const file = await resolveVerifiedCandidateFile(
+          connection.database,
+          dataRoot,
+          request.params.candidateId,
+        );
+        return reply
+          .type(file.mime)
+          .header("Content-Length", file.bytes)
+          .send(file.content);
+      } catch (error) {
+        if (error instanceof ContactSheetError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
   app.put<{
     Params: { seriesId: string; episodeIndex: string };
     Body: ReplaceEpisodeBody;
@@ -493,6 +521,30 @@ export function buildApp(options: BuildAppOptions = {}) {
       return { ok: true, items, total: items.length };
     } catch (error) {
       if (error instanceof VisualSegmentStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post<{
+    Params: { episodeId: string };
+    Body: ExportContactSheetBody;
+  }>("/api/episodes/:episodeId/contact-sheet", async (request, reply) => {
+    try {
+      const timelineHash = request.body?.timelineHash;
+      if (typeof timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(timelineHash)) {
+        throw new ContactSheetError(400, "时间轴哈希必须是 64 位小写十六进制");
+      }
+      const contactSheet = await exportContactSheet(
+        connection.database,
+        dataRoot,
+        request.params.episodeId,
+        timelineHash,
+      );
+      return { ok: true, message: "联系表已导出", contactSheet };
+    } catch (error) {
+      if (error instanceof ContactSheetError || error instanceof VisualSegmentStoreError) {
         return reply.code(error.statusCode).send({ ok: false, message: error.message });
       }
       throw error;

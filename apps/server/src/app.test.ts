@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -443,6 +443,12 @@ test("资产 API 宽链路覆盖主状态资产、别名、幂等与中文错误
 test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错误", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-visual-segments-"));
   const timelineHash = "b".repeat(64);
+  const imagePath = join(dataRoot, "visual.png");
+  const rendered = spawnSync("ffmpeg", [
+    "-v", "error", "-f", "lavfi", "-i", "color=c=0x506070:s=32x48", "-frames:v", "1", "-y", imagePath,
+  ], { windowsHide: true, encoding: "utf8" });
+  assert.equal(rendered.status, 0, rendered.stderr);
+  const image = await readFile(imagePath);
   const seed = openDatabase(dataRoot);
   try {
     seed.database.prepare(
@@ -485,33 +491,47 @@ test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错
         id, series_project_id, asset_type, asset_role, canonical_name, normalized_name, created_at
       ) VALUES ('visual_asset', 'visual_series', 'character', 'master', '林黛玉', '林黛玉', 1)`,
     ).run();
-    seed.database.prepare(
-      `INSERT INTO asset_candidates (
-        id, asset_id, source_kind, source_identity_hash, source_json, file_hash,
-        mime, width, height, bytes, relative_path, created_at
-      ) VALUES ('visual_candidate', 'visual_asset', 'upload', ?, '{"kind":"upload"}', ?,
-        'image/png', 32, 48, 100, 'assets/candidates/aa/test.png', 1)`,
-    ).run("5".repeat(64), "6".repeat(64));
-    seed.database.prepare(
-      `INSERT INTO asset_candidate_review_events (candidate_id, revision, action, note, created_at)
-       VALUES ('visual_candidate', 1, 'approve', NULL, 1)`,
-    ).run();
   } finally {
     seed.close();
   }
 
   const app = buildApp({ dataRoot, logger: false });
-  const body = {
-    timelineHash,
-    cueStartIndex: 0,
-    cueEndIndex: 1,
-    motionKind: "zoom-in",
-    motionAmountPpm: 120_000,
-    fadeMs: 200,
-    expectedRevision: 0,
-    assets: [{ assetId: "visual_asset", selectedCandidateId: "visual_candidate" }],
-  };
+  const imageHash = createHash("sha256").update(image).digest("hex");
+  const storedImagePath = join(dataRoot, "assets", "candidates", imageHash.slice(0, 2), `${imageHash}.png`);
+  let replacedAtSend = false;
+  app.addHook("onSend", async (request, _reply, payload) => {
+    if (request.method === "GET" && request.url.endsWith("/image")) {
+      await writeFile(storedImagePath, "replacement-at-send-boundary");
+      replacedAtSend = true;
+    }
+    return payload;
+  });
   try {
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/assets/visual_asset/candidates/upload",
+      headers: { "content-type": "application/octet-stream", "x-file-name": "visual.png" },
+      payload: image,
+    });
+    assert.equal(uploaded.statusCode, 201, uploaded.body);
+    const candidateId = uploaded.json().candidate.id as string;
+    const approved = await app.inject({
+      method: "POST",
+      url: `/api/candidates/${candidateId}/reviews`,
+      payload: { expectedRevision: 0, action: "approve" },
+    });
+    assert.equal(approved.statusCode, 201, approved.body);
+
+    const body = {
+      timelineHash,
+      cueStartIndex: 0,
+      cueEndIndex: 1,
+      motionKind: "zoom-in",
+      motionAmountPpm: 120_000,
+      fadeMs: 200,
+      expectedRevision: 0,
+      assets: [{ assetId: "visual_asset", selectedCandidateId: candidateId }],
+    };
     const saved = await app.inject({
       method: "PUT", url: "/api/episodes/visual_episode/visual-segments/0", payload: body,
     });
@@ -523,7 +543,7 @@ test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错
     assert.deepEqual(saved.json().segment.assets.map((asset: Record<string, unknown>) => ({
       assetId: asset.assetId,
       selectedCandidateId: asset.selectedCandidateId,
-    })), [{ assetId: "visual_asset", selectedCandidateId: "visual_candidate" }]);
+    })), [{ assetId: "visual_asset", selectedCandidateId: candidateId }]);
 
     const repeated = await app.inject({
       method: "PUT", url: "/api/episodes/visual_episode/visual-segments/0", payload: body,
@@ -540,6 +560,27 @@ test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错
     assert.equal(listed.json().items[0].productionReady, true);
     assert.equal(listed.json().items[0].startMs, 0);
     assert.equal(listed.json().items[0].endMs, 2000);
+
+    const exported = await app.inject({
+      method: "POST", url: "/api/episodes/visual_episode/contact-sheet", payload: { timelineHash },
+    });
+    assert.equal(exported.statusCode, 200, exported.body);
+    assert.equal(exported.json().message, "联系表已导出");
+    assert.equal(exported.json().contactSheet.timelineHash, timelineHash);
+    const candidateImage = await app.inject({ method: "GET", url: `/api/candidates/${candidateId}/image` });
+    assert.equal(candidateImage.statusCode, 200, candidateImage.body);
+    assert.equal(replacedAtSend, true);
+    assert.equal(candidateImage.headers["content-type"], "image/png");
+    assert.deepEqual(candidateImage.rawPayload, image);
+    assert.equal((await app.inject({
+      method: "POST", url: "/api/episodes/visual_episode/contact-sheet", payload: { timelineHash: "bad" },
+    })).statusCode, 400);
+    assert.equal((await app.inject({
+      method: "POST", url: "/api/episodes/missing/contact-sheet", payload: { timelineHash },
+    })).statusCode, 404);
+    assert.equal((await app.inject({
+      method: "GET", url: "/api/candidates/candidate_missing/image",
+    })).statusCode, 404);
 
     const stale = await app.inject({
       method: "PUT", url: "/api/episodes/visual_episode/visual-segments/0",

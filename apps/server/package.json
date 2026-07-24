@@ -18,6 +18,7 @@
     "gate:p5-assets": "tsx src/gates/p5-assets-gate.ts",
     "gate:p5-image-candidates": "node --no-warnings --import tsx src/gates/p5-image-candidates-gate.ts",
     "gate:p5-visual-segments": "node --no-warnings --import tsx src/gates/p5-visual-segments-gate.ts",
+    "gate:p5-contact-sheet": "node --no-warnings --import tsx src/gates/p5-contact-sheet-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

@@ -20,7 +20,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 普通业务 Task 的写租约必须排除本 Ledger；Coordinator 在 `dev` 串行完成 Ledger 冻结控制提交，Reviewer Verdict 必须绑定 `reviewed_ledger_commit` 和 `reviewed_revision`。`CTRL-01` 首次创建 Ledger 时使用一次性 bootstrap：先提交完整控制面，将不可变 commit/tree 作为 candidate；双 Review 后由下一条控制提交登记结果。之后不得再次使用该例外。
 
-2026-07-24 用户授权风险分级 Review：高风险双 Review、普通任务一次独立综合 Review、低风险 Coordinator 自审；Phase 结束保留独立阶段门禁 Review。P1-04 属于普通查询/UI，使用一次独立综合 Review。
+2026-07-24 用户授权按新增风险分级 Review：新增高风险核心双 Review；复用已充分验证核心、仅做编排/接线/真实门禁的 Task 一次独立综合 Review；低风险 Coordinator 自审。Phase 结束保留阶段门禁，但最后一个 Task 的综合 Review 已覆盖全阶段真实工作流时可合并，不重复审查。P2-04 使用一次 Phase 2 独立综合门禁 Review。
 
 ## 当前恢复入口
 

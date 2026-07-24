@@ -27,15 +27,15 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 当前分支：`dev`
 - 当前 HEAD：`fbc1d65`（P2-02 已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P2-03 正式双 Review；Spec/Code Quality 均 PASS，绑定 Ledger `a1d7417` 与冻结 revision；全量三门、P2 恢复 gate、真实 124 章门禁 GREEN。
-- 当前 Task：`P2-03`
-- 唯一下一动作：在 `codex/p2-03` 对冻结 index 创建中文业务提交，再集成 `dev` 并执行集成态验证。
+- 最近验证：2026-07-24 P2-03 集成态；全量三门/diff GREEN，server 42 项、web 6 项；P2 恢复 gate 与《红楼梦》124 章真实门禁 GREEN。
+- 当前 Task：`P2-04`
+- 唯一下一动作：在 `codex/p2-04` 实现最小章节事件 JobHandler 与真实 3 章恢复/取消/重启门禁，不扩展模型适配器和复杂并发边界。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2-03 | Coordinator（双 Review 已通过，待提交） | `D:\code3\Narralume-worktrees\P2-03` / `codex/p2-03` / `fbc1d65` | `apps/server/src/database.ts`、`database.test.ts`、`chapter-index.ts`、`chapter-index.test.ts`、`chapter-event-store.ts`、`chapter-event-store.test.ts`、`app.ts`、`app.test.ts`；排除本 Ledger | 章节事件 schema、稳定身份、原文证据、整章替换、HTTP 合同与重索引保留事件 | SQLite 写锁、原文文件切片、Worker Git index | `verified` |
+| P2-04 | Coordinator | `D:\code3\Narralume-worktrees\P2-04` / `codex/p2-04` / `9d75144` | `apps/server/package.json`、`src/app.ts`、`app.test.ts`、`chapter-events-job.ts`、`chapter-events-job.test.ts`、`chapter-event-store.ts`、`chapter-event-store.test.ts`、`gates/p2-real-chapter-jobs-gate.ts`；排除本 Ledger | 最小章节事件任务、3 章真实恢复、取消与重启查询 | 真实来源下载、SQLite 租约、故障注入子进程、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -53,8 +53,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-05 真实大文本门禁 | `complete` | P1-04 | Coordinator / 已释放 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | `a7de1e2` | PASS，绑定 `a7de1e2`/第二版 revision | PASS，绑定同一次 Phase 1 阶段门禁综合 Review | 集成态全量三门与真实门禁 GREEN；124 章、RSS 增量 9,027,584 bytes；故障清理探针 GREEN | `7d23438` | Node SQLite 实验性警告；Phase 1 complete，进入 P2-01 |
 | P2-01 持久化任务状态机 | `complete` | P1-05 | Coordinator / 已释放 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 集成态全量三门/diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5 | `d8dff8f` | Node SQLite 实验性警告；协作取消与外部副作用幂等进入 P2-02 |
 | P2-02 checkpoint 与恢复 | `complete` | P2-01 | Coordinator / 已释放 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973` | `cee11c6` | PASS，绑定 `cee11c6`/第三版 revision | PASS，绑定 `cee11c6`/第三版 revision | 集成态全量三门/diff GREEN；server 36 项、web 6 项；恢复 gate 最终 succeeded、attempts=2、重复结果 0 | `fbc1d65` | Node SQLite 实验性警告；受限 transaction 的复杂语句限制进入真实调用验证 |
-| P2-03 章节事件合同 | `verified` | P2-02 | Coordinator / `codex/p2-03` 待提交 | `git-index-tree-v1:fbc1d652d3170a6d1c142b6c01ac8c4db955e913:03911512550f2dbe8d414412588aea3b144ea1e6` | `a1d7417` | PASS，绑定 `a1d7417`/冻结 revision | PASS，绑定 `a1d7417`/冻结 revision | 全量三门/diff GREEN；server 42、web 6；P2 恢复 gate、真实 124 章门禁 GREEN | - | 创建中文业务提交并集成 `dev`；极端短证据性能不阻塞首版 |
-| P2-04 真实章节任务门禁 | `queued` | P2-03 | - | - | - | - | - | - | - | - |
+| P2-03 章节事件合同 | `complete` | P2-02 | Coordinator / 已释放 | `git-index-tree-v1:fbc1d652d3170a6d1c142b6c01ac8c4db955e913:03911512550f2dbe8d414412588aea3b144ea1e6` | `a1d7417` | PASS，绑定 `a1d7417`/冻结 revision | PASS，绑定 `a1d7417`/冻结 revision | 集成态全量三门/diff GREEN；server 42、web 6；P2 恢复 gate、真实 124 章门禁 GREEN | `9d75144` | 极端短证据性能不阻塞首版；未来 handler 需校验 prepared chapterId |
+| P2-04 真实章节任务门禁 | `implementing` | P2-03 | Coordinator / `codex/p2-04` 写租约 | - | - | 待冻结后独立 Review | 待冻结后独立 Review | 只读方案已冻结 3 章、6 类唯一短句与最小恢复/取消/重启流程 | - | 先做 JobHandler 小测，再做单一真实 gate |
 | P3-01 故事弧与分集证据 | `queued` | P2-04 | - | - | - | - | - | - | - | - |
 | P3-02 稿件版本 | `queued` | P3-01 | - | - | - | - | - | - | - | - |
 | P3-03 人工批准闸门 | `queued` | P3-02 | - | - | - | - | - | - | - | - |
@@ -137,6 +137,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P2-03 只读合同审计 | 发现 `indexBookChapters` 对重复导入无条件删除/重建章节；新增 `chapter_events ON DELETE CASCADE` 后会静默清空事件。P2-03 写租约扩展至章节索引及测试，要求相同稳定章节结果跳过重建并以回归测试保护。 |
 | 2026-07-24 P2-03 candidate | `git-index-tree-v1:fbc1d652d3170a6d1c142b6c01ac8c4db955e913:03911512550f2dbe8d414412588aea3b144ea1e6`；migration v4 事件/多段证据两表；六类严格 payload、稳定 ID/occurrence、绝对原始字节范围与服务端 SHA-256；8 MiB 总证据门、唯一边界单流扫描、整章漂移双检；人工与 checkpoint 共用原子替换；重复导入保留事件；中文 PUT/GET 与全局错误边界。全量三门、server 42、web 6、P2 恢复 gate、真实《红楼梦》124 章门禁 GREEN；双冻结前审计 PASS。 |
 | 2026-07-24 P2-03 正式双 Review | Spec PASS、Code Quality PASS，均绑定 Ledger `a1d7417` 与冻结 revision；复算 7 个 staged 路径、HEAD/tree 与工作区洁净性一致；全量三门、P2 恢复 gate、真实《红楼梦》124 章门禁独立通过；无阻断 findings。未知 payload 键、证据顺序身份与极端短证据文件打开次数记为非阻断首版风险。 |
+| 2026-07-24 P2-03 完成 | 冻结业务提交 `6c0903c`，集成 `dev` 为 `9d75144`；集成态全量三门/diff、P2 恢复 gate 与真实《红楼梦》124 章门禁 GREEN；释放写租约并按用户“首版先做出来”口径进入最小 P2-04。 |
 
 ## 决策与剩余风险
 

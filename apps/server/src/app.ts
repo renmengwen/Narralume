@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 
 import { BookImportError, importBookText } from "./book-import.js";
@@ -6,10 +7,23 @@ import { BookLibraryError, listBooks, listChapters, readChapterText } from "./bo
 import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
+import { createJob, getJob, requestJobCancellation } from "./job-store.js";
+import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
   logger?: boolean;
+  jobHandlers?: Readonly<Record<string, JobHandler>>;
+  jobPollMs?: number;
+  jobWorker?: Partial<JobWorkerOptions>;
+}
+
+interface CreateJobBody {
+  type?: unknown;
+  payload?: unknown;
+  priority?: unknown;
+  maxAttempts?: unknown;
+  runAfter?: unknown;
 }
 
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
@@ -30,12 +44,39 @@ function pagination(value: unknown, fallback: number, minimum: number, maximum: 
   return parsed;
 }
 
+function optionalInteger(value: unknown, message: string) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error(message);
+  return value;
+}
+
 export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? true });
   const dataRoot = resolveDataRoot(options.dataRoot);
   const connection = openDatabase(dataRoot);
+  const jobHandlers = options.jobHandlers ?? {};
+  const supportedJobTypes = new Set(Object.keys(jobHandlers));
+  let worker: JobWorker;
+  try {
+    worker = new JobWorker(connection.database, jobHandlers, {
+      workerId: options.jobWorker?.workerId ?? `local_${randomUUID()}`,
+      leaseMs: options.jobWorker?.leaseMs,
+      heartbeatMs: options.jobWorker?.heartbeatMs,
+      retryDelayMs: options.jobWorker?.retryDelayMs,
+      onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "本地任务 Worker 运行异常")),
+    });
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
 
-  app.addHook("onClose", async () => connection.close());
+  app.addHook("onReady", async () => {
+    if (supportedJobTypes.size > 0) worker.start(options.jobPollMs);
+  });
+  app.addHook("onClose", async () => {
+    await worker.stop();
+    connection.close();
+  });
   app.addContentTypeParser(
     ["text/plain", "application/octet-stream"],
     (_request, payload, done) => done(null, payload),
@@ -82,6 +123,59 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get("/api/books", async () => ({ ok: true, items: listBooks(connection.database) }));
+
+  app.post<{ Body: CreateJobBody }>("/api/jobs", async (request, reply) => {
+    const body = request.body;
+    if (!body || typeof body !== "object" || typeof body.type !== "string") {
+      return reply.code(400).send({ ok: false, message: "任务类型不能为空" });
+    }
+    const type = body.type.trim();
+    if (!supportedJobTypes.has(type)) {
+      return reply.code(400).send({ ok: false, message: `不支持的任务类型：${type || "（空）"}` });
+    }
+    let priority: number | undefined;
+    let maxAttempts: number | undefined;
+    let runAfter: number | undefined;
+    try {
+      priority = optionalInteger(body.priority, "任务优先级无效");
+      maxAttempts = optionalInteger(body.maxAttempts, "最大尝试次数无效");
+      runAfter = optionalInteger(body.runAfter, "任务执行时间无效");
+      if (maxAttempts !== undefined && (maxAttempts < 1 || maxAttempts > 10)) {
+        throw new Error("最大尝试次数必须在 1～10 之间");
+      }
+    } catch (error) {
+      return reply.code(400).send({
+        ok: false,
+        message: error instanceof Error ? error.message : "任务参数无效",
+      });
+    }
+    const job = createJob(connection.database, {
+      type,
+      payload: body.payload ?? {},
+      priority,
+      maxAttempts,
+      runAfter,
+    });
+    return reply.code(201).send({ ok: true, message: "任务已创建并持久化", job });
+  });
+
+  app.get<{ Params: { jobId: string } }>("/api/jobs/:jobId", async (request, reply) => {
+    const job = getJob(connection.database, request.params.jobId);
+    if (!job) return reply.code(404).send({ ok: false, message: "任务不存在" });
+    return { ok: true, job };
+  });
+
+  app.post<{ Params: { jobId: string } }>("/api/jobs/:jobId/cancel", async (request, reply) => {
+    const before = getJob(connection.database, request.params.jobId);
+    if (!before) return reply.code(404).send({ ok: false, message: "任务不存在" });
+    const job = requestJobCancellation(connection.database, request.params.jobId)!;
+    const message = before.status === "queued"
+      ? "任务已取消"
+      : before.status === "running"
+        ? "取消请求已记录"
+        : "任务已结束，状态未改变";
+    return { ok: true, message, job };
+  });
 
   app.get<{ Params: { bookId: string }; Querystring: { limit?: string; offset?: string } }>(
     "/api/books/:bookId/chapters",

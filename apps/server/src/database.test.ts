@@ -61,7 +61,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 1);
+    assert.equal(migration?.version, 2);
     assert.equal(chapterCount?.count, 0);
     assert.equal((await readFile(join(dataRoot, "narralume.sqlite3"))).length > 0, true);
   } finally {
@@ -82,5 +82,24 @@ test("初始化失败会关闭 SQLite 文件", async () => {
     await rm(databasePath);
   } finally {
     await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("未来迁移版本或版本断层会失败关闭", async () => {
+  for (const mode of ["future", "gap"] as const) {
+    const dataRoot = await mkdtemp(join(tmpdir(), `narralume-database-${mode}-`));
+    const databasePath = join(dataRoot, "narralume.sqlite3");
+    try {
+      openDatabase(dataRoot).close();
+      const malformed = new DatabaseSync(databasePath);
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (3)").run();
+      else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
+      malformed.close();
+
+      assert.throws(() => openDatabase(dataRoot), /数据库迁移版本不兼容/);
+      await rm(databasePath);
+    } finally {
+      await rm(dataRoot, { recursive: true, force: true });
+    }
   }
 });

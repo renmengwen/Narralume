@@ -34,6 +34,39 @@ const MIGRATION_1 = `
   CREATE INDEX chapters_book_order ON chapters(book_id, chapter_index);
 `;
 
+const MIGRATION_2 = `
+  CREATE TABLE jobs (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+    priority INTEGER NOT NULL DEFAULT 0,
+    progress REAL NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 1),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 10),
+    run_after INTEGER NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at INTEGER,
+    cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1)),
+    result_json TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER,
+    CHECK (
+      (status = 'running' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (status <> 'running' AND lease_owner IS NULL AND lease_expires_at IS NULL)
+    )
+  ) STRICT;
+
+  CREATE INDEX jobs_ready_queue ON jobs(status, run_after, priority DESC, created_at);
+  CREATE INDEX jobs_expired_lease ON jobs(status, lease_expires_at);
+`;
+
+const MIGRATIONS = [MIGRATION_1, MIGRATION_2];
+
 export interface NarralumeDatabase {
   database: DatabaseSync;
   path: string;
@@ -57,15 +90,19 @@ export function openDatabase(dataRoot?: string): NarralumeDatabase {
       ) STRICT;
     `);
 
-    const current = database
-      .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")
-      .get() as { version: number };
+    const applied = database
+      .prepare("SELECT version FROM schema_migrations ORDER BY version")
+      .all() as Array<{ version: number }>;
+    if (applied.length > MIGRATIONS.length ||
+        applied.some((migration, index) => migration.version !== index + 1)) {
+      throw new Error("数据库迁移版本不兼容");
+    }
 
-    if (current.version < 1) {
+    for (let index = applied.length; index < MIGRATIONS.length; index += 1) {
       database.exec("BEGIN IMMEDIATE");
       try {
-        database.exec(MIGRATION_1);
-        database.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(1);
+        database.exec(MIGRATIONS[index]!);
+        database.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(index + 1);
         database.exec("COMMIT");
       } catch (error) {
         try {

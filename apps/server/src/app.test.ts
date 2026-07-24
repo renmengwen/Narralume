@@ -5,6 +5,16 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildApp } from "./app.js";
+import { openDatabase } from "./database.js";
+import { getJob } from "./job-store.js";
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("等待条件超时");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 test("健康检查返回服务状态", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-"));
@@ -93,6 +103,101 @@ test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
     assert.equal(missingChapter.statusCode, 404);
     assert.equal(missingChapter.json().message, "章节不存在");
   } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("非法 Worker 配置失败时关闭 SQLite", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-invalid-worker-"));
+  try {
+    assert.throws(
+      () => buildApp({ dataRoot, logger: false, jobWorker: { leaseMs: Number.NaN } }),
+      /Worker 租约或续租间隔无效/,
+    );
+    await rm(dataRoot, { recursive: true, force: true });
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("任务 HTTP 边界先持久化、可查询取消且关闭时等待 Worker", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-jobs-"));
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => { release = resolve; });
+  let observedPersisted = false;
+  const app = buildApp({
+    dataRoot,
+    logger: false,
+    jobPollMs: 5,
+    jobHandlers: {
+      hold: async (context) => {
+        observedPersisted = context.job.status === "running" && context.job.attempts === 1;
+        context.reportProgress(0.5);
+        await wait;
+        return { completed: true };
+      },
+    },
+    jobWorker: { workerId: "http-worker", leaseMs: 1_000, heartbeatMs: 100 },
+  });
+
+  try {
+    const unsupported = await app.inject({
+      method: "POST",
+      url: "/api/jobs",
+      payload: { type: "missing", payload: {} },
+    });
+    assert.equal(unsupported.statusCode, 400);
+    assert.equal(unsupported.json().message, "不支持的任务类型：missing");
+    const excessiveRetries = await app.inject({
+      method: "POST",
+      url: "/api/jobs",
+      payload: { type: "hold", payload: {}, maxAttempts: 9_007_199_254_740_991 },
+    });
+    assert.equal(excessiveRetries.statusCode, 400);
+    assert.equal(excessiveRetries.json().message, "最大尝试次数必须在 1～10 之间");
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/jobs",
+      payload: { type: "hold", payload: { chapterId: "chapter_1" }, maxAttempts: 2 },
+    });
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.json().message, "任务已创建并持久化");
+    const jobId = created.json().job.id as string;
+
+    await waitUntil(() => observedPersisted);
+    const queried = await app.inject({ method: "GET", url: `/api/jobs/${jobId}` });
+    assert.equal(queried.statusCode, 200);
+    assert.equal(queried.json().job.status, "running");
+    assert.equal(queried.json().job.attempts, 1);
+    assert.equal(queried.json().job.progress, 0.5);
+
+    const cancelled = await app.inject({ method: "POST", url: `/api/jobs/${jobId}/cancel` });
+    assert.equal(cancelled.statusCode, 200);
+    assert.equal(cancelled.json().message, "取消请求已记录");
+    assert.equal(cancelled.json().job.cancelRequested, true);
+    const missing = await app.inject({ method: "GET", url: "/api/jobs/job_missing" });
+    assert.equal(missing.statusCode, 404);
+    assert.equal(missing.json().message, "任务不存在");
+
+    let closed = false;
+    const closing = app.close().then(() => { closed = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closed, false);
+    release();
+    await closing;
+
+    const reopened = openDatabase(dataRoot);
+    try {
+      const persisted = getJob(reopened.database, jobId);
+      assert.equal(persisted?.status, "cancelled");
+      assert.equal(persisted?.result, null);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    release?.();
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });
   }

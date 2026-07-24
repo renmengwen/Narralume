@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`67f589d1ca6954a58851786143855219936f39f5`（P5-01 首轮 finding 控制提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-01 已仅修改并重新 stage `database.ts/database.test.ts`，其余 6 个路径保持冻结，第二版 candidate tree 已冻结且零额外 unstaged/untracked。
+- 当前 HEAD：`837e0eab867a2ce4248df7c26cc68ff340687e45`（P5-01 第二版冻结控制提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P5-01 第二版只读复审 FAIL、tree 未变化；继续只开放 `database.ts/database.test.ts` 修同一数据库不变量，其他 6 个路径冻结。
 - 最近验证：2026-07-25 P5-01 Worker 实现态；全量 `typecheck/test/build` 与 diff GREEN，server 64/64、web 6/6；真实资产 gate 建立人物/两个状态/场景/道具及四组别名，重启稳定与系列级联 GREEN。
 - 当前 Task：`P5-01`
-- 唯一下一动作：由独立 Reviewer 绑定第二版冻结控制提交/revision 复审，确认数据库直接 SQL 已拒绝 `master→state→state` 且原合同、三门和真实 gate 无回归。
+- 唯一下一动作：为 migration v9 补 UPDATE 层级 trigger 和直接 SQL 回归，同时防止已有子状态的 master 被改成 state；全量验证后第三次冻结。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-01 | Coordinator | `D:\code3\Narralume-worktrees\P5-01` / `codex/p5-01` / `eb4ac1020bbff394859a0df12d7284537747f682` | 8 个冻结业务路径；排除本 Ledger | 主资产、状态资产、系列级别名、重启恢复 | SQLite schema、`app.ts`、Worker Git index | `frozen_for_review` |
+| P5-01 | Coordinator（仅 migration 修复写权限） | `D:\code3\Narralume-worktrees\P5-01` / `codex/p5-01` / `eb4ac1020bbff394859a0df12d7284537747f682` | 首版 8 路径；当前只开放 `apps/server/src/database.ts`、`apps/server/src/database.test.ts`，排除本 Ledger | 主资产、状态资产、系列级别名、重启恢复 | SQLite schema、Worker Git index | `changes_requested` |
 
 ## Phase 依赖
 
@@ -62,7 +62,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-01 TTS provider 边界 | `complete` | P3-04 | Coordinator / 已释放 | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850` | `bb6b72c` | PASS，绑定 `bb6b72c065e52367ce722e6f60c7139bb65efb01`/第二版 revision | PASS，绑定同一 Ledger/revision | 集成态全量三门/diff GREEN；server 57/57、web 6/6；UTF-8 code units、已持有临时 WAV 后取消零泄漏、真实中文 WAV 221,542 bytes/5.022585 秒 | 冻结 `240e133`；集成 `284cfbb` | Windows System.Speech 单 provider；进入 P4-02 |
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
-| P5-01 资产合同 | `frozen_for_review` | P4-03 | Coordinator / 写租约见上 | 第二版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:19fda63cc325d0295ff926c34c7efce0a9ac87ef` | 本冻结控制提交；首版 `2153b9b` 已失效 | 首轮 FAIL：状态套状态数据库缺口；待第二版复审 | 首轮 FAIL，同一 finding；待第二版复审 | 第二版全量 `typecheck/test/build`、cached diff GREEN；server 64/64、web 6/6；migration trigger 直接拒绝 state→state，master→state、真实资产 gate、重启与级联均 GREEN | - | 首轮 finding 已最小修复；等待第二版综合复审 |
+| P5-01 资产合同 | `changes_requested` | P4-03 | Coordinator / 写租约见上 | 第二版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:19fda63cc325d0295ff926c34c7efce0a9ac87ef` 已失效 | `837e0eab867a2ce4248df7c26cc68ff340687e45`；首版同样失效 | 第二轮 FAIL：INSERT 已拒绝，但直接 UPDATE 仍可建立状态套状态 | FAIL，同一数据库不变量 finding；需覆盖 UPDATE 与已有子状态 master 变更 | 第二版全量三门与真实 gate GREEN；Reviewer 探针 `nested_insert_rejected=true`、`nested_update_persisted=1` | - | 只补 UPDATE 数据库约束及直接 SQL 回归，第三次重冻 |
 | P5-02 候选图与来源 | `queued` | P5-01 | - | - | - | - | - | - | - | - |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |

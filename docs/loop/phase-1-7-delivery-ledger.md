@@ -27,9 +27,9 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 当前分支：`dev`
 - 当前 HEAD：`6ea3735`（P2-02 写租约已建立；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P2-02 第二版 candidate；全量三门/cached diff GREEN；server 35 项、web 6 项；Promise continuation 泄漏回归与双子进程恢复门禁 GREEN。
+- 最近验证：2026-07-24 P2-02 第三版 candidate；全量三门/cached diff GREEN；server 36 项、web 6 项；异步 continuation、事务控制 SQL 与双子进程恢复门禁 GREEN。
 - 当前 Task：`P2-02`
-- 唯一下一动作：独立 Reviewer 从头复算 P2-02 第二版 candidate，重新执行 Spec Review 与 Code Quality Review；首版 Verdict 均不得复用。
+- 唯一下一动作：独立 Reviewer 从头复算 P2-02 第三版 candidate，重新执行 Spec Review 与 Code Quality Review；前两版 Verdict 均不得复用。
 
 ## 当前写租约
 
@@ -52,7 +52,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
 | P1-05 真实大文本门禁 | `complete` | P1-04 | Coordinator / 已释放 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | `a7de1e2` | PASS，绑定 `a7de1e2`/第二版 revision | PASS，绑定同一次 Phase 1 阶段门禁综合 Review | 集成态全量三门与真实门禁 GREEN；124 章、RSS 增量 9,027,584 bytes；故障清理探针 GREEN | `7d23438` | Node SQLite 实验性警告；Phase 1 complete，进入 P2-01 |
 | P2-01 持久化任务状态机 | `complete` | P1-05 | Coordinator / 已释放 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 集成态全量三门/diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5 | `d8dff8f` | Node SQLite 实验性警告；协作取消与外部副作用幂等进入 P2-02 |
-| P2-02 checkpoint 与恢复 | `frozen_for_review` | P2-01 | Coordinator / `codex/p2-02` 冻结租约 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:a75afc99b08eb7f3048c51316d5f7ad1dc22f1ed` | 本控制提交，以 Git 历史定位 | 待第二轮独立 Spec Review | 待第二轮独立 Code Quality Review | 第二版全量三门/cached diff GREEN；server 35 项、web 6 项；Promise continuation 泄漏 0；双子进程恢复 gate GREEN | - | Reviewer 从头复算第二版；revision 变化则 Verdict 失效 |
+| P2-02 checkpoint 与恢复 | `frozen_for_review` | P2-01 | Coordinator / `codex/p2-02` 冻结租约 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973` | 本控制提交，以 Git 历史定位 | 待第三轮独立 Spec Review | 待第三轮独立 Code Quality Review | 第三版全量三门/cached diff GREEN；server 36 项、web 6 项；异步 continuation/事务 SQL 逃逸 0；双子进程恢复 gate GREEN | - | Reviewer 从头复算第三版；revision 变化则 Verdict 失效 |
 | P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
 | P2-04 真实章节任务门禁 | `queued` | P2-03 | - | - | - | - | - | - | - | - |
 | P3-01 故事弧与分集证据 | `queued` | P2-04 | - | - | - | - | - | - | - | - |
@@ -130,6 +130,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P2-02 candidate | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:57cc215f2c121d46e3608faa2ec781cddd165a69`；migration v3 完成态 checkpoint；SHA-256 输入身份；有效租约/未取消校验；同输入幂等跳过、输入变化原子替换、失败回滚；同步 writer 类型与运行时保护；Worker context 接点；双子进程硬退出后仅恢复缺失范围；全量三门 GREEN，server 35 项、web 6 项，gate GREEN。 |
 | 2026-07-24 P2-02 首轮 Review | Spec PASS；Code Quality FAIL，均绑定 Ledger `617b1f7` 与首版 revision；普通函数返回 Promise 可持有原始 `DatabaseSync`，在 rollback 后 continuation 写入领域结果而无 checkpoint。首版 revision 失效。 |
 | 2026-07-24 P2-02 第二版 candidate | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:a75afc99b08eb7f3048c51316d5f7ad1dc22f1ed`；writer 改为只收集 SQL 操作的受限 `CheckpointTransaction`，回调返回后立即失活，再由 checkpoint 层在事务内执行；Promise continuation 不能持有原始数据库句柄，异步泄漏回归结果 0；全量三门与双子进程恢复 gate GREEN。 |
+| 2026-07-24 P2-02 第二轮 Review | Spec/Code Quality 均 FAIL，绑定 Ledger `b56cb3e` 与第二版 revision；受限 transaction 仍接受任意 SQL，writer 可排队 `COMMIT` 提前结束外层事务并造成领域结果逃逸。第二版 revision 失效。 |
+| 2026-07-24 P2-02 第三版 candidate | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973`；受限 transaction 仅接受单条 `INSERT/UPDATE/DELETE` 领域 DML，执行任何排队 SQL 前拒绝事务控制、DDL、PRAGMA、ATTACH 与多语句；逃逸回归领域行/checkpoint 均为 0 且连接可继续使用；全量三门、server 36 项、web 6 项与恢复 gate GREEN。 |
 
 ## 决策与剩余风险
 

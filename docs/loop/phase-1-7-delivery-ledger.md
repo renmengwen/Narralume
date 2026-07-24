@@ -27,13 +27,13 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 工作区：clean。
 - 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
 - 当前 Task：`P1-01`
-- 唯一下一动作：修复 P1-01 初始化失败未关闭 SQLite 句柄的问题，补关键约束/失败清理测试并生成新 candidate；旧 Review 失效。
+- 唯一下一动作：对 P1-01 第二版 candidate 重新执行独立 Spec Review 与 Code Quality Review；旧 revision 的 Verdict 不得复用。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-01 | Coordinator | `D:\code3\Narralume-worktrees\P1-01` / `codex/p1-01` / `e6452d3` | `apps/server/src/config.ts`、`apps/server/src/database.ts`、`apps/server/src/database.test.ts` | 数据根、SQLite schema v1、数据库生命周期 | 测试临时目录、Worker Git index | `changes_requested` |
+| P1-01 | Coordinator | `D:\code3\Narralume-worktrees\P1-01` / `codex/p1-01` / `e6452d3` | `apps/server/src/config.ts`、`apps/server/src/database.ts`、`apps/server/src/database.test.ts` | 数据根、SQLite schema v1、数据库生命周期 | 测试临时目录、Worker Git index | `frozen_for_review`（停止写入） |
 
 ## Phase 依赖
 
@@ -44,7 +44,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
-| P1-01 数据根与 SQLite 基线 | `changes_requested` | CTRL-01 | Coordinator / `codex/p1-01` 当前租约 | 旧 `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:bff87773d05e84a8456b299f8cb5b99bdffbb5c4` 已失效 | `144cba5` | PASS（随旧 revision 失效） | FAIL：初始化异常可能泄漏 SQLite 句柄，约束/失败清理测试不足 | 原 GREEN 仅适用于旧 revision | - | 修复统一失败清理并补测试后重新冻结双审 |
+| P1-01 数据根与 SQLite 基线 | `frozen_for_review` | CTRL-01 | Coordinator / `codex/p1-01` 冻结租约 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | 本控制提交 | - | - | 全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | - | 等待第二轮双 Review；旧 revision/verdict 失效 |
 | P1-02 TXT 流式导入 | `queued` | P1-01 | - | - | - | - | - | - | - | - |
 | P1-03 编码与章节索引 | `queued` | P1-02 | - | - | - | - | - | - | - | - |
 | P1-04 书库 API 与最小 UI | `queued` | P1-03 | - | - | - | - | - | - | - | - |
@@ -102,6 +102,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 CTRL-01 | 业务提交 `428af35`；candidate `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000`；独立 Spec Review PASS；独立 Code Quality Review PASS；两者均复算 commit tree 且工作区 clean |
 | 2026-07-24 P1-01 candidate | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:bff87773d05e84a8456b299f8cb5b99bdffbb5c4`；新增 `config.ts`、`database.ts`、`database.test.ts`；缺模块测试 RED 后，全量 `npm run typecheck`、`npm test`、`npm run build` GREEN；Node 内置 SQLite 实验性警告保留 |
 | 2026-07-24 P1-01 首轮 Review | Spec PASS；Code Quality FAIL：损坏迁移表使初始化查询抛错时连接未关闭，Windows 文件保持 `EBUSY`；关键章节约束与失败清理缺测试。旧 revision 失效，进入修复。 |
+| 2026-07-24 P1-01 第二版 candidate | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447`；统一外层失败关闭，rollback 失败不覆盖原异常；章节唯一/范围/级联约束与损坏迁移表后 Windows 文件可删除测试通过；全量三门 GREEN。 |
 
 ## 决策与剩余风险
 

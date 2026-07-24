@@ -26,10 +26,10 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`8010dcb`（P6-04 集成业务提交；本收口控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P7-01 Gate 已形成 commit/tree 并在独立洁净 review worktree 冻结；P7-02 原 worktree 只修 findings。
+- 工作区：`dev` 仅本 Ledger 待提交；P7-01 Gate 保持冻结审查；P7-02 第二版已形成 commit/tree 并在独立洁净 review worktree 冻结。
 - 最近验证：2026-07-25 P6-04 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，硬退出恢复、定向失效、final 当前性、缺片/缺音频/取消、完整解码与异常等待进程树零残留全部 GREEN。
 - 当前 Task：`P7-01`（Gate + JPEG 色彩范围根修）与不重叠的 `P7-02/Core` 并行实现；P7-02 真实验收仍依赖 P7-01 产物。
-- 唯一下一动作：对 P7-01 Gate candidate 做一次独立综合 Review；P7-02 同时只修首轮 findings。
+- 唯一下一动作：完成 P7-01 Gate 综合 Review；并行对 P7-02 第二版只做首轮 findings 的 Spec + Quality 最小复审。
 
 ## 当前写租约
 
@@ -37,7 +37,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- | --- | --- | --- |
 | P7-01/Gate | Gate Writer | `D:\code3\Narralume-worktrees\P7-01` / `codex/p7-01` / `8010dcb` | `apps/server/src/gates/p3-real-episode-gate.ts`、`apps/server/src/gates/p7-real-sample-gate.ts`、`apps/server/package.json` | 持久真实原文→批准稿→TTS/字幕→真实审核图→视觉段→chunks→final | P7 真实样片 data root / Gutenberg 下载 / System.Speech / ffmpeg | `leased` |
 | P7-01/Gate | Reviewer（只读） | `D:\code3\Narralume-worktrees\P7-01-review` / detached `7f27316` | 冻结 commit/tree 只读；只审 Gate commit `65a16b6..7f27316`，不重复 JPEG Core | 统一真实 E2E、重启复用、manifest/指标与完整解码 | P7 真实样片 data root / Gutenberg / System.Speech / ffmpeg | `frozen_for_review` |
-| P7-02/Core | Package Fix Writer | `D:\code3\Narralume-worktrees\P7-02` / `codex/p7-02` / `a2eebbc` | 仅 `apps/server/src/project-package.ts`、`apps/server/src/project-package.test.ts`；禁止 Ledger/index/提交 | 首轮 Spec/Quality findings 最小修复 | P7 package test roots | `changes_requested` |
+| P7-02/Core | Reviewers（只读） | `D:\code3\Narralume-worktrees\P7-02-review2` / detached `d0ece56` | 第二版冻结 commit/tree 只读；禁止修改文件/index/Ledger | 首轮 Spec/Quality findings 最小复审 | P7 package test roots | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -73,7 +73,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P6-03 concat 与导出清单 | `complete` | P6-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:ebe2f45d4aa5fa0ee6b77d528d2d044b6bf979a3`；首版失效 | `546c2a921a537bd5ad92793dd4f06d29aa91b2f6`；首版 `2d501c074d3884f90834d629a5e96c0dcdd3986d` | PASS；同一 P1 关闭，无新 findings | PASS；同一 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 final 220,579ms/3,343,332 bytes，重启稳定、旧行忽略、缺片/篡改阻断 | 冻结 `08c78da`；集成 `918fadf` | 无新 findings；进入 P6-04 |
 | P6-04 真实渲染恢复门禁 | `complete` | P6-03 | Coordinator / 已释放 | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100` | `19849805ec5a4448eef4efa7d1a4c064f113c666` | PASS，首轮综合 Review + 第二版最小复审 | PASS，绑定同一次 Review | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，恢复/定向重做/final/负向阻断/完整解码/异常清理全部 GREEN | `8010dcb`（冻结业务提交 `0e8e017`） | Node SQLite 实验性警告；Phase 6 complete，进入 P7-01 |
 | P7-01 真实样片 E2E | `frozen_for_review` | P6-04 | Reviewer 只读；Ledger 仅 Coordinator | `git-commit-tree-v1:7f2731621e99be96cab496d52570e383606d2af8:a8e4363fefb605630f6a867ee96a794a950b1366`（父 Core `65a16b6` 已双审） | 本 Gate 冻结控制提交后由 Git 历史定位；Core `38c4960…` | Core Spec PASS；Gate 待综合 Review | Core Quality PASS；Gate 待同一次综合 Review | Gate 126,960ms GREEN：Gutenberg 2,663,455 bytes/6证据，packaged 1,139字 rev3，System.Speech 287,185ms，真实 Seedream JPEG 1,038,668 bytes approved，8段/2 chunks，final `af9dea5e…`，video SHA `82b6e294…`、18,536,549 bytes、287,236ms、严格合同/full decode；重启全复用且 bytes/mtime 稳定；root 三门/diff GREEN，server 103/103、web 6/6 | Core `65a16b6`；Gate `7f27316` | Gate 一次综合 Review；PASS 后集成 dev 并供 P7-02 真实打包 |
-| P7-02 可恢复项目包 | `changes_requested` | P7-01（真实验收）；安全核心已并行完成 | Package Fix Writer；Ledger 仅 Coordinator | 首版失效：`git-commit-tree-v1:a2eebbc5815a2c2066c10b2e6682648543f47a88:3547aa8ca8be061e0f930402bb21325cf364a463` | `38c49605bd8ebaca37a476fd96ab55b227c7fbbd` | FAIL，绑定首版 revision | FAIL，绑定同一 revision | 首版定向/server/typecheck/build/diff GREEN，但跨阶段安全窗口未覆盖 | `a2eebbc`（失效 candidate） | 只开放：唯一 episode/file-backed 闭包；create/restore 根不重叠；backup 删除后不回滚新包；恢复复制到私有 staging 后对同一字节做语义验证并发布；只认 ENOENT/no-replace 并发目标 |
+| P7-02 可恢复项目包 | `frozen_for_review` | P7-01（真实验收）；安全核心已并行完成 | Reviewers 只读；Ledger 仅 Coordinator | `git-commit-tree-v1:d0ece56ae2d4a63448a6d5c3a6139bf5cda291a4:5027c53cae2cba02c80517bbca5fd1d4cc1c7b8a` | 本第二版冻结控制提交后由 Git 历史定位 | 首轮 FAIL；待第二版最小复审 | 首轮 FAIL；待第二版最小复审 | 第二版定向 31：30 PASS/1 symlink权限 SKIP；server 133：132 PASS/同项 SKIP；server typecheck/build/diff GREEN；Junction/硬链接/no-replace竞态真实 PASS | `d0ece56`（父首版 `a2eebbc`） | 只复审唯一闭包、根隔离、post-commit backup、私有 staged snapshot 与 ENOENT/no-replace findings；真实打包仍待 P7-01 集成 |
 | P7-03 空目录恢复演练 | `queued` | P7-02 | - | - | - | - | - | - | - | - |
 | P7-04 最终验收 | `queued` | P7-03 | - | - | - | - | - | - | - | - |
 
@@ -214,6 +214,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P7-01 JPEG Core 双 Review | Spec PASS + Code Quality PASS，均绑定 Ledger `38c49605bd8ebaca37a476fd96ab55b227c7fbbd` 与 Core candidate，Review 前后 commit/tree/洁净状态不变。独立反事实证明相同真实 JPEG 删除 `-color_range tv` 后为 `yuvj420p/pc` 且严格 probe 拒绝，冻结实现为 `yuv420p/tv`；定向测试、server typecheck、P6 模板真实 Gate/diff GREEN，无 findings。Gate 可恢复执行，不重复审查 Core。 |
 | 2026-07-25 P7-02 Package Core 首轮双 Review | Spec FAIL + Code Quality FAIL，均绑定 Ledger `38c49605bd8ebaca37a476fd96ab55b227c7fbbd` 与首版 candidate，Review 前后 tree 不变。P1：单 series 多 episode 时 DB 保留其他分集但文件枚举只含 final episode，形成不完整包；create/restore 未拒绝源目标祖先/后代重叠；新包已提交后 backup 部分删除或后续 sync 失败仍回滚，可能新旧双失；恢复对不可信 payload 多次按路径重开，语义验证与最终字节不绑定。P2：空目标 check-then-rename 吞掉非 ENOENT 且缺 no-replace 竞态合同。只开放这些 findings 与精确回归；其余 WAL backup、基础路径/链接/hash/上限/SQLite 校验范围继续有效。 |
 | 2026-07-25 P7-01 真实样片 Gate candidate | `git-commit-tree-v1:7f2731621e99be96cab496d52570e383606d2af8:a8e4363fefb605630f6a867ee96a794a950b1366`；Gate commit 仅 3 路径，父 JPEG Core 已双审。统一链真实 Gate 126,960ms：Gutenberg《红楼梦》2,663,455 bytes/SHA `ff1526…`/6 证据；packaged 稿 1,139 字、approval rev3；System.Speech timeline `822d68…`、287,185ms、SRT/ASS；真实 Seedream JPEG SHA `e6ce4d…`、1,038,668 bytes 自包含 generation+approved；8 连续视觉段、2 chunks；final `af9dea5e5edb7673575bc9260f3f3e9b9ed4d3ae54f0d6260f00652278a9b2db`，视频 SHA `82b6e2941e6366ccf039c1c71215bc8e92de178944f92ff92853bee46d99c3b6`、18,536,549 bytes、287,236ms，严格 1080×1920@25/H.264/yuv420p/AAC/full decode；重启后 TTS/chunks/final 全复用且 bytes/mtime 不变。6 Jobs/6 attempts/0 retry/0 failure；P7 增量模型调用/成本 0，历史图片价格 unknown；4 次批准动作，门禁代执行人工等待 0ms。root 三门/diff GREEN，server 103/103、web 6/6。 |
+| 2026-07-25 P7-02 Package Core 第二版 candidate | `git-commit-tree-v1:d0ece56ae2d4a63448a6d5c3a6139bf5cda291a4:5027c53cae2cba02c80517bbca5fd1d4cc1c7b8a`。强制唯一 series/book/episode 及 file-backed 行闭包；create/restore 在写入前以最近存在父目录 realpath 拒绝相等/祖先/后代/Junction 隐藏重叠；新 target+父 sync 后即提交，backup 部分 rm/post-commit sync 失败保留新包；恢复只结构读取源，复制时同句柄 hash 到私有 staging，后续 SQLite/final/DB 语义与发布均使用 staging；仅吞 ENOENT，Windows no-replace 平台门与 rename 前后 dev/ino 绑定，非空/空并发目标均不覆盖。定向 31项30 PASS/1 symlink权限 SKIP，server 133项132 PASS/同项 SKIP，typecheck/build/diff GREEN；Junction、硬链接、backup 故障、源 payload 删除竞态及空目录竞争真实通过。 |
 
 ## 决策与剩余风险
 

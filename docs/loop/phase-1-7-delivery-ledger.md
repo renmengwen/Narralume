@@ -27,15 +27,15 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 当前分支：`dev`
 - 当前 HEAD：`0837567`（P1-04 业务提交已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P1-04 集成态；全量 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` 通过；server 13 项、web 6 项；第二轮独立综合 Review PASS。
+- 最近验证：2026-07-24 P1-05 candidate；全量三门与 cached diff 通过；自包含真实《红楼梦》门禁识别 124 章，重复导入/重启/全量分页/首中尾字节切片通过，RSS 增量 `18,972,672` bytes / 门限 96 MiB。
 - 当前 Task：`P1-05`
-- 唯一下一动作：在仓库与合法公开来源中定位真实长篇中文 TXT，冻结来源与哈希后建立可重复的大文本门禁，验证内存、重启、偏移、重复导入和重复章节编号。
+- 唯一下一动作：独立 Reviewer 复算 P1-05 candidate，并执行覆盖 P1-01～P1-05 的 Phase 1 阶段门禁综合 Review；Coordinator 在 Review 期间停止修改 candidate。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-05 | Coordinator | `D:\code3\Narralume-worktrees\P1-05` / `codex/p1-05` / `0837567` | 待真实输入与调用链核对后收窄为门禁脚本、测试和必要修复；排除本 Ledger | 真实长篇输入、内存/重启/偏移/幂等/重复编号证据 | 真实输入缓存、测试数据根、端口 3100/4173 | `implementing` |
+| P1-05 | Coordinator（Review 期间停止写入） | `D:\code3\Narralume-worktrees\P1-05` / `codex/p1-05` / `0837567` | `apps/server/package.json`、`apps/server/src/gates/phase1-large-text-gate.ts`、`docs/source-provenance.md`；排除本 Ledger | 真实长篇输入、内存/重启/偏移/幂等/重复编号证据 | Project Gutenberg 下载、测试数据根、临时 HTTP 端口、Worker Git index | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -50,7 +50,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |
 | P1-03 编码与章节索引 | `complete` | P1-02 | Coordinator / 已释放 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | `8110fe7` | PASS，绑定第二版 revision | PASS，绑定第二版 revision | 集成态 12 项 server tests；全量三门 GREEN；编码/内存/事务真实探针 | `9df94e2` | 1 MiB 单行门；进入 P1-04 |
 | P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
-| P1-05 真实大文本门禁 | `implementing` | P1-04 | Coordinator / `codex/p1-05` 当前租约 | - | - | - | - | - | - | 先冻结合法真实长篇输入来源与哈希，再建立可重复门禁 |
+| P1-05 真实大文本门禁 | `frozen_for_review` | P1-04 | Coordinator / `codex/p1-05` 冻结租约 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:d40a52726430d4d6ca76922b449f8aa0bf001fe6` | 本控制提交，以 Git 历史定位 | 待 Phase 1 独立阶段门禁综合 Review | 待同一次阶段门禁综合 Review | 全量三门与 cached diff GREEN；公版《红楼梦》2,663,455 bytes / SHA-256 `ff152699…ec72011`；124 章；RSS 增量 18,972,672 bytes；重复导入/重启/分页/三处切片/真实重复编号 GREEN | - | Reviewer 从头审查门禁脚本与 Phase 1 总体；candidate 变更则 Verdict 失效 |
 | P2-01 持久化任务状态机 | `queued` | P1-05 | - | - | - | - | - | - | - | - |
 | P2-02 checkpoint 与恢复 | `queued` | P2-01 | - | - | - | - | - | - | - | - |
 | P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
@@ -120,6 +120,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-04 首轮综合 Review | FAIL，绑定 Ledger `9ddb640` 与首版 revision；P1：章节 UI 固定 `limit=100` 使后续章节不可达；导入 POST 成功后列表刷新失败会误报导入失败且覆盖成功状态。P2：原文读取缺 GB18030 非零切片、短读/严格解码/句柄关闭/路径边界测试；省略书名与章节名缺完整 `title`。旧 revision 失效。 |
 | 2026-07-24 P1-04 第二版 candidate | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4`；新增 100 章一页的“加载更多”和 `X/N` 状态；导入成功与列表刷新错误分离且 POST 后立即清空中断引用；GB18030 非零切片、短读后 Windows 改名、fatal 解码、路径越界测试；省略标题补完整 `title`；全量三门、server 13 项、web 6 项 GREEN；真实 105 章从 100/105 加载至 105/105。 |
 | 2026-07-24 P1-04 完成 | 第二轮独立综合 Review PASS，绑定 Ledger `c92c1aa` 与第二版 revision；业务提交/集成提交 `0837567`；集成态全量三门 GREEN；OpenDesign 深浅/系统主题规范、UI Kit、mockup 和实际 React 工作台落地。 |
+| 2026-07-24 P1-05 candidate | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:d40a52726430d4d6ca76922b449f8aa0bf001fe6`；自包含下载 Project Gutenberg eBook #24264《红楼梦》，冻结 2,663,455 bytes 与 SHA-256 `ff1526996bf4b81807651921a85e5c1c0f1d1d123c9fa4553057ba6a3ec72011`；真实 HTTP 流式导入 124 章，重复导入 200/稳定 ID，关闭重启后全量分页可读，首/中/尾切片文本与内容哈希吻合；真实重复章节编号 `二`、`四`、`四十五` 未覆盖；RSS 峰值增量 18,972,672 bytes，低于 96 MiB 门限；全量三门 GREEN。 |
 
 ## 决策与剩余风险
 

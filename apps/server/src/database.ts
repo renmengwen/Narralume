@@ -346,9 +346,48 @@ const MIGRATION_9 = `
     WHERE is_primary = 1;
 `;
 
+const MIGRATION_10 = `
+  CREATE TABLE asset_candidates (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('upload', 'generation')),
+    source_identity_hash TEXT NOT NULL CHECK (
+      length(source_identity_hash) = 64 AND source_identity_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    source_json TEXT NOT NULL CHECK (length(source_json) > 0 AND json_valid(source_json)),
+    file_hash TEXT NOT NULL CHECK (
+      length(file_hash) = 64 AND file_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    mime TEXT NOT NULL CHECK (mime IN ('image/png', 'image/jpeg', 'image/webp')),
+    width INTEGER NOT NULL CHECK (width BETWEEN 16 AND 8192),
+    height INTEGER NOT NULL CHECK (height BETWEEN 16 AND 8192),
+    bytes INTEGER NOT NULL CHECK (bytes BETWEEN 1 AND 31457280),
+    relative_path TEXT NOT NULL CHECK (length(relative_path) > 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    UNIQUE (asset_id, source_identity_hash, file_hash)
+  ) STRICT;
+
+  CREATE INDEX asset_candidates_asset_order
+    ON asset_candidates(asset_id, created_at, id);
+
+  CREATE TABLE asset_candidate_review_events (
+    candidate_id TEXT NOT NULL REFERENCES asset_candidates(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    action TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'note')),
+    note TEXT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (candidate_id, revision),
+    CHECK (
+      (action = 'note' AND note IS NOT NULL AND length(note) > 0)
+      OR (action <> 'note' AND (note IS NULL OR length(note) > 0))
+    )
+  ) STRICT;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
+  MIGRATION_10,
 ];
 
 export interface NarralumeDatabase {

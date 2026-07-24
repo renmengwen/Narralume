@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +9,8 @@ import test from "node:test";
 import { buildApp } from "./app.js";
 import { openDatabase } from "./database.js";
 import { getJob } from "./job-store.js";
+import { IMAGE_CANDIDATE_JOB_TYPE } from "./image-candidate-job.js";
+import { changeScriptApproval } from "./script-approval-store.js";
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -527,6 +530,143 @@ test("任务 HTTP 边界先持久化、可查询取消且关闭时等待 Worker"
     }
   } finally {
     release?.();
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("候选图 API 覆盖原始上传、列表、追加审核和生图任务门禁", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-candidates-"));
+  const imagePath = join(dataRoot, "upload.png");
+  const rendered = spawnSync("ffmpeg", [
+    "-v", "error", "-f", "lavfi", "-i", "color=c=0x506070:s=32x48", "-frames:v", "1", "-y", imagePath,
+  ], { windowsHide: true, encoding: "utf8" });
+  assert.equal(rendered.status, 0, rendered.stderr);
+  const image = await readFile(imagePath);
+
+  const seed = openDatabase(dataRoot);
+  try {
+    seed.database.prepare(
+      `INSERT INTO books (id, title, original_file_path, original_file_hash, encoding, import_status)
+       VALUES ('candidate_book', '候选图 API', 'source.txt', ?, 'utf-8', 'ready')`,
+    ).run("1".repeat(64));
+    for (const id of ["one", "two"]) {
+      seed.database.prepare(
+        `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+         VALUES (?, 'candidate_book', ?, 1, 1)`,
+      ).run(`series_${id}`, `系列${id}`);
+      seed.database.prepare(
+        `INSERT INTO episodes (
+          id, series_project_id, episode_index, title, story_arc, target_duration_seconds, created_at, updated_at
+        ) VALUES (?, ?, 1, '第一集', '故事弧', 240, 1, 1)`,
+      ).run(`episode_${id}`, `series_${id}`);
+      seed.database.prepare(
+        `INSERT INTO assets (
+          id, series_project_id, asset_type, asset_role, canonical_name, normalized_name, created_at
+        ) VALUES (?, ?, 'character', 'master', ?, ?, 1)`,
+      ).run(`asset_${id}`, `series_${id}`, `人物${id}`, `人物${id}`);
+    }
+    const content = JSON.stringify({ paragraphs: [{ text: "批准包装稿", sourceIndexes: [0] }] });
+    seed.database.prepare(
+      `INSERT INTO script_versions (
+        id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+      ) VALUES ('candidate_script', 'episode_one', 'packaged', 1, NULL, ?, ?, 1)`,
+    ).run(content, createHash("sha256").update(content).digest("hex"));
+    changeScriptApproval(seed.database, "episode_one", {
+      action: "approve", expectedRevision: 0, scriptVersionId: "candidate_script",
+    });
+  } finally {
+    seed.close();
+  }
+
+  const imageProvider = {
+    baseUrl: "https://images.example/v1",
+    apiKey: "test-only",
+    model: "test-image",
+    providerId: "test-provider",
+  };
+  let app = buildApp({
+    dataRoot,
+    logger: false,
+    jobPollMs: 60_000,
+    imageProvider,
+    jobHandlers: { [IMAGE_CANDIDATE_JOB_TYPE]: async () => ({ accepted: true }) },
+  });
+  try {
+    const wrongType = await app.inject({
+      method: "POST", url: "/api/assets/asset_one/candidates/upload",
+      headers: { "content-type": "image/png", "x-file-name": "人物.png" }, payload: image,
+    });
+    assert.equal(wrongType.statusCode, 415);
+    const missingAsset = await app.inject({
+      method: "POST", url: "/api/assets/asset_missing/candidates/upload",
+      headers: { "content-type": "application/octet-stream", "x-file-name": "人物.png" }, payload: image,
+    });
+    assert.equal(missingAsset.statusCode, 404);
+    const invalidImage = await app.inject({
+      method: "POST", url: "/api/assets/asset_one/candidates/upload",
+      headers: { "content-type": "application/octet-stream", "x-file-name": "坏图.png" }, payload: Buffer.from("not image"),
+    });
+    assert.equal(invalidImage.statusCode, 400);
+    const uploaded = await app.inject({
+      method: "POST", url: "/api/assets/asset_one/candidates/upload",
+      headers: { "content-type": "application/octet-stream", "x-file-name": encodeURIComponent("人物.png") }, payload: image,
+    });
+    assert.equal(uploaded.statusCode, 201, uploaded.body);
+    const candidateId = uploaded.json().candidate.id as string;
+    const listed = await app.inject({ method: "GET", url: "/api/assets/asset_one/candidates" });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.json().total, 1);
+    assert.equal((await app.inject({ method: "GET", url: "/api/assets/asset_missing/candidates" })).statusCode, 404);
+
+    const invalidReview = await app.inject({
+      method: "POST", url: `/api/candidates/${candidateId}/reviews`, payload: { expectedRevision: -1, action: "approve" },
+    });
+    assert.equal(invalidReview.statusCode, 400);
+    assert.equal((await app.inject({
+      method: "POST", url: "/api/candidates/candidate_missing/reviews", payload: { expectedRevision: 0, action: "approve" },
+    })).statusCode, 404);
+    assert.equal((await app.inject({
+      method: "POST", url: `/api/candidates/${candidateId}/reviews`, payload: { expectedRevision: 0, action: "approve" },
+    })).statusCode, 201);
+    assert.equal((await app.inject({
+      method: "POST", url: `/api/candidates/${candidateId}/reviews`, payload: { expectedRevision: 0, action: "reject" },
+    })).statusCode, 409);
+
+    const invalidJob = await app.inject({
+      method: "POST", url: "/api/jobs", payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: {} },
+    });
+    assert.equal(invalidJob.statusCode, 400);
+    const unapproved = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: { episodeId: "episode_two", assetId: "asset_two", prompt: "人物" } },
+    });
+    assert.equal(unapproved.statusCode, 409);
+    const crossSeries = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: { episodeId: "episode_one", assetId: "asset_two", prompt: "人物" } },
+    });
+    assert.equal(crossSeries.statusCode, 409);
+    const accepted = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: { episodeId: "episode_one", assetId: "asset_one", prompt: "竖屏人物" } },
+    });
+    assert.equal(accepted.statusCode, 201, accepted.body);
+    const repeated = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: { episodeId: "episode_one", assetId: "asset_one", prompt: "竖屏人物" } },
+    });
+    assert.equal(repeated.statusCode, 200, repeated.body);
+    assert.equal(repeated.json().job.id, accepted.json().job.id);
+
+    await app.close();
+    app = buildApp({ dataRoot, logger: false, imageProvider: null });
+    const unconfigured = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: { episodeId: "episode_one", assetId: "asset_one", prompt: "竖屏人物" } },
+    });
+    assert.equal(unconfigured.statusCode, 409);
+  } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });
   }

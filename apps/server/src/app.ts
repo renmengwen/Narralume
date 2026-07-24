@@ -9,6 +9,13 @@ import {
   listAssets,
   type AssetInput,
 } from "./asset-store.js";
+import {
+  appendAssetCandidateReview,
+  AssetCandidateStoreError,
+  listAssetCandidates,
+  registerAssetCandidate,
+  type AssetCandidateReviewAction,
+} from "./asset-candidate-store.js";
 import { BookImportError, importBookText } from "./book-import.js";
 import { BookLibraryError, listBooks, listChapters, readChapterText } from "./book-library.js";
 import {
@@ -47,6 +54,12 @@ import {
 } from "./script-approval-store.js";
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
 import { createPlaceholderVideoJobHandler, PLACEHOLDER_VIDEO_JOB_TYPE } from "./placeholder-video-job.js";
+import {
+  createImageCandidateJobHandler,
+  enqueueImageCandidateJob,
+  IMAGE_CANDIDATE_JOB_TYPE,
+} from "./image-candidate-job.js";
+import type { OpenAiImageConfig } from "./image-provider.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
@@ -54,6 +67,7 @@ interface BuildAppOptions {
   jobHandlers?: Readonly<Record<string, JobHandler>>;
   jobPollMs?: number;
   jobWorker?: Partial<JobWorkerOptions>;
+  imageProvider?: OpenAiImageConfig | null;
 }
 
 interface CreateJobBody {
@@ -94,6 +108,21 @@ interface ChangeScriptApprovalBody {
   action?: unknown;
   expectedRevision?: unknown;
   scriptVersionId?: unknown;
+}
+interface ReviewAssetCandidateBody {
+  expectedRevision?: unknown;
+  action?: unknown;
+  note?: unknown;
+}
+
+function imageProviderFromEnvironment(): OpenAiImageConfig | null {
+  const config = {
+    baseUrl: process.env.NARRALUME_IMAGE_BASE_URL?.trim() ?? "",
+    apiKey: process.env.NARRALUME_IMAGE_API_KEY?.trim() ?? "",
+    model: process.env.NARRALUME_IMAGE_MODEL?.trim() ?? "",
+    providerId: process.env.NARRALUME_IMAGE_PROVIDER_ID?.trim() ?? "",
+  };
+  return Object.values(config).every(Boolean) ? config : null;
 }
 
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
@@ -143,13 +172,20 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
   const dataRoot = resolveDataRoot(options.dataRoot);
   const connection = openDatabase(dataRoot);
+  const imageProvider = options.imageProvider === undefined
+    ? imageProviderFromEnvironment()
+    : options.imageProvider;
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
+    ...(imageProvider ? {
+      [IMAGE_CANDIDATE_JOB_TYPE]: createImageCandidateJobHandler(connection.database, dataRoot, imageProvider),
+    } : {}),
     ...(options.jobHandlers ?? {}),
   };
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
+  supportedJobTypes.add(IMAGE_CANDIDATE_JOB_TYPE);
   let worker: JobWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
@@ -298,6 +334,63 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
+  app.post<{ Params: { assetId: string } }>(
+    "/api/assets/:assetId/candidates/upload",
+    { bodyLimit: 30 * 1024 * 1024 },
+    async (request, reply) => {
+      try {
+        if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/octet-stream") {
+          return reply.code(415).send({ ok: false, message: "候选图上传只支持 application/octet-stream" });
+        }
+        const candidate = await registerAssetCandidate(connection.database, dataRoot, {
+          assetId: request.params.assetId,
+          source: { kind: "upload", originalName: decodeHeader(request.headers["x-file-name"], "上传图片") },
+          raw: request.body as Readable,
+        });
+        return reply.code(201).send({ ok: true, message: "候选图已上传", candidate });
+      } catch (error) {
+        if (error instanceof AssetCandidateStoreError || error instanceof BookImportError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { assetId: string } }>("/api/assets/:assetId/candidates", async (request, reply) => {
+    try {
+      if (!connection.database.prepare("SELECT id FROM assets WHERE id = ?").get(request.params.assetId)) {
+        throw new AssetCandidateStoreError(404, "资产不存在");
+      }
+      const items = listAssetCandidates(connection.database, request.params.assetId);
+      return { ok: true, items, total: items.length };
+    } catch (error) {
+      if (error instanceof AssetCandidateStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { candidateId: string }; Body: ReviewAssetCandidateBody }>(
+    "/api/candidates/:candidateId/reviews",
+    async (request, reply) => {
+      try {
+        const event = appendAssetCandidateReview(connection.database, request.params.candidateId, {
+          expectedRevision: request.body?.expectedRevision as number,
+          action: request.body?.action as AssetCandidateReviewAction,
+          note: request.body?.note as string | null | undefined,
+        });
+        return reply.code(201).send({ ok: true, message: "候选图审核已记录", event });
+      } catch (error) {
+        if (error instanceof AssetCandidateStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
   app.put<{
     Params: { seriesId: string; episodeIndex: string };
     Body: ReplaceEpisodeBody;
@@ -444,6 +537,38 @@ export function buildApp(options: BuildAppOptions = {}) {
     if (!supportedJobTypes.has(type)) {
       return reply.code(400).send({ ok: false, message: `不支持的任务类型：${type || "（空）"}` });
     }
+    if (type === IMAGE_CANDIDATE_JOB_TYPE) {
+      const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+        ? body.payload as { episodeId?: unknown; assetId?: unknown; prompt?: unknown }
+        : {};
+      if (typeof payload.episodeId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.episodeId) ||
+          typeof payload.assetId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.assetId) ||
+          typeof payload.prompt !== "string" || !payload.prompt.normalize("NFKC").trim() ||
+          payload.prompt.normalize("NFKC").trim().length > 20_000) {
+        return reply.code(400).send({ ok: false, message: "图片生成任务缺少有效的分集、资产或提示词" });
+      }
+      if (!imageProvider) {
+        return reply.code(409).send({ ok: false, message: "Narralume 图片模型尚未配置" });
+      }
+      try {
+        requireApprovedScriptForProduction(connection.database, payload.episodeId, "image");
+        const relation = connection.database.prepare(
+          `SELECT episode.series_project_id AS episode_series_id, asset.series_project_id AS asset_series_id
+           FROM episodes episode CROSS JOIN assets asset WHERE episode.id = ? AND asset.id = ?`,
+        ).get(payload.episodeId, payload.assetId) as {
+          episode_series_id: string; asset_series_id: string;
+        } | undefined;
+        if (!relation) throw new AssetCandidateStoreError(404, "分集或资产不存在");
+        if (relation.episode_series_id !== relation.asset_series_id) {
+          throw new AssetCandidateStoreError(409, "图片资产与分集不属于同一系列");
+        }
+      } catch (error) {
+        if (error instanceof ScriptApprovalStoreError || error instanceof AssetCandidateStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    }
     if (type === TTS_TIMELINE_JOB_TYPE) {
       const episodeId = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? (body.payload as { episodeId?: unknown }).episodeId
@@ -491,6 +616,16 @@ export function buildApp(options: BuildAppOptions = {}) {
       return reply.code(400).send({
         ok: false,
         message: error instanceof Error ? error.message : "任务参数无效",
+      });
+    }
+    if (type === IMAGE_CANDIDATE_JOB_TYPE) {
+      const result = enqueueImageCandidateJob(connection.database, imageProvider!, {
+        payload: body.payload ?? {}, priority, maxAttempts, runAfter,
+      });
+      return reply.code(result.created ? 201 : 200).send({
+        ok: true,
+        message: result.created ? "图片生成任务已创建并持久化" : "已复用相同图片生成任务",
+        job: result.job,
       });
     }
     const job = createJob(connection.database, {

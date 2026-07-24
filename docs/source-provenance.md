@@ -12,3 +12,9 @@
 | 2026-07-24 | reference-only | `renmengwen/MuseDock`         | `de629e0212770e15c8165b5495454ca0b7dd8fd9` | `docs/superpowers/specs/2026-07-16-asset-first-agent-loop-design.md`；`docs/superpowers/plans/2026-07-16-asset-first-delivery-ledger.md`；`docs/superpowers/plans/2026-07-16-unified-visual-assets-implementation.md` | `AGENTS.md`；`docs/README.md`；`docs/loop/phase-1-7-implementation.md`；`docs/loop/phase-1-7-delivery-ledger.md` | 仅移植控制、冻结、双审查、验证和恢复方法；未复制业务代码或建立运行时依赖 |
 | 2026-07-24 | copied-tooling | `manalkaff/opendesign` | `cecd9bb6b59408cb96a3974449b8e6ef9f5b17bb` | `skills/opendesign/viewer.html` | `opendesign/index.html` | 复制 OpenDesign 静态查看器作为仓库内设计评审工具；不进入 Narralume 产品运行时，产品设计规范与 mockup 均为本项目新建 |
 | 2026-07-24 | verification-input | `Project Gutenberg` | eBook `#24264`，SHA-256 `ff1526996bf4b81807651921a85e5c1c0f1d1d123c9fa4553057ba6a3ec72011` | `https://www.gutenberg.org/cache/epub/24264/pg24264.txt`（《红楼梦》） | `apps/server/src/gates/phase1-large-text-gate.ts` | 公版真实长篇 TXT 仅下载到系统临时目录，用于 Phase 1 大文本门禁；不提交原文，不作为产品运行时依赖 |
+
+## Phase 5 图片候选参考来源
+
+| 日期 | 类型 | 来源仓库 | 来源提交 | 来源文件 | Narralume 文件 | 修改说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-25 | adapted-contract | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `server/services/ai/aiImageModel.js`、`server/services/ai/aiModelConfig.js`、`server/services/source/sourceAssets.js` | `apps/server/src/image-provider.ts`、`apps/server/src/asset-candidate-store.ts`、`apps/server/src/gates/p5-image-candidates-gate.ts` | 参考已验证的 OpenAI 兼容生图合同、配置选择和外部图片下载边界，以 TypeScript 在 Narralume 内独立实现；正式运行时只读取 Narralume 自有注入或环境变量。真实 gate 只读 MuseDock 本机配置到内存，不复制业务限定，不持久化或输出密钥、地址、签名 URL，也不建立运行时依赖。 |

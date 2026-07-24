@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`3cf04ac`（P2-01 写租约已建立；本控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`d8dff8f`（P2-01 业务提交已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P2-01 双 Review；Spec 与 Code Quality 均独立复算冻结 tree、复跑全量三门并 PASS；Quality 额外重复时序测试 5/5 PASS。
-- 当前 Task：`P2-01`
-- 唯一下一动作：在 `codex/p2-01` 对冻结 index 创建中文业务提交，再集成 `dev` 并执行集成态全量三门。
+- 最近验证：2026-07-24 P2-01 集成态；全量 `typecheck/test/build` 与 diff check GREEN；server 27 项、web 6 项。
+- 当前 Task：`P2-02`
+- 唯一下一动作：在 P2-02 worktree 先写 checkpoint 重启耐久、输入哈希幂等、事务回滚和陈旧租约拒绝测试，再实现 migration v3 与最小 checkpoint store。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2-01 | Coordinator（双 Review 已通过，待提交） | `D:\code3\Narralume-worktrees\P2-01` / `codex/p2-01` / `7d23438` | `apps/server/src/app.ts`、`app.test.ts`、`database.ts`、`database.test.ts`、`job-store.ts`、`job-store.test.ts`、`job-worker.ts`、`job-worker.test.ts`、`server.ts`、`server-runtime.ts`、`server-runtime.test.ts`；排除本 Ledger | jobs 持久化、状态跃迁、租约、重试、取消 | 测试数据根、SQLite 写锁、Worker 计时器、Worker Git index | `verified` |
+| P2-02 | Coordinator | `D:\code3\Narralume-worktrees\P2-02` / `codex/p2-02` / `d8dff8f` | `apps/server/src/database.ts`、`database.test.ts`、`checkpoint-store.ts`、`checkpoint-store.test.ts`、`job-worker.ts`、`job-worker.test.ts`、`gates/p2-checkpoint-recovery-gate.ts`、`apps/server/package.json`；排除本 Ledger | checkpoint、输入哈希、原子结果与范围恢复 | 测试数据根、SQLite 写锁、故障注入子进程、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -51,8 +51,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-03 编码与章节索引 | `complete` | P1-02 | Coordinator / 已释放 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | `8110fe7` | PASS，绑定第二版 revision | PASS，绑定第二版 revision | 集成态 12 项 server tests；全量三门 GREEN；编码/内存/事务真实探针 | `9df94e2` | 1 MiB 单行门；进入 P1-04 |
 | P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
 | P1-05 真实大文本门禁 | `complete` | P1-04 | Coordinator / 已释放 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | `a7de1e2` | PASS，绑定 `a7de1e2`/第二版 revision | PASS，绑定同一次 Phase 1 阶段门禁综合 Review | 集成态全量三门与真实门禁 GREEN；124 章、RSS 增量 9,027,584 bytes；故障清理探针 GREEN | `7d23438` | Node SQLite 实验性警告；Phase 1 complete，进入 P2-01 |
-| P2-01 持久化任务状态机 | `verified` | P1-05 | Coordinator / `codex/p2-01` 待提交 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 全量三门/cached diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5；持久化/租约/重试/取消/陈旧 Worker/HTTP/关闭失败路径覆盖 | - | 创建中文业务提交并集成 `dev` |
-| P2-02 checkpoint 与恢复 | `queued` | P2-01 | - | - | - | - | - | - | - | - |
+| P2-01 持久化任务状态机 | `complete` | P1-05 | Coordinator / 已释放 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 集成态全量三门/diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5 | `d8dff8f` | Node SQLite 实验性警告；协作取消与外部副作用幂等进入 P2-02 |
+| P2-02 checkpoint 与恢复 | `implementing` | P2-01 | Coordinator / `codex/p2-02` 当前租约 | - | - | - | - | - | - | 先写重启耐久、事务回滚、同输入幂等和不同输入拒绝测试 |
 | P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
 | P2-04 真实章节任务门禁 | `queued` | P2-03 | - | - | - | - | - | - | - | - |
 | P3-01 故事弧与分集证据 | `queued` | P2-04 | - | - | - | - | - | - | - | - |
@@ -126,6 +126,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 Phase 1 完成 | 第二轮独立阶段门禁综合 Review PASS，绑定 Ledger `a7de1e2` 与 P1-05 第二版 revision；正常门禁、sampler 后故障注入、下载后早期失败清理均独立复验；业务提交/集成提交 `7d23438`；集成态全量三门及真实门禁 GREEN，RSS 增量 9,027,584 bytes。 |
 | 2026-07-24 P2-01 candidate | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026`；migration v2 jobs STRICT 表；单 Worker 租约/续租/回收、进度、错误、重试、取消与陈旧所有者拒绝；仅领取已注册类型；HTTP 创建/查询/取消；Fastify 启停与监听失败资源清理；全量 `typecheck/test/build`、cached diff GREEN，server 27 项、web 6 项。 |
 | 2026-07-24 P2-01 双 Review | Spec PASS、Code Quality PASS，均绑定 Ledger `e575591` 与 candidate revision；两者独立复算 tree 并复跑全量三门，Quality 额外重复 Worker/HTTP/租约时序测试 5/5；无 findings，剩余风险进入 P2-02 checkpoint 与实际 handler 协作取消。 |
+| 2026-07-24 P2-01 完成 | 中文业务提交/集成提交 `d8dff8f`；`dev` 集成态全量 `typecheck/test/build` 与 diff check GREEN，server 27 项、web 6 项；写租约释放，进入 P2-02。 |
 
 ## 决策与剩余风险
 

@@ -26,16 +26,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`cf90616`（P6-02 Gate 启动总账；本冻结控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P6-02 第二版恰好原 8 路径 staged，零 unstaged/untracked，修复写者已停写。
-- 最近验证：2026-07-25 P6-02 第二版全量三门/diff GREEN，server 97/97、web 6/6；真实 220,541ms 分片 Gate GREEN，14 项定向回归通过。
+- 工作区：`dev` 仅本 Ledger 待提交；P6-02 第二版 8 路径仍 staged，零额外改动，第二版 tree 未变；只开放快照失败自清理最小修复。
+- 最近验证：2026-07-25 P6-02 第二版 Spec 最小复审 PASS；Code Quality 最小复审仅剩 1 个 P2 快照临时文件泄漏。
 - 当前 Task：`P6-02`
-- 唯一下一动作：提交并推送本第二版冻结记录；首轮 Spec/Quality Reviewer 各自只复审失效范围。
+- 唯一下一动作：提交并推送本复审记录；Core Fix Writer 让 `writeSnapshot` 在 write/sync/close 任一失败时内部删除当前临时文件并补故障注入。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P6-02/Fix-Core | Core Fix Writer（已停写） | `D:\code3\Narralume-worktrees\P6-02` / `codex/p6-02` / `8f4cf81` | `render-chunk-job.ts/.test.ts`、`database.test.ts` | 无记录孤儿 MP4 不复用；音频同一已验证字节快照；真实路径/Junction 边界；恢复/migration 约束回归 | render chunk 文件树 / ffmpeg 子进程 / SQLite 测试库 | `frozen_for_review` |
+| P6-02/Fix-Snapshot | Core Fix Writer | `D:\code3\Narralume-worktrees\P6-02` / `codex/p6-02` / `8f4cf81` | `render-chunk-job.ts/.test.ts` | write/sync/close 失败时 helper 内部清理当前私有快照并验证零残留 | render chunk staging 文件树 | `implementing` |
 
 ## Phase 依赖
 
@@ -67,7 +67,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P5-03 视觉段显式绑定 | `complete` | P5-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:8adc0ee594d962215b5b6e4f33a155b398068511`；首版失效 | `5e5b9148d35efef8cf5f23bd8db7b637e8378965`；首版 `a4b4d1a5668f73d3116c322121d51a41d3cd1af6` | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第二版 Ledger/revision；同系列 finding 关闭，无新 findings | 集成态全量三门/diff、server 83/83、web 6/6、真实本地 gate GREEN；264,688ms、10 段、PNG SHA-256 `1bcb326779bb61beed9241187c3724c061dbd7899b5c75a848be796cb2be7bec`、重启稳定、reject 阻断 | 冻结 `496673f`；集成 `f63f056` | Node SQLite 实验性警告非阻断；进入 P5-04 |
 | P5-04 联系表与真实审核 | `complete` | P5-03 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:951cbe94291aa14fb52cf4eee28096e68925e04d`；首版失效 | `b29e82eeefbe979276cb64a7461baa5de4742f1e`；首版 `6793f9d` | PASS；首轮已通过 Spec/Phase 5 范围+第二版两 P1 最小复审 | PASS；两个 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 89/89、web 6/6；真实 Gate 291,200ms、10 段、重启确定、reject/缺图/发布故障阻断 | 冻结 `d40b69c`；集成 `f63972c` | Phase 5 complete；Buffer 预分配风险非阻断，进入 P6-01 |
 | P6-01 唯一 9:16 模板 | `complete` | P5-04 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:f63972c092e76b3adc12f2ea79e36d945d980653:a73eaf03dcefcad0273a65e517f989709c198e4b`；首版失效 | `404a223634115c3e2bf708d2af15ac1c307fd5d6`；首版 `0c213d2` | PASS；首轮已通过范围+第二版 4 findings 最小复审 | PASS；首轮已通过范围+第二版 2 findings 最小复审 | 集成态全量三门/diff GREEN，server 92/92、web 6/6；P6 Gate 10,000ms/201,217 bytes、P4 Gate 220,960ms/3,102,618 bytes 均 GREEN | 冻结 `84a92e4`；集成 `8f4cf81` | 无新 findings；进入 P6-02 |
-| P6-02 分片与身份 | `frozen_for_review` | P6-01 | Core Fix Writer 已停写；Ledger 仅 Coordinator | 第二版 `git-index-tree-v1:8f4cf8171e7e759ff6b57efbc7f2b43df2db3469:58f156cdcd64c248dd5c7783f8664056e34d283b`；首版失效 | 待本控制提交 SHA；首版 `df963cc3aca6cdc9878fdfed387e079081bdc896` | 首轮已通过范围继续有效；待最小复审 | 首轮已通过范围继续有效；待最小复审 | 全量三门/diff GREEN，server 97/97、web 6/6；真实 Gate 与 14 项文件身份/恢复/migration 回归 GREEN | - | 只复审首轮 3 项 findings |
+| P6-02 分片与身份 | `implementing` | P6-01 | Core Fix Writer；Ledger 仅 Coordinator | 第二版 `git-index-tree-v1:8f4cf8171e7e759ff6b57efbc7f2b43df2db3469:58f156cdcd64c248dd5c7783f8664056e34d283b` 已失效；首版失效 | `dbccc37503c2128b10f9061aea5b9187ab788b9f`；首版 `df963cc3aca6cdc9878fdfed387e079081bdc896` | PASS；首轮两项 finding 全关闭 | FAIL；首轮范围主体关闭，仅 P2 快照写入失败泄漏 | 第二版全量三门/diff、server 97/97、web 6/6、真实 Gate 与 14 项定向回归 GREEN | - | 只修快照 helper 内部清理；Spec 不重复复审 |
 | P6-03 concat 与导出清单 | `queued` | P6-02 | - | - | - | - | - | - | - | - |
 | P6-04 真实渲染恢复门禁 | `queued` | P6-03 | - | - | - | - | - | - | - | - |
 | P7-01 真实样片 E2E | `queued` | P6-04 | - | - | - | - | - | - | - | - |
@@ -191,6 +191,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P6-02 candidate | `git-index-tree-v1:8f4cf8171e7e759ff6b57efbc7f2b43df2db3469:bac8a1273a399a0ec3f2d7f38dbc4a13b48a2d31`；恰好 8 个 staged 租约路径，零 unstaged/untracked。migration v12 完成态 `render_chunks`；确定性 DP 仅在视觉段/cue 边界切 60～180 秒；identity 绑定模板/编码、批准稿、时间轴、视觉段、候选状态 revision/fileHash、音频与局部 ASS，排除路径/时间戳/随机/机器版本/chunkIndex；规范内容寻址、已验证候选 Buffer 私有快照、P6-01 模板、checkpoint 内身份复核、损坏重做与跨 Job 复用。Coordinator 全量三门/diff GREEN，server 96/96、web 6/6；真实 System.Speech/FFmpeg Gate 220,541ms，分为 137,410ms 与 83,131ms 两片，重启全复用，局部 motion 变化只重渲目标片，非目标 path/hash/bytes/mtime 不变。 |
 | 2026-07-25 P6-02 首轮双 Review | Spec FAIL + Code Quality FAIL，均绑定 Ledger `df963cc3aca6cdc9878fdfed387e079081bdc896` 与首版 revision，Review 前后 tree 不变。P1：无 `render_chunks` 完成记录时，仅凭编码合同/时长把规范路径既有 MP4 认证并登记为当前 identity，无法证明内容属于当前输入；P1/P2：音频在 stat/hash 后仍按原路径交 FFmpeg，且词法路径检查不能阻止 Junction/链接越界，输出父目录也缺真实路径边界；P2：缺少错误孤儿 MP4、音频替换/链接、发布后 DB 失败/取消租约窗口与 migration v12 约束回归。首版失效；只开放上述文件身份、路径边界和故障回归最小修复，DP/身份字段/正常局部复用/真实 Gate 已通过范围继续有效。 |
 | 2026-07-25 P6-02 第二版 candidate | `git-index-tree-v1:8f4cf8171e7e759ff6b57efbc7f2b43df2db3469:58f156cdcd64c248dd5c7783f8664056e34d283b`；原 8 个 staged 路径，零 unstaged/untracked。无 DB 可信记录的既有 MP4 一律删除重渲；发布后取消未登记时下次也重渲。音频通过真实 dataRoot 边界、拒绝链接/Junction/硬链接、`O_NOFOLLOW`、同一 FileHandle 的 dev/ino/nlink/bytes 与 64 MiB 有界 hash 校验，写入 fsync 私有快照供 concat；输出目录逐级 realpath/lstat 后创建，阻断 Junction 越界。新增 v11→v12 保留数据、hash/时长/FK/级联/唯一约束，以及孤儿 MP4、发布后取消等回归。Coordinator 全量三门/diff GREEN，server 97/97、web 6/6；14 项定向回归与真实 220,541ms Gate GREEN。 |
+| 2026-07-25 P6-02 第二版最小复审 | Spec PASS，绑定 Ledger `dbccc37503c2128b10f9061aea5b9187ab788b9f` 与第二版 revision：孤儿 MP4、音频同一字节、路径边界、恢复/migration findings 全关闭。Code Quality FAIL：上述主体范围均关闭，但 P2 `writeSnapshot` 在 open 后 write/sync/close 失败时只关闭 handle，不在 helper 内删除当前路径；调用方尚未登记该路径，外层 finally 无法清理。只开放 helper 内部失败清理与零临时文件故障注入；Spec 与其他已通过范围不重复审查。 |
 
 ## 决策与剩余风险
 

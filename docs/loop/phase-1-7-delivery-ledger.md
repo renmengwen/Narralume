@@ -35,7 +35,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P6-02/Core | Core Writer | `D:\code3\Narralume-worktrees\P6-02` / `codex/p6-02` / `8f4cf81` | `apps/server/src/db.ts`、对应 migration 测试、`render-chunk*`、必要的 Job/Worker 接线测试 | migration、确定性 identity、1～3 分钟 cue/视觉段边界分片、checkpoint、原子发布、失效分片重做 | SQLite schema / render chunk 文件树 / ffmpeg 子进程 | `implementing` |
+| P6-02/Core | Core Writer（已停写） | `D:\code3\Narralume-worktrees\P6-02` / `codex/p6-02` / `8f4cf81` | `database.ts/.test.ts`、`asset-candidate-store.test.ts`、`render-chunk-job.ts/.test.ts`、`app.ts` | migration、确定性 identity、1～3 分钟 cue/视觉段边界分片、checkpoint、原子发布、失效分片重做 | SQLite schema / render chunk 文件树 / ffmpeg 子进程 | `implemented` |
+| P6-02/Gate | Gate Writer | 同上 | `apps/server/src/gates/p6-render-chunks-gate.ts`、`apps/server/package.json` | 真实 3～5 分钟分片、重启复用、局部失效重做证据 | P6-02 gate data root / ffmpeg 子进程 | `implementing` |
 
 ## Phase 依赖
 

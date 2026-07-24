@@ -16,9 +16,11 @@
 
 Task 状态：`queued → leased → implementing → frozen_for_review → verified → committed → complete`；Review 失败进入 `changes_requested → implementing`。可进入 `blocked/cancelled`。只有 Coordinator 更新状态。
 
-每个 Task 必填：依赖、Owner/写租约、candidate revision/tree、冻结控制提交、Spec Review、Code Quality Review、验证证据、业务提交 SHA、剩余风险和恢复动作。未产生的字段使用 `-`，不得用推测填充。控制提交自己的 SHA 由 Git 历史定位，不写入自身，避免自引用。
+每个 Task 必填：依赖、Owner/写租约、candidate revision/tree、冻结控制提交、适用的 Review Verdict、验证证据、业务提交 SHA、剩余风险和恢复动作。高风险 Task 填独立 Spec/Code Quality Review；普通 Task 的两个 Review 列共同引用同一次独立综合 Review；低风险 Task 标记 Coordinator 自审。未产生的字段使用 `-`，不得用推测填充。控制提交自己的 SHA 由 Git 历史定位，不写入自身，避免自引用。
 
 普通业务 Task 的写租约必须排除本 Ledger；Coordinator 在 `dev` 串行完成 Ledger 冻结控制提交，Reviewer Verdict 必须绑定 `reviewed_ledger_commit` 和 `reviewed_revision`。`CTRL-01` 首次创建 Ledger 时使用一次性 bootstrap：先提交完整控制面，将不可变 commit/tree 作为 candidate；双 Review 后由下一条控制提交登记结果。之后不得再次使用该例外。
+
+2026-07-24 用户授权风险分级 Review：高风险双 Review、普通任务一次独立综合 Review、低风险 Coordinator 自审；Phase 结束保留独立阶段门禁 Review。P1-04 属于普通查询/UI，使用一次独立综合 Review。
 
 ## 当前恢复入口
 

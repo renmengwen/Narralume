@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`4fa622b75079491ecd15ce33ff7cc616be21ab49`（P4-02 集成业务提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P4-02 Worker worktree clean，临时 node_modules Junction 已安全移除。
-- 最近验证：2026-07-25 P4-02 集成态；全量三门/diff GREEN，server 60/60、web 6/6；真实 System.Speech/ffprobe 20,506ms、SRT/ASS、重启与复用 gate GREEN。
+- 当前 HEAD：`198fc5e4922e04313c3862635ac137dcc5231c34`（外部模型真实测试授权控制提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P4-03 Worker worktree 有 6 个允许路径的实现改动，尚未 stage/freeze/Review/提交；`data/gates/p4-placeholder` 保留真实门禁产物，`node_modules` 为待 Review 完成后安全移除的 Junction。
+- 最近验证：2026-07-25 P4-03 Worker 实现态；全量 `typecheck/test/build` 与 diff GREEN，server 61/61、web 6/6；P4-01 真实 System.Speech gate、P4-02 20,506ms 时间轴 gate、P4-03 220,960ms/1080×1920/H.264+AAC/重启复用 gate 均 GREEN。
 - 当前 Task：`P4-03`
-- 唯一下一动作：从本控制提交建立 `codex/p4-03`，复用 P4-02 有序 WAV 段、真实时长与 ASS，以系统 ffmpeg 产出首版 9:16、3～5 分钟有声字幕占位视频；不扩 UI/provider。
+- 唯一下一动作：只读复核 P4-03 六个业务路径后全部 stage，运行 cached diff check 并冻结 candidate tree；随后由一个独立 Reviewer 同时覆盖 P4-03 Spec、Code Quality 与 Phase 4 阶段门禁。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P4-03 | Coordinator | `D:\code3\Narralume-worktrees\P4-03` / `codex/p4-03` / 本控制提交 | P4-03 占位视频 handler/tests/gate 及最小登记；排除本 Ledger | 有序 WAV、ASS、9:16 视频、3～5 分钟真实验收 | ffmpeg/ffprobe、视频文件、Worker Git index | `leased` |
+| P4-03 | Coordinator | `D:\code3\Narralume-worktrees\P4-03` / `codex/p4-03` / `dd453136a131948fdb6660377c4da3dee4835137` | `apps/server/package.json`、`apps/server/src/app.ts`、`apps/server/src/script-approval-store.ts`、`apps/server/src/placeholder-video-job.ts`、`apps/server/src/placeholder-video-job.test.ts`、`apps/server/src/gates/p4-placeholder-video-gate.ts`；排除本 Ledger | 有序 WAV、ASS、9:16 视频、3～5 分钟真实验收 | ffmpeg/ffprobe、视频文件、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -61,7 +61,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P3-04 真实分集验收 | `complete` | P3-03 | Coordinator / 已释放 | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8` | `8414457` | PASS，绑定 `84144575adb0e6e24862d47dc0c220c48e3c45cb`/冻结 revision，同一次 Phase 3 综合 Review | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 56/56、web 6/6；真实批准稿 1,139 字/284.75 秒估算、8 段证据、最终 approved revision 3、重启精确放行 | 冻结 `516cce9`；集成 `bbd7953` | 估算非真实音频时长；Phase 3 complete，进入 P4-01 |
 | P4-01 TTS provider 边界 | `complete` | P3-04 | Coordinator / 已释放 | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850` | `bb6b72c` | PASS，绑定 `bb6b72c065e52367ce722e6f60c7139bb65efb01`/第二版 revision | PASS，绑定同一 Ledger/revision | 集成态全量三门/diff GREEN；server 57/57、web 6/6；UTF-8 code units、已持有临时 WAV 后取消零泄漏、真实中文 WAV 221,542 bytes/5.022585 秒 | 冻结 `240e133`；集成 `284cfbb` | Windows System.Speech 单 provider；进入 P4-02 |
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
-| P4-03 占位视频 | `leased` | P4-02 | Coordinator / 写租约见上 | - | - | - | - | - | - | 复用 P4-02，不提前进入 Phase 5 资产系统 |
+| P4-03 占位视频 | `implementing` | P4-02 | Coordinator / 写租约见上 | - | - | - | - | `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；P4-01/P4-02 gate GREEN；真实占位视频 gate：批准包装稿 870 非空白字符、timeline `4b4aa7125272a7a414cd2d9e5332aa2042d1f903b1c7571bd84067e36cee58b5`、220,960ms、3,102,618 bytes、1080×1920、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启内容寻址复用 | - | 真实证据当前在 Worker 忽略目录；冻结后执行一次独立综合 Review，集成后在主仓库重跑并保留最终产物 |
 | P5-01 资产合同 | `queued` | P4-03 | - | - | - | - | - | - | - | - |
 | P5-02 候选图与来源 | `queued` | P5-01 | - | - | - | - | - | - | - | - |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |

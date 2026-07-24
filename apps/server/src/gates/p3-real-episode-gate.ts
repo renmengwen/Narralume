@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -154,7 +154,9 @@ async function downloadSource(path: string) {
 }
 
 const root = await mkdtemp(join(tmpdir(), "narralume-p3-real-"));
-const dataRoot = join(root, "data");
+const dataRoot = process.env.NARRALUME_P3_GATE_DATA_ROOT
+  ? resolve(process.env.NARRALUME_P3_GATE_DATA_ROOT)
+  : join(root, "data");
 const sourcePath = process.env.NARRALUME_LONG_TEXT_PATH ?? join(root, "pg24264.txt");
 let app: ReturnType<typeof buildApp> | undefined;
 
@@ -453,6 +455,12 @@ try {
     production_side_effects: productionSideEffects,
     approved_script_characters: approvedNarrationCharacters,
     estimated_narration_seconds: estimatedNarrationSeconds,
+    data_root: dataRoot,
+    book_id: bookId,
+    series_id: seriesId,
+    episode_id: episode.id,
+    approved_script_version_id: packagedV1.id,
+    approved_script_content_hash: packagedV1.contentHash,
   }, null, 2)}\n`);
 } finally {
   if (app) await app.close();

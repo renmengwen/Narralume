@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`5a905ee`（本冻结控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`9e23048`（本次重新冻结控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P3-02 candidate；全量三门/diff GREEN，server 53 项、web 6 项；真实《红楼梦》单集及三版本稿件 gate GREEN。
+- 最近验证：2026-07-24 P3-02 第二版 candidate；全量三门/diff GREEN，server 54 项、web 6 项；双连接幂等回归与真实三版本稿件 gate GREEN。
 - 当前 Task：`P3-02`
-- 唯一下一动作：修复稿件幂等查询位于写锁之外导致的双连接重复版本，补最小回归后重新冻结；不扩展其他边界。
+- 唯一下一动作：对第二版冻结 revision 重新执行独立 Spec Review 与 Code Quality Review；不增加其他审查。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P3-02 | Coordinator | `D:\code3\Narralume-worktrees\P3-02` / `codex/p3-02` / `b83f774` | `src/database.ts`、`database.test.ts`、`script-version-store.ts`、`script-version-store.test.ts`、`app.ts`、`app.test.ts`、`gates/p3-real-episode-gate.ts`；排除本 Ledger | 忠实稿/包装稿不可变版本、最小 API、真实证据稿件门禁 | SQLite migration、稿件版本写锁、Worker Git index | `changes_requested` |
+| P3-02 | Coordinator（已停止写入，待第二轮双 Review） | `D:\code3\Narralume-worktrees\P3-02` / `codex/p3-02` / `b83f774` | `src/database.ts`、`database.test.ts`、`script-version-store.ts`、`script-version-store.test.ts`、`app.ts`、`app.test.ts`、`gates/p3-real-episode-gate.ts`；排除本 Ledger | 忠实稿/包装稿不可变版本、最小 API、真实证据稿件门禁 | SQLite migration、稿件版本写锁、Worker Git index | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -56,7 +56,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P2-03 章节事件合同 | `complete` | P2-02 | Coordinator / 已释放 | `git-index-tree-v1:fbc1d652d3170a6d1c142b6c01ac8c4db955e913:03911512550f2dbe8d414412588aea3b144ea1e6` | `a1d7417` | PASS，绑定 `a1d7417`/冻结 revision | PASS，绑定 `a1d7417`/冻结 revision | 集成态全量三门/diff GREEN；server 42、web 6；P2 恢复 gate、真实 124 章门禁 GREEN | `9d75144` | 极端短证据性能不阻塞首版；未来 handler 需校验 prepared chapterId |
 | P2-04 真实章节任务门禁 | `complete` | P2-03 | Coordinator / 已释放 | `git-index-tree-v1:9d75144a73bdb12a8a4d573c20e9f9672fd1cdf4:4b59c6d54aa8889655cfe0fe71d5c5934130482a` | `14c31c3` | PASS，绑定 `14c31c3`/冻结 revision | PASS，绑定同一次 Phase 2 综合 Review | 集成态全量三门/diff GREEN；server 44、web 6；P2 恢复 gate GREEN；真实 3 章 gate：硬退出 91、attempts=2、processed=1/reused=2、取消 checkpoint=0、重启六类事件 6 条 | `86ce213` | 人工 PUT 后旧 checkpoint 可能命中；Node SQLite 实验性警告；Phase 2 complete |
 | P3-01 故事弧与分集证据 | `complete` | P2-04 | Coordinator / 已释放 | `git-index-tree-v1:86ce213515c4b2d598651a5feb88200cd22f4672:ba09275959aca1349712f0dce86670355ba38144` | `6341496` | PASS，绑定 `6341496`/冻结 revision | PASS，绑定 `6341496`/冻结 revision | 集成态全量三门/diff GREEN；server 49、web 6；真实 gate：3 章、6 来源事件、240 秒单集、6 证据快照、重启查询与重复 PUT 幂等 | `b83f774` | Node SQLite 实验性警告；进入 P3-02 |
-| P3-02 稿件版本 | `changes_requested` | P3-01 | Coordinator / `codex/p3-02` 写租约重新开放 | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:c1c6c7cc34db9ab7ccd11d8c54fc20fcb2af7355`（失效） | `c4f7dae` | PASS，旧 revision 失效 | FAIL：双连接相同内容可生成两个版本 | 旧 revision 全量三门与真实 gate GREEN；独立双连接探针复现 v1/v2 同 hash 不同 ID | - | 将幂等复查移入 `BEGIN IMMEDIATE`，补最小双连接回归后重新冻结 |
+| P3-02 稿件版本 | `frozen_for_review` | P3-01 | Coordinator / 已停止写入，待第二轮双 Review | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5` | 本重新冻结控制提交 | 待第二轮独立 Review | 待第二轮独立 Review | 全量三门/diff GREEN；server 54、web 6；双连接并发相同内容返回同 ID/v1 且库内仅 1 版本；真实三版本 gate GREEN | - | 第二轮 Review 复验锁内幂等与既有合同，不扩展其他边界 |
 | P3-03 人工批准闸门 | `queued` | P3-02 | - | - | - | - | - | - | - | - |
 | P3-04 真实分集验收 | `queued` | P3-03 | - | - | - | - | - | - | - | - |
 | P4-01 TTS provider 边界 | `queued` | P3-04 | - | - | - | - | - | - | - | 真实 provider 若需密钥时再触发用户阻塞 |
@@ -144,6 +144,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P3-01 完成 | 独立 Spec Review 与 Code Quality Review 均 PASS，绑定 Ledger `6341496` 与冻结 revision；两者独立复算 8 个 staged 路径并复跑全量三门和真实单集 gate；冻结业务提交 `af2ee12`，集成 `dev` 为 `b83f774`；集成态全量三门/diff、server 49、web 6、真实单集 gate GREEN；释放写租约并进入 P3-02。 |
 | 2026-07-24 P3-02 candidate | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:c1c6c7cc34db9ab7ccd11d8c54fc20fcb2af7355`；migration v6 新增稿件版本与来源快照两表；忠实稿/包装稿仅追加不可变版本，规范 JSON+SHA-256，同内容幂等、变化内容按 kind 递增；包装稿必须引用同分集忠实稿且来源不得超出父稿；每段必须引用 episode 来源并复制快照；POST/GET 最小 API。真实《红楼梦》分集建立 faithful v1、packaged v1、faithful v2，重复 POST 幂等，重启后旧内容/hash/父链不变且逐段来源 SHA-256 通过。全量三门、server 53、web 6、真实 gate GREEN。 |
 | 2026-07-24 P3-02 首轮 Review | Spec PASS；Code Quality FAIL，均绑定 Ledger `c4f7dae` 与首版 revision。双连接可在写锁前同时漏过幂等查询，随后分别写入同 hash 的 v1/v2，导致稿件身份分裂；首版 revision 失效，只修复锁内复查并补双连接回归。 |
+| 2026-07-24 P3-02 第二版 candidate | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5`；幂等查找移入 `BEGIN IMMEDIATE` 写锁，SQLite 连接设置 5 秒 busy timeout；新增两个独立子进程同时提交相同忠实稿的回归，二者返回同 ID、同 v1，数据库仅 1 行。其余稿件合同与真实门禁保持不变；全量三门、server 54、web 6、真实 gate GREEN。 |
 
 ## 决策与剩余风险
 

@@ -24,6 +24,7 @@
     "gate:p6-final-video": "node --no-warnings --import tsx src/gates/p6-final-video-gate.ts",
     "gate:p6-render-recovery": "node --no-warnings --import tsx src/gates/p6-render-recovery-gate.ts",
     "gate:p7-real-sample": "node --no-warnings --import tsx src/gates/p7-real-sample-gate.ts",
+    "gate:p7-project-recovery": "node --no-warnings --import tsx src/gates/p7-project-recovery-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

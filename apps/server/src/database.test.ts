@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 8);
+    assert.equal(migration?.version, 9);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (9)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (10)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -138,6 +138,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events");
     current.database.exec("DROP TABLE script_version_sources");
@@ -161,7 +162,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 8);
+    assert.equal(migration?.version, 9);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
@@ -174,6 +175,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v5-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 6").run();
@@ -197,7 +199,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      8,
+      9,
     );
     upgraded.database.prepare(
       `INSERT INTO script_versions (
@@ -229,8 +231,9 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v7-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
-    current.database.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    current.database.prepare("DELETE FROM schema_migrations WHERE version >= 8").run();
     current.database.prepare(
       `INSERT INTO books (
          id, title, original_file_path, original_file_hash, encoding, import_status
@@ -256,7 +259,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      8,
+      9,
     );
     const audioTables = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'audio_%' ORDER BY name")
@@ -332,6 +335,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v4-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
     current.database.exec("DROP TABLE episode_sources; DROP TABLE episodes; DROP TABLE series_projects");
@@ -346,7 +350,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      8,
+      9,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
@@ -374,6 +378,132 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM episodes").get()?.count, 0);
     assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM episode_sources").get()?.count, 0);
     upgraded.close();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("既有 migration v8 数据库可升级资产合同并保持关系约束", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v8-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE asset_aliases; DROP TABLE assets");
+    current.database.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
+    current.database.prepare(
+      `INSERT INTO books (
+         id, title, original_file_path, original_file_hash, encoding, import_status
+       ) VALUES ('book_assets', '资产测试', 'books/book_assets/source.txt', ?, 'UTF-8', 'ready')`,
+    ).run("6".repeat(64));
+    current.database.prepare(
+      `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+       VALUES ('series_assets', 'book_assets', '系列一', 1, 1),
+              ('series_other', 'book_assets', '系列二', 1, 1)`,
+    ).run();
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    assert.equal(
+      upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
+      9,
+    );
+    const tables = upgraded.database.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('assets', 'asset_aliases') ORDER BY name",
+    ).all() as Array<{ name: string }>;
+    assert.deepEqual(tables.map((table) => table.name), ["asset_aliases", "assets"]);
+
+    const insertAsset = upgraded.database.prepare(
+      `INSERT INTO assets (
+         id, series_project_id, asset_type, asset_role, canonical_name, normalized_name,
+         parent_asset_id, state_label, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    );
+    insertAsset.run(
+      "asset_master", "series_assets", "character", "master", "林黛玉", "林黛玉", null, null,
+    );
+    insertAsset.run(
+      "asset_state", "series_assets", "character", "state", "林黛玉·病中", "林黛玉·病中",
+      "asset_master", "病中",
+    );
+
+    for (const invalid of [
+      ["bad_type", "series_assets", "sound", "master", "声音", "声音", null, null],
+      ["bad_master", "series_assets", "character", "master", "错误主资产", "错误主资产", "asset_master", null],
+      ["bad_state", "series_assets", "character", "state", "错误状态", "错误状态", null, "病中"],
+      ["bad_self", "series_assets", "character", "state", "自指", "自指", "bad_self", "自指"],
+      ["bad_series", "series_other", "character", "state", "跨系列", "跨系列", "asset_master", "病中"],
+      ["bad_type_parent", "series_assets", "scene", "state", "跨类型", "跨类型", "asset_master", "夜景"],
+    ] as const) {
+      assert.throws(
+        () => insertAsset.run(...invalid),
+        /(CHECK|FOREIGN KEY) constraint failed|state asset parent must be master/,
+      );
+    }
+    assert.throws(
+      () => insertAsset.run(
+        "bad_nested_state", "series_assets", "character", "state", "状态套状态", "状态套状态",
+        "asset_state", "二级状态",
+      ),
+      /state asset parent must be master/,
+    );
+    insertAsset.run(
+      "asset_master_2", "series_assets", "character", "master", "薛宝钗", "薛宝钗", null, null,
+    );
+    assert.throws(
+      () => upgraded.database.prepare(
+        `UPDATE assets
+         SET asset_role = 'state', parent_asset_id = 'asset_state', state_label = '错误嵌套'
+         WHERE id = 'asset_master_2'`,
+      ).run(),
+      /state asset parent must be master/,
+    );
+    assert.throws(
+      () => upgraded.database.prepare(
+        `UPDATE assets
+         SET asset_role = 'state', parent_asset_id = 'asset_master_2', state_label = '错误降级'
+         WHERE id = 'asset_master'`,
+      ).run(),
+      /master asset with state children cannot change hierarchy/,
+    );
+    upgraded.database.prepare(
+      "UPDATE assets SET description = '允许更新描述' WHERE id = 'asset_master'",
+    ).run();
+    assert.equal(
+      upgraded.database.prepare("SELECT description FROM assets WHERE id = 'asset_master'").get()?.description,
+      "允许更新描述",
+    );
+
+    const insertAlias = upgraded.database.prepare(
+      `INSERT INTO asset_aliases (
+         series_project_id, asset_id, alias, normalized_alias, is_primary, created_at
+       ) VALUES (?, ?, ?, ?, ?, 1)`,
+    );
+    insertAlias.run("series_assets", "asset_master", "林黛玉", "林黛玉", 1);
+    insertAlias.run("series_assets", "asset_master", "黛玉", "黛玉", 0);
+    assert.throws(
+      () => insertAlias.run("series_assets", "asset_state", "黛玉", "黛玉", 0),
+      /UNIQUE constraint failed/,
+    );
+    assert.throws(
+      () => insertAlias.run("series_assets", "asset_master", "林姑娘", "林姑娘", 1),
+      /UNIQUE constraint failed/,
+    );
+    assert.throws(
+      () => insertAlias.run("series_assets", "asset_master", "无效", "无效", 2),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => upgraded.database.prepare("DELETE FROM assets WHERE id = 'asset_master'").run(),
+      /FOREIGN KEY constraint failed/,
+    );
+
+    upgraded.close();
+    const reopened = openDatabase(dataRoot);
+    assert.equal(reopened.database.prepare("SELECT COUNT(*) AS count FROM assets").get()?.count, 3);
+    assert.equal(reopened.database.prepare("SELECT COUNT(*) AS count FROM asset_aliases").get()?.count, 2);
+    reopened.database.prepare("DELETE FROM series_projects WHERE id = 'series_assets'").run();
+    assert.equal(reopened.database.prepare("SELECT COUNT(*) AS count FROM assets").get()?.count, 0);
+    assert.equal(reopened.database.prepare("SELECT COUNT(*) AS count FROM asset_aliases").get()?.count, 0);
+    reopened.close();
   } finally {
     await rm(dataRoot, { recursive: true, force: true });
   }

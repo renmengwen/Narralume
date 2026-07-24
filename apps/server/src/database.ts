@@ -247,8 +247,108 @@ const MIGRATION_8 = `
     ON subtitle_cues(episode_id, script_version_id, timeline_hash, cue_index);
 `;
 
+const MIGRATION_9 = `
+  CREATE TABLE assets (
+    id TEXT PRIMARY KEY,
+    series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+    asset_type TEXT NOT NULL CHECK (asset_type IN ('character', 'scene', 'prop')),
+    asset_role TEXT NOT NULL CHECK (asset_role IN ('master', 'state')),
+    canonical_name TEXT NOT NULL CHECK (length(canonical_name) > 0),
+    normalized_name TEXT NOT NULL CHECK (length(normalized_name) > 0),
+    parent_asset_id TEXT,
+    state_label TEXT,
+    description TEXT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    UNIQUE (series_project_id, id),
+    UNIQUE (series_project_id, asset_type, id),
+    CHECK (
+      (asset_role = 'master' AND parent_asset_id IS NULL AND state_label IS NULL)
+      OR
+      (asset_role = 'state' AND parent_asset_id IS NOT NULL AND length(state_label) > 0)
+    ),
+    CHECK (parent_asset_id IS NULL OR parent_asset_id <> id),
+    FOREIGN KEY (series_project_id, asset_type, parent_asset_id)
+      REFERENCES assets(series_project_id, asset_type, id)
+      DEFERRABLE INITIALLY DEFERRED
+  ) STRICT;
+
+  CREATE INDEX assets_series_type_role
+    ON assets(series_project_id, asset_type, asset_role, created_at, id);
+
+  CREATE TRIGGER assets_state_parent_is_master
+  BEFORE INSERT ON assets
+  WHEN NEW.asset_role = 'state'
+  BEGIN
+    SELECT RAISE(ABORT, 'state asset parent must be master')
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM assets AS parent
+      WHERE parent.id = NEW.parent_asset_id
+        AND parent.series_project_id = NEW.series_project_id
+        AND parent.asset_type = NEW.asset_type
+        AND parent.asset_role = 'master'
+    );
+  END;
+
+  CREATE TRIGGER assets_state_parent_is_master_on_update
+  BEFORE UPDATE ON assets
+  WHEN NEW.asset_role = 'state'
+  BEGIN
+    SELECT RAISE(ABORT, 'state asset parent must be master')
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM assets AS parent
+      WHERE parent.id = NEW.parent_asset_id
+        AND parent.series_project_id = NEW.series_project_id
+        AND parent.asset_type = NEW.asset_type
+        AND parent.asset_role = 'master'
+    );
+  END;
+
+  CREATE TRIGGER assets_master_with_states_keeps_identity
+  BEFORE UPDATE ON assets
+  WHEN OLD.asset_role = 'master'
+    AND (
+      NEW.asset_role <> 'master'
+      OR NEW.id <> OLD.id
+      OR NEW.series_project_id <> OLD.series_project_id
+      OR NEW.asset_type <> OLD.asset_type
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM assets AS child
+      WHERE child.parent_asset_id = OLD.id
+        AND child.series_project_id = OLD.series_project_id
+        AND child.asset_type = OLD.asset_type
+        AND child.asset_role = 'state'
+    )
+  BEGIN
+    SELECT RAISE(ABORT, 'master asset with state children cannot change hierarchy');
+  END;
+
+  CREATE TABLE asset_aliases (
+    series_project_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    alias TEXT NOT NULL CHECK (length(alias) > 0),
+    normalized_alias TEXT NOT NULL CHECK (length(normalized_alias) > 0),
+    is_primary INTEGER NOT NULL CHECK (is_primary IN (0, 1)),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (series_project_id, normalized_alias),
+    FOREIGN KEY (series_project_id, asset_id)
+      REFERENCES assets(series_project_id, id) ON DELETE CASCADE
+  ) STRICT;
+
+  CREATE INDEX asset_aliases_asset_order
+    ON asset_aliases(series_project_id, asset_id, is_primary DESC, normalized_alias);
+
+  CREATE UNIQUE INDEX asset_aliases_one_primary_per_asset
+    ON asset_aliases(series_project_id, asset_id)
+    WHERE is_primary = 1;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
+  MIGRATION_9,
 ];
 
 export interface NarralumeDatabase {

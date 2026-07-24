@@ -356,6 +356,87 @@ test("故事弧分集 API 保存服务端证据快照并可重启查询", async 
   }
 });
 
+test("资产 API 宽链路覆盖主状态资产、别名、幂等与中文错误", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-assets-"));
+  const app = buildApp({ dataRoot, logger: false });
+  try {
+    const imported = await app.inject({
+      method: "POST",
+      url: "/api/books/import",
+      headers: { "content-type": "text/plain" },
+      payload: Buffer.from("第一章\n林黛玉初入荣国府。", "utf8"),
+    });
+    const bookId = imported.json().book.id as string;
+    const series = await app.inject({
+      method: "POST", url: `/api/books/${bookId}/series`, payload: { title: "资产 API 测试" },
+    });
+    const seriesId = series.json().series.id as string;
+    const master = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/assets`,
+      payload: { type: "character", name: "林黛玉" },
+    });
+    assert.equal(master.statusCode, 201);
+    assert.equal(master.json().message, "资产已保存");
+    const assetId = master.json().asset.id as string;
+    const duplicate = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/assets`,
+      payload: { type: "character", name: " 林黛玉 " },
+    });
+    assert.equal(duplicate.statusCode, 201);
+    assert.equal(duplicate.json().asset.id, assetId);
+    const state = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/assets`,
+      payload: { type: "character", name: "林黛玉·病中", parentAssetId: assetId, stateLabel: "病中" },
+    });
+    assert.equal(state.statusCode, 201);
+    assert.equal(state.json().asset.parentAssetId, assetId);
+    const aliased = await app.inject({
+      method: "POST", url: `/api/assets/${assetId}/aliases`, payload: { aliases: ["黛玉", "林姑娘"] },
+    });
+    assert.equal(aliased.statusCode, 200);
+    assert.equal(aliased.json().message, "资产别名已保存");
+    const listed = await app.inject({ method: "GET", url: `/api/series/${seriesId}/assets` });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.json().items.length, 1);
+    assert.equal(listed.json().items[0].states[0].id, state.json().asset.id);
+
+    const invalid = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/assets`, payload: { type: "vehicle", name: "马车" },
+    });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.json().message, "资产类型必须是人物、场景或道具");
+    const missingSeries = await app.inject({
+      method: "POST", url: "/api/series/series_missing/assets", payload: { type: "scene", name: "贾府" },
+    });
+    assert.equal(missingSeries.statusCode, 404);
+    assert.equal(missingSeries.json().message, "系列项目不存在");
+    const missingAsset = await app.inject({
+      method: "POST", url: "/api/assets/asset_missing/aliases", payload: { aliases: ["未知"] },
+    });
+    assert.equal(missingAsset.statusCode, 404);
+    assert.equal(missingAsset.json().message, "资产不存在");
+    const scene = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/assets`, payload: { type: "scene", name: "荣国府" },
+    });
+    const conflict = await app.inject({
+      method: "POST", url: `/api/assets/${scene.json().asset.id}/aliases`, payload: { aliases: ["黛玉"] },
+    });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.json().message, "资产名称或别名已被其他资产使用");
+    const illegalParent = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/assets`,
+      payload: {
+        type: "character", name: "非法下级", parentAssetId: state.json().asset.id, stateLabel: "非法",
+      },
+    });
+    assert.equal(illegalParent.statusCode, 409);
+    assert.equal(illegalParent.json().message, "状态资产不能继续创建下级状态");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("非法 Worker 配置失败时关闭 SQLite", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-invalid-worker-"));
   try {

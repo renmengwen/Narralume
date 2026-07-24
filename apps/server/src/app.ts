@@ -2,6 +2,13 @@ import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 
+import {
+  addAssetAliases,
+  AssetStoreError,
+  createAsset,
+  listAssets,
+  type AssetInput,
+} from "./asset-store.js";
 import { BookImportError, importBookText } from "./book-import.js";
 import { BookLibraryError, listBooks, listChapters, readChapterText } from "./book-library.js";
 import {
@@ -62,6 +69,14 @@ interface ReplaceChapterEventsBody {
 }
 
 interface CreateSeriesBody { title?: unknown }
+interface CreateAssetBody {
+  type?: unknown;
+  name?: unknown;
+  description?: unknown;
+  parentAssetId?: unknown;
+  stateLabel?: unknown;
+}
+interface AddAssetAliasesBody { aliases?: unknown }
 interface ReplaceEpisodeBody {
   title?: unknown;
   storyArc?: unknown;
@@ -226,6 +241,57 @@ export function buildApp(options: BuildAppOptions = {}) {
       return { ok: true, items: listSeriesProjects(connection.database, request.params.bookId) };
     } catch (error) {
       if (error instanceof EpisodeStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { seriesId: string }; Body: CreateAssetBody }>(
+    "/api/series/:seriesId/assets",
+    async (request, reply) => {
+      try {
+        const asset = createAsset(connection.database, request.params.seriesId, {
+          type: request.body?.type,
+          name: request.body?.name,
+          description: request.body?.description,
+          parentAssetId: request.body?.parentAssetId,
+          stateLabel: request.body?.stateLabel,
+        } as AssetInput);
+        return reply.code(201).send({ ok: true, message: "资产已保存", asset });
+      } catch (error) {
+        if (error instanceof AssetStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { assetId: string }; Body: AddAssetAliasesBody }>(
+    "/api/assets/:assetId/aliases",
+    async (request, reply) => {
+      try {
+        const asset = addAssetAliases(
+          connection.database,
+          request.params.assetId,
+          request.body?.aliases as string[],
+        );
+        return { ok: true, message: "资产别名已保存", asset };
+      } catch (error) {
+        if (error instanceof AssetStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { seriesId: string } }>("/api/series/:seriesId/assets", async (request, reply) => {
+    try {
+      return { ok: true, items: listAssets(connection.database, request.params.seriesId) };
+    } catch (error) {
+      if (error instanceof AssetStoreError) {
         return reply.code(error.statusCode).send({ ok: false, message: error.message });
       }
       throw error;

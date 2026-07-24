@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 export type ScriptApprovalAction = "approve" | "withdraw";
-export type ProductionPurpose = "tts" | "image";
+export type ProductionPurpose = "tts" | "image" | "video";
 
 export interface ScriptApprovalInput {
   action: ScriptApprovalAction;
@@ -118,7 +118,7 @@ export function requireApprovedScriptForProduction(
   episodeId: string,
   purpose: ProductionPurpose,
 ) {
-  if (purpose !== "tts" && purpose !== "image") {
+  if (purpose !== "tts" && purpose !== "image" && purpose !== "video") {
     throw new ScriptApprovalStoreError(400, "生产类型无效");
   }
   const row = database.prepare(
@@ -133,7 +133,7 @@ export function requireApprovedScriptForProduction(
     content_hash: string;
   } | undefined;
   if (!row || row.action !== "approve") {
-    const label = purpose === "tts" ? "语音" : "图片";
+    const label = purpose === "tts" ? "语音" : purpose === "image" ? "图片" : "视频";
     throw new ScriptApprovalStoreError(409, `稿件未人工批准，不能开始${label}生产`);
   }
   return {

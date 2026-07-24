@@ -39,6 +39,7 @@ import {
   type ScriptApprovalInput,
 } from "./script-approval-store.js";
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
+import { createPlaceholderVideoJobHandler, PLACEHOLDER_VIDEO_JOB_TYPE } from "./placeholder-video-job.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
@@ -130,6 +131,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
+    [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     ...(options.jobHandlers ?? {}),
   };
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
@@ -385,6 +387,23 @@ export function buildApp(options: BuildAppOptions = {}) {
       }
       try {
         requireApprovedScriptForProduction(connection.database, episodeId, "tts");
+      } catch (error) {
+        if (error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    }
+    if (type === PLACEHOLDER_VIDEO_JOB_TYPE) {
+      const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+        ? body.payload as { episodeId?: unknown; timelineHash?: unknown }
+        : {};
+      if (typeof payload.episodeId !== "string" || !payload.episodeId ||
+          typeof payload.timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(payload.timelineHash)) {
+        return reply.code(400).send({ ok: false, message: "占位视频任务缺少有效分集 ID 或时间轴哈希" });
+      }
+      try {
+        requireApprovedScriptForProduction(connection.database, payload.episodeId, "video");
       } catch (error) {
         if (error instanceof ScriptApprovalStoreError) {
           return reply.code(error.statusCode).send({ ok: false, message: error.message });

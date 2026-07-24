@@ -14,6 +14,7 @@
     "gate:p3-real-episode": "tsx src/gates/p3-real-episode-gate.ts",
     "gate:p4-system-tts": "tsx src/gates/p4-system-tts-gate.ts",
     "gate:p4-tts-timeline": "tsx src/gates/p4-tts-timeline-gate.ts",
+    "gate:p4-placeholder-video": "tsx src/gates/p4-placeholder-video-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

@@ -8,6 +8,12 @@
       content="Narralume 本地优先的长篇故事视觉说书生产平台"
     />
     <title>Narralume · 叙影</title>
+    <script>
+      const savedTheme = localStorage.getItem("narralume-theme");
+      document.documentElement.dataset.theme = savedTheme === "light" || savedTheme === "dark"
+        ? savedTheme
+        : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,55 @@
+{
+  "generated": "2026-07-24T12:02:38.3020358Z",
+  "sections": [
+    {
+      "id": "mockups",
+      "label": "Mockups",
+      "groups": [
+        {
+          "slug": "narralume-library",
+          "files": [
+            {
+              "label": "workspace.html",
+              "path": "mockups/narralume-library/workspace.html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "design-systems",
+      "label": "Design Systems",
+      "groups": [
+        {
+          "slug": "narralume-product",
+          "files": [
+            {
+              "label": "README.md",
+              "path": "design-systems/narralume-product/README.md"
+            },
+            {
+              "label": "SKILL.md",
+              "path": "design-systems/narralume-product/SKILL.md"
+            },
+            {
+              "label": "style-notes.md",
+              "path": "design-systems/narralume-product/brand/style-notes.md"
+            },
+            {
+              "label": "voice-and-tone.md",
+              "path": "design-systems/narralume-product/brand/voice-and-tone.md"
+            },
+            {
+              "label": "colors_and_type.css",
+              "path": "design-systems/narralume-product/tokens/colors_and_type.css"
+            },
+            {
+              "label": "ui-kit-narralume/index.html",
+              "path": "design-systems/narralume-product/ui-kit-narralume/index.html"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import type { Readable } from "node:stream";
 
 import { BookImportError, importBookText } from "./book-import.js";
+import { BookLibraryError, listBooks, listChapters, readChapterText } from "./book-library.js";
 import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
@@ -19,6 +20,14 @@ function decodeHeader(value: string | string[] | undefined, fallback = "") {
   } catch {
     throw new BookImportError(400, "请求头编码无效");
   }
+}
+
+function pagination(value: unknown, fallback: number, minimum: number, maximum: number) {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new BookLibraryError(400, "分页参数无效");
+  }
+  return parsed;
 }
 
 export function buildApp(options: BuildAppOptions = {}) {
@@ -71,6 +80,48 @@ export function buildApp(options: BuildAppOptions = {}) {
       throw error;
     }
   });
+
+  app.get("/api/books", async () => ({ ok: true, items: listBooks(connection.database) }));
+
+  app.get<{ Params: { bookId: string }; Querystring: { limit?: string; offset?: string } }>(
+    "/api/books/:bookId/chapters",
+    async (request, reply) => {
+      try {
+        const result = listChapters(
+          connection.database,
+          request.params.bookId,
+          pagination(request.query.limit, 50, 1, 100),
+          pagination(request.query.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+        );
+        return { ok: true, ...result };
+      } catch (error) {
+        if (error instanceof BookLibraryError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { bookId: string; chapterId: string } }>(
+    "/api/books/:bookId/chapters/:chapterId/text",
+    async (request, reply) => {
+      try {
+        const text = await readChapterText(
+          connection.database,
+          dataRoot,
+          request.params.bookId,
+          request.params.chapterId,
+        );
+        return { ok: true, text };
+      } catch (error) {
+        if (error instanceof BookLibraryError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
 
   return app;
 }

@@ -58,6 +58,40 @@ test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
     assert.equal(duplicate.json().message, "相同内容已存在，章节索引已确认");
     assert.equal(empty.statusCode, 400);
     assert.equal(empty.json().message, "TXT 文件不能为空");
+
+    const books = await app.inject({ method: "GET", url: "/api/books" });
+    const bookId = first.json().book.id as string;
+    const chapters = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters?limit=1&offset=0` });
+    const chapterId = chapters.json().items[0].id as string;
+    const chapterText = await app.inject({
+      method: "GET",
+      url: `/api/books/${bookId}/chapters/${chapterId}/text`,
+    });
+    const invalidPagination = await app.inject({
+      method: "GET",
+      url: `/api/books/${bookId}/chapters?limit=0`,
+    });
+    const missingBook = await app.inject({
+      method: "GET",
+      url: "/api/books/book_missing/chapters",
+    });
+    const missingChapter = await app.inject({
+      method: "GET",
+      url: `/api/books/${bookId}/chapters/chapter_missing/text`,
+    });
+
+    assert.equal(books.statusCode, 200);
+    assert.equal(books.json().items[0].chapter_count, 1);
+    assert.equal(chapters.statusCode, 200);
+    assert.equal(chapters.json().total, 1);
+    assert.equal(chapterText.statusCode, 200);
+    assert.equal(chapterText.json().text, "第一章\n原文内容");
+    assert.equal(invalidPagination.statusCode, 400);
+    assert.equal(invalidPagination.json().message, "分页参数无效");
+    assert.equal(missingBook.statusCode, 404);
+    assert.equal(missingBook.json().message, "书籍不存在");
+    assert.equal(missingChapter.statusCode, 404);
+    assert.equal(missingChapter.json().message, "章节不存在");
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

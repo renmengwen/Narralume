@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test": "echo \"前端尚无非平凡逻辑，暂不需要测试\""
+    "test": "tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.0",

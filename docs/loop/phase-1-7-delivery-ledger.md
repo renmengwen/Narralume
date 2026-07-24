@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`eaa6c3257ea6a546ae9d166413079a1288966936`（P4-03 集成业务提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P4-03 Worker worktree clean，临时 `node_modules` Junction 已核验 Target 后只删除链接本身；主仓库保留集成态真实门禁产物。
+- 当前 HEAD：`eb4ac1020bbff394859a0df12d7284537747f682`（Phase 4 完成并启动 P5-01 的控制提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；`D:\code3\Narralume-worktrees\P5-01` 已从本控制提交建立，三个不重叠写者分别负责 migration、Store、API/gate，`node_modules` 为指向主仓库依赖的临时 Junction。
 - 最近验证：2026-07-25 Phase 4 集成态；全量 `typecheck/test/build` 与 diff GREEN，server 61/61、web 6/6；P4-01 真实 System.Speech gate、P4-02 20,506ms 时间轴 gate、P4-03 220,960ms/1080×1920/H.264+AAC/重启复用 gate 均 GREEN。
 - 当前 Task：`P5-01`
-- 唯一下一动作：从本控制提交建立 `codex/p5-01`，按已完成的只读合同审计实现 migration v9 的 `assets`/`asset_aliases`、单一 Store、三个最小 API 与真实重启 gate；不提前实现候选图片、模型、视觉段或联系表。
+- 唯一下一动作：收敛三个并行写者的 P5-01 migration、Store、API/gate 改动，Coordinator 复核跨文件合同并运行全量三门与真实资产 gate；不提前实现候选图片、模型、视觉段或联系表。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-01 | Coordinator | 待从本控制提交建立 `D:\code3\Narralume-worktrees\P5-01` / `codex/p5-01` | migration v9、资产 Store/tests、三个最小 API/tests、真实资产 gate/package script；排除本 Ledger | 主资产、状态资产、系列级别名、重启恢复 | SQLite schema、`app.ts`、Worker Git index | `leased` |
+| P5-01 | Coordinator（migration/store/API-gate 三个不重叠写者） | `D:\code3\Narralume-worktrees\P5-01` / `codex/p5-01` / `eb4ac1020bbff394859a0df12d7284537747f682` | migration v9、资产 Store/tests、三个最小 API/tests、真实资产 gate/package script；排除本 Ledger | 主资产、状态资产、系列级别名、重启恢复 | SQLite schema、`app.ts`、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -62,7 +62,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-01 TTS provider 边界 | `complete` | P3-04 | Coordinator / 已释放 | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850` | `bb6b72c` | PASS，绑定 `bb6b72c065e52367ce722e6f60c7139bb65efb01`/第二版 revision | PASS，绑定同一 Ledger/revision | 集成态全量三门/diff GREEN；server 57/57、web 6/6；UTF-8 code units、已持有临时 WAV 后取消零泄漏、真实中文 WAV 221,542 bytes/5.022585 秒 | 冻结 `240e133`；集成 `284cfbb` | Windows System.Speech 单 provider；进入 P4-02 |
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
-| P5-01 资产合同 | `leased` | P4-03 | Coordinator / 写租约见上 | - | - | - | - | 只读合同审计完成：首版两表、单一 Store、三个 API、真实重启 gate | - | 不提前实现候选文件、模型、视觉段或联系表 |
+| P5-01 资产合同 | `implementing` | P4-03 | Coordinator / 写租约见上 | - | - | - | - | 只读合同审计完成：首版两表、单一 Store、三个 API、真实重启 gate；三个不重叠写者并行实现 | - | Coordinator 收敛跨文件合同；不提前实现候选文件、模型、视觉段或联系表 |
 | P5-02 候选图与来源 | `queued` | P5-01 | - | - | - | - | - | - | - | - |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |

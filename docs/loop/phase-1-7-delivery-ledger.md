@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`6ea3735`（P2-02 写租约已建立；本控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`fbc1d65`（P2-02 已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P2-02 第三轮双 Review；Spec/Code Quality 均 PASS；10/10 事务逃逸变体拒绝，领域/checkpoint 泄漏 0，双子进程恢复 gate GREEN。
-- 当前 Task：`P2-02`
-- 唯一下一动作：在 `codex/p2-02` 对冻结 index 创建中文业务提交，再集成 `dev` 并执行集成态全量三门与恢复 gate。
+- 最近验证：2026-07-24 P2-02 集成态；`typecheck/test/build` 与 diff check GREEN，server 36 项、web 6 项；双子进程恢复 gate GREEN，最终 `succeeded`、`attempts=2`、重复结果 0。
+- 当前 Task：`P2-03`
+- 唯一下一动作：在 `codex/p2-03` 先落地章节事件 migration 与失败测试，再实现稳定 ID、精确原文证据、整章原子替换和最小 PUT/GET 合同。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2-02 | Coordinator（第三轮双 Review 已通过，待提交） | `D:\code3\Narralume-worktrees\P2-02` / `codex/p2-02` / `d8dff8f` | `apps/server/package.json`、`apps/server/src/database.ts`、`database.test.ts`、`checkpoint-store.ts`、`checkpoint-store.test.ts`、`job-worker.ts`、`gates/p2-checkpoint-recovery-gate.ts`；排除本 Ledger | checkpoint、输入哈希、原子结果与范围恢复 | 测试数据根、SQLite 写锁、故障注入子进程、Worker Git index | `verified` |
+| P2-03 | Coordinator | `D:\code3\Narralume-worktrees\P2-03` / `codex/p2-03` / `fbc1d65` | `apps/server/src/database.ts`、`database.test.ts`、`chapter-event-store.ts`、`chapter-event-store.test.ts`、`app.ts`、`app.test.ts`；排除本 Ledger | 章节事件 schema、稳定身份、原文证据、整章替换与 HTTP 合同 | SQLite 写锁、原文文件切片、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -52,8 +52,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
 | P1-05 真实大文本门禁 | `complete` | P1-04 | Coordinator / 已释放 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | `a7de1e2` | PASS，绑定 `a7de1e2`/第二版 revision | PASS，绑定同一次 Phase 1 阶段门禁综合 Review | 集成态全量三门与真实门禁 GREEN；124 章、RSS 增量 9,027,584 bytes；故障清理探针 GREEN | `7d23438` | Node SQLite 实验性警告；Phase 1 complete，进入 P2-01 |
 | P2-01 持久化任务状态机 | `complete` | P1-05 | Coordinator / 已释放 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 集成态全量三门/diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5 | `d8dff8f` | Node SQLite 实验性警告；协作取消与外部副作用幂等进入 P2-02 |
-| P2-02 checkpoint 与恢复 | `verified` | P2-01 | Coordinator / `codex/p2-02` 待提交 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973` | `cee11c6` | PASS，绑定 `cee11c6`/第三版 revision | PASS，绑定 `cee11c6`/第三版 revision | 全量三门/cached diff GREEN；server 36 项、web 6 项；10/10 SQL 逃逸拒绝；异步泄漏 0；恢复 gate GREEN | - | 创建中文业务提交并集成 `dev` |
-| P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
+| P2-02 checkpoint 与恢复 | `complete` | P2-01 | Coordinator / 已释放 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973` | `cee11c6` | PASS，绑定 `cee11c6`/第三版 revision | PASS，绑定 `cee11c6`/第三版 revision | 集成态全量三门/diff GREEN；server 36 项、web 6 项；恢复 gate 最终 succeeded、attempts=2、重复结果 0 | `fbc1d65` | Node SQLite 实验性警告；受限 transaction 的复杂语句限制进入真实调用验证 |
+| P2-03 章节事件合同 | `implementing` | P2-02 | Coordinator / `codex/p2-03` 写租约 | - | - | 待冻结后独立 Review | 待冻结后独立 Review | 只读合同审计与攻击性测试矩阵并行进行 | - | 先落地 migration/失败测试，再实现最小合同 |
 | P2-04 真实章节任务门禁 | `queued` | P2-03 | - | - | - | - | - | - | - | - |
 | P3-01 故事弧与分集证据 | `queued` | P2-04 | - | - | - | - | - | - | - | - |
 | P3-02 稿件版本 | `queued` | P3-01 | - | - | - | - | - | - | - | - |
@@ -133,6 +133,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P2-02 第二轮 Review | Spec/Code Quality 均 FAIL，绑定 Ledger `b56cb3e` 与第二版 revision；受限 transaction 仍接受任意 SQL，writer 可排队 `COMMIT` 提前结束外层事务并造成领域结果逃逸。第二版 revision 失效。 |
 | 2026-07-24 P2-02 第三版 candidate | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973`；受限 transaction 仅接受单条 `INSERT/UPDATE/DELETE` 领域 DML，执行任何排队 SQL 前拒绝事务控制、DDL、PRAGMA、ATTACH 与多语句；逃逸回归领域行/checkpoint 均为 0 且连接可继续使用；全量三门、server 36 项、web 6 项与恢复 gate GREEN。 |
 | 2026-07-24 P2-02 第三轮 Review | Spec PASS、Code Quality PASS，均绑定 Ledger `cee11c6` 与第三版 revision；全量三门与恢复 gate 独立复验；Quality 额外验证 10/10 事务逃逸变体拒绝、领域/checkpoint 泄漏 0、连接继续可用；无 findings。 |
+| 2026-07-24 P2-02 完成 | 冻结业务提交 `f4998a7`，集成 `dev` 为 `fbc1d65`；集成态 `typecheck/test/build`、diff check GREEN，server 36/36、web 6/6；恢复 gate 硬退出码 91、首次完成 2 个范围、恢复 1 个范围、最终 `succeeded`、`attempts=2`、重复结果 0；释放写租约并进入 P2-03。 |
 
 ## 决策与剩余风险
 

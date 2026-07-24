@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`9df94e2`（P1-03 已集成；本控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`4acdbc0`（P1-03 已集成且 Review 风险分级已登记；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
+- 最近验证：2026-07-24 P1-04 candidate；Node `v22.22.3`；全量 `npm run typecheck`、`npm test`、`npm run build`、`git diff --cached --check` 通过；server 12 项、web 5 项测试通过；真实浏览器导入 UTF-8 TXT、读取 2 章与原文、系统/浅色/深色切换和显式主题刷新持久化通过；OpenDesign 第二版独立核验 PASS。
 - 当前 Task：`P1-04`
-- 唯一下一动作：读取当前 API/UI，先写书库列表、章节分页、原文切片和中文上传状态的失败测试，再实现最小查询与界面闭环。
+- 唯一下一动作：独立 Reviewer 复算 P1-04 candidate revision，执行普通任务的一次综合 Spec/Code Quality Review；Coordinator 在 Review 期间停止修改 candidate。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-04 | Coordinator | `D:\code3\Narralume-worktrees\P1-04` / `codex/p1-04` / `9df94e2` | 待读取调用链后收窄为查询 route/test 与最小 App UI | 书库/章节/原文切片查询、前端异步状态 | 测试临时目录、Worker Git index、前端构建 | `implementing` |
+| P1-04 | Coordinator（Review 期间停止写入） | `D:\code3\Narralume-worktrees\P1-04` / `codex/p1-04` / `9df94e2` | `apps/server/src/app.ts`、`apps/server/src/app.test.ts`、`apps/server/src/book-library.ts`、`apps/web/**`、`opendesign/**`、`docs/source-provenance.md`；排除本 Ledger | 书库查询、章节分页与原文切片、前端异步状态、深浅/系统主题、OpenDesign 规范与来源记录 | 测试临时目录、Worker Git index、前端构建、端口 3100/4173/8289 | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -49,7 +49,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |
 | P1-03 编码与章节索引 | `complete` | P1-02 | Coordinator / 已释放 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | `8110fe7` | PASS，绑定第二版 revision | PASS，绑定第二版 revision | 集成态 12 项 server tests；全量三门 GREEN；编码/内存/事务真实探针 | `9df94e2` | 1 MiB 单行门；进入 P1-04 |
-| P1-04 书库 API 与最小 UI | `implementing` | P1-03 | Coordinator / `codex/p1-04` 当前租约 | - | - | - | - | - | - | 先写失败测试 |
+| P1-04 书库 API 与最小 UI | `frozen_for_review` | P1-03 | Coordinator / `codex/p1-04` 冻结租约 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:7a144d758f0cc6b41e35a84f07924fc6463e4ae1` | 本控制提交，以 Git 历史定位 | 待一次独立综合 Review | 待一次独立综合 Review | 全量三门与 cached diff GREEN；server 12 项、web 5 项；真实浏览器 2 章导入/查询/原文与三态主题持久化 GREEN；OpenDesign 第二版独立核验 PASS | - | Reviewer 复算 revision 后综合审查；candidate 变更则本 Verdict 失效 |
 | P1-05 真实大文本门禁 | `queued` | P1-04 | - | - | - | - | - | - | - | - |
 | P2-01 持久化任务状态机 | `queued` | P1-05 | - | - | - | - | - | - | - | - |
 | P2-02 checkpoint 与恢复 | `queued` | P2-01 | - | - | - | - | - | - | - | - |
@@ -116,6 +116,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-03 首轮 Review | Spec/Quality 均 FAIL：64 KiB 样本可能截断 UTF-8 或把 ASCII 前缀 GBK 误判为 UTF-8；无 LF 时 pending 无界且 O(n²)；GB18030 非 BMP 字符按 UTF-16 单元多计；HTTP book 状态仍为索引前值。旧 revision 失效。 |
 | 2026-07-24 P1-03 第二版 candidate | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063`；完整文件流式严格 UTF-8/GB18030 验证；1 MiB 单行中文门限制内存；Unicode code point 计数；HTTP book 状态 ready；12 项 server tests 与全量三门 GREEN。 |
 | 2026-07-24 P1-03 完成 | 第二轮 Spec/Quality Review PASS，均绑定 Ledger `8110fe7` 与第二版 revision；非法尾部/事务失败/64 KiB 编码边界/单行门真实探针通过；业务提交/集成提交 `9df94e2`；集成态全量三门 GREEN。 |
+| 2026-07-24 P1-04 candidate | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:7a144d758f0cc6b41e35a84f07924fc6463e4ae1`；书库/章节分页/原始字节切片 API，中文上传与中断状态，系统/浅色/深色主题，OpenDesign 暖中性产品规范；全量三门、server 12 项、web 5 项与 cached diff GREEN；浏览器真实上传 2 章并读取原文，浅色/深色刷新持久化及恢复系统通过；OpenDesign 首轮核验发现编码字符和命中区问题，修复后第二版独立核验 PASS；manifest 7 项与全树扫描一致。 |
 
 ## 决策与剩余风险
 

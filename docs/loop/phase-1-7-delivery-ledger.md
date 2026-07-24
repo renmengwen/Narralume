@@ -25,18 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`bf7d921f2c928f3fadeb5e6b1af0c948ae2467dc`（P6-01 首轮双审 finding 总账；本重冻控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P6-01 第二版保持原 7 个 staged 路径，零 unstaged/untracked，两项复审后 tree 未变，`node_modules` 为临时 Junction。
-- 最近验证：2026-07-25 P6-01 第二版 Spec/Code Quality 最小复审均 PASS，6 findings 全部关闭；独立全量三门/diff、P6 Gate 与 P4 placeholder Gate GREEN。
-- 当前 Task：`P6-01`
-- 唯一下一动作：提交并推送本 Review PASS 控制记录，安全移除 P6-01 Junction，中文业务提交并 cherry-pick 到 `dev`，重跑集成态三门与 P6/P4 真实 Gate。
+- 当前 HEAD：`8f4cf8171e7e759ff6b57efbc7f2b43df2db3469`（P6-01 集成业务提交；本启动控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P6-02 独立 worktree/branch 已从 P6-01 集成提交建立，临时 `node_modules` Junction 指向主仓库依赖目录。
+- 最近验证：2026-07-25 P6-01 集成态 typecheck/test/build/diff GREEN，server 92/92、web 6/6；P6 真实 Gate 与 P4 placeholder 回归 Gate GREEN。
+- 当前 Task：`P6-02`
+- 唯一下一动作：提交并推送本 P6-02 启动控制记录；Core Writer 实现确定性分片/身份、耐久 Job/checkpoint 与只重做失效分片，Contract Auditor 并行只读核对现有合同。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P6-01/Fix-Core | Core Fix Writer（已停写） | `D:\code3\Narralume-worktrees\P6-01` / `codex/p6-01` / `f63972c` | `ffmpeg-video.ts/.test.ts`、`nine-sixteen-template.ts/.test.ts` | 取消紧邻发布、yuv420p probe、绝对输入路径、MP4 fsync、64 KiB 字节上限 | ffmpeg 子进程 / P6 template 输出 | `verified` |
-| P6-01/Fix-Gate | Gate Fix Writer（已停写） | 同上 | `gates/p6-nine-sixteen-template-gate.ts` | none 静态基线+四类动态帧差 | P6-01 gate data root | `verified` |
+| P6-02/Core | Core Writer | `D:\code3\Narralume-worktrees\P6-02` / `codex/p6-02` / `8f4cf81` | `apps/server/src/db.ts`、对应 migration 测试、`render-chunk*`、必要的 Job/Worker 接线测试 | migration、确定性 identity、1～3 分钟 cue/视觉段边界分片、checkpoint、原子发布、失效分片重做 | SQLite schema / render chunk 文件树 / ffmpeg 子进程 | `implementing` |
 
 ## Phase 依赖
 
@@ -67,8 +66,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P5-02 候选图与来源 | `complete` | P5-01 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:61fec58a9aff498dcb5a8f836f2ef0ab40a28f1f`；前两版失效 | `e2fe95f75177f6609cf465d8eabc4dbf438259c7`；前两版见事件日志 | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第三版 Ledger/revision；前两轮 findings 全部关闭，无新 findings | 集成态全量 `typecheck/test/build`、diff GREEN；server 74/74、web 6/6；真实模型 `doubao-seedream-4-5-251128` 生成 JPEG 1600×2848、1,038,668 bytes、SHA-256 `e6ce4d3aa60094f5aa6ee34fc680c008196e363204ed17234fd8172ca65ae471`，candidate `5fbac1d20c4e45c76edba81e9bfa2ed57684e1cf22e2e1d9b7252e013ce83cd9`；checkpoint、重启、上传、审核 GREEN | 冻结 `7911103`；集成 `1744857` | Node SQLite 实验性警告非阻断；进入 P5-03 |
 | P5-03 视觉段显式绑定 | `complete` | P5-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:8adc0ee594d962215b5b6e4f33a155b398068511`；首版失效 | `5e5b9148d35efef8cf5f23bd8db7b637e8378965`；首版 `a4b4d1a5668f73d3116c322121d51a41d3cd1af6` | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第二版 Ledger/revision；同系列 finding 关闭，无新 findings | 集成态全量三门/diff、server 83/83、web 6/6、真实本地 gate GREEN；264,688ms、10 段、PNG SHA-256 `1bcb326779bb61beed9241187c3724c061dbd7899b5c75a848be796cb2be7bec`、重启稳定、reject 阻断 | 冻结 `496673f`；集成 `f63f056` | Node SQLite 实验性警告非阻断；进入 P5-04 |
 | P5-04 联系表与真实审核 | `complete` | P5-03 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:951cbe94291aa14fb52cf4eee28096e68925e04d`；首版失效 | `b29e82eeefbe979276cb64a7461baa5de4742f1e`；首版 `6793f9d` | PASS；首轮已通过 Spec/Phase 5 范围+第二版两 P1 最小复审 | PASS；两个 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 89/89、web 6/6；真实 Gate 291,200ms、10 段、重启确定、reject/缺图/发布故障阻断 | 冻结 `d40b69c`；集成 `f63972c` | Phase 5 complete；Buffer 预分配风险非阻断，进入 P6-01 |
-| P6-01 唯一 9:16 模板 | `verified` | P5-04 | Core/Gate Fix Writer 已停写；Ledger 仅 Coordinator | 第二版 `git-index-tree-v1:f63972c092e76b3adc12f2ea79e36d945d980653:a73eaf03dcefcad0273a65e517f989709c198e4b`；首版失效 | `404a223634115c3e2bf708d2af15ac1c307fd5d6`；首版 `0c213d2` | PASS；首轮已通过范围+第二版 4 findings 最小复审 | PASS；首轮已通过范围+第二版 2 findings 最小复审 | 独立全量三门/diff GREEN，server 92/92、web 6/6；P6 Gate、P4 placeholder Gate 与 6 项回归 GREEN | - | 无新 findings；待业务提交与集成 |
-| P6-02 分片与身份 | `queued` | P6-01 | - | - | - | - | - | - | - | - |
+| P6-01 唯一 9:16 模板 | `complete` | P5-04 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:f63972c092e76b3adc12f2ea79e36d945d980653:a73eaf03dcefcad0273a65e517f989709c198e4b`；首版失效 | `404a223634115c3e2bf708d2af15ac1c307fd5d6`；首版 `0c213d2` | PASS；首轮已通过范围+第二版 4 findings 最小复审 | PASS；首轮已通过范围+第二版 2 findings 最小复审 | 集成态全量三门/diff GREEN，server 92/92、web 6/6；P6 Gate 10,000ms/201,217 bytes、P4 Gate 220,960ms/3,102,618 bytes 均 GREEN | 冻结 `84a92e4`；集成 `8f4cf81` | 无新 findings；进入 P6-02 |
+| P6-02 分片与身份 | `implementing` | P6-01 | Core Writer；Ledger 仅 Coordinator | - | - | - | - | - | - | 先实现首版闭环，不提前做 concat/final manifest |
 | P6-03 concat 与导出清单 | `queued` | P6-02 | - | - | - | - | - | - | - | - |
 | P6-04 真实渲染恢复门禁 | `queued` | P6-03 | - | - | - | - | - | - | - | - |
 | P7-01 真实样片 E2E | `queued` | P6-04 | - | - | - | - | - | - | - | - |
@@ -188,6 +187,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P6-01 首轮双 Review | Spec FAIL + Code Quality FAIL，均绑定 Ledger `0c213d25810ffe4bc6c1a67cd70f5324ebf506d4` 与首版 revision，Review 前后 tree 不变。Spec：P1 probe 期间取消后仍 rename 发布；P1 probe 未要求 `pix_fmt=yuv420p`；P2 相对 image/audio/ASS 按调用 cwd 验证后却在 ASS cwd 执行而失败；P2 Gate 只客观比较 pan-left，未封闭 pan-right/zoom-in/zoom-out 回归。Code Quality：P1 probe 后 rename 前未对临时 MP4 `open→sync→close`；P2 64 KiB 上限按 JS 字符长度，30,000 个中文字符/90,000 bytes 可绕过。首版失效；只开放上述六项最小修复与回归，其余已通过范围不重复审查。 |
 | 2026-07-25 P6-01 第二版 candidate | `git-index-tree-v1:f63972c092e76b3adc12f2ea79e36d945d980653:a73eaf03dcefcad0273a65e517f989709c198e4b`；原 7 个 staged 路径，零 unstaged/untracked。probe 后与 fsync 后均重查 AbortSignal 并抛 JobCancelledError；临时 MP4 `open→sync→close` 后才 rename；ffprobe 严格要求 `pix_fmt=yuv420p`；image/audio/ASS 统一 resolve 绝对路径后校验与执行；子进程输出以 Buffer 实际字节计数；Gate 客观断言 none MAD=0.000，pan-left=5.463、pan-right=5.415、zoom-in=3.273、zoom-out=3.118，并显式断言 yuv420p。新增有/无旧输出的 probe 期间取消、sync/rename 失败、yuv444p、90,000-byte 中文输出、相对路径真实渲染回归。全量三门/diff GREEN，server 92/92、web 6/6；P6 10s 真实 Gate 与 P4 220,960ms placeholder 真实 Gate GREEN。 |
 | 2026-07-25 P6-01 第二版双复审 | Spec PASS + Code Quality PASS，均绑定 Ledger `404a223634115c3e2bf708d2af15ac1c307fd5d6` 与第二版 revision，Review 前后 tree 不变。Spec 的取消发布、yuv420p、相对路径、全 motion Gate 四项以及 Code Quality 的 MP4 耐久发布、实际字节上限两项全部关闭，无新 findings。独立全量三门/diff GREEN，server 92/92、web 6/6，P6 10s Gate 与 P4 220,960ms placeholder Gate GREEN；未重复审查首轮已通过范围。 |
+| 2026-07-25 P6-01 完成并启动 P6-02 | P6-01 中文业务提交 `84a92e4`，集成提交 `8f4cf81`；集成态 typecheck/test/build/diff、server 92/92、web 6/6、P6 10s Gate 与 P4 220,960ms Gate 全部 GREEN。安全移除 P6-01 Junction 后，从集成提交建立 `D:\code3\Narralume-worktrees\P6-02` / `codex/p6-02`；P6-02 首版只做确定性分片与身份、耐久 Job/checkpoint、原子分片发布和失效分片重做，不提前实现 P6-03 concat。 |
 
 ## 决策与剩余风险
 

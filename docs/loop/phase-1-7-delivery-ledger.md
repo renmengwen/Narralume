@@ -27,15 +27,15 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 当前分支：`dev`
 - 当前 HEAD：`0837567`（P1-04 业务提交已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P1-05 首版 candidate；成功路径与全量三门通过；Phase 1 阶段门禁综合 Review FAIL：重复编号未断言，上传失败会泄漏 RSS sampler，自动下载固定路径且早期失败清理不完整。
+- 最近验证：2026-07-24 P1-05 第二版 candidate；全量三门与 cached diff 通过；自包含真实门禁 RSS 增量 `17,907,712` bytes；重复编号强断言通过；sampler 后故障注入 4.33 秒确定退出、临时目录泄漏 0。
 - 当前 Task：`P1-05`
-- 唯一下一动作：修复 P1-05 门禁的重复编号强断言、sampler/响应失败清理和唯一临时下载目录，故障注入验证后重新冻结 Phase 1 阶段门禁。
+- 唯一下一动作：独立 Reviewer 从头复算 P1-05 第二版 candidate，并重新执行覆盖 P1-01～P1-05 的 Phase 1 阶段门禁综合 Review。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-05 | Coordinator | `D:\code3\Narralume-worktrees\P1-05` / `codex/p1-05` / `0837567` | `apps/server/package.json`、`apps/server/src/gates/phase1-large-text-gate.ts`、`docs/source-provenance.md`；排除本 Ledger | 真实长篇输入、内存/重启/偏移/幂等/重复编号证据 | Project Gutenberg 下载、测试数据根、临时 HTTP 端口、Worker Git index | `changes_requested` |
+| P1-05 | Coordinator（Review 期间停止写入） | `D:\code3\Narralume-worktrees\P1-05` / `codex/p1-05` / `0837567` | `apps/server/package.json`、`apps/server/src/gates/phase1-large-text-gate.ts`、`docs/source-provenance.md`；排除本 Ledger | 真实长篇输入、内存/重启/偏移/幂等/重复编号证据 | Project Gutenberg 下载、测试数据根、临时 HTTP 端口、Worker Git index | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -50,7 +50,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |
 | P1-03 编码与章节索引 | `complete` | P1-02 | Coordinator / 已释放 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | `8110fe7` | PASS，绑定第二版 revision | PASS，绑定第二版 revision | 集成态 12 项 server tests；全量三门 GREEN；编码/内存/事务真实探针 | `9df94e2` | 1 MiB 单行门；进入 P1-04 |
 | P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
-| P1-05 真实大文本门禁 | `changes_requested` | P1-04 | Coordinator / `codex/p1-05` 当前租约 | 首版 revision 已失效：`git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:d40a52726430d4d6ca76922b449f8aa0bf001fe6` | `e6ae4a0` | FAIL，绑定 `e6ae4a0`/首版 revision | FAIL，绑定同一次 Phase 1 阶段门禁综合 Review | 首版成功路径与三门 GREEN；Review 发现门禁可靠性 3 项缺口 | - | 强断言真实重复编号；finally 清 sampler；唯一临时目录并覆盖下载/校验早期失败清理；故障注入后重新冻结 |
+| P1-05 真实大文本门禁 | `frozen_for_review` | P1-04 | Coordinator / `codex/p1-05` 冻结租约 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | 本控制提交，以 Git 历史定位 | 待第二轮 Phase 1 独立阶段门禁综合 Review | 待同一次阶段门禁综合 Review | 全量三门/cached diff GREEN；真实门禁 GREEN；重复编号/ID/index 强断言；sampler 后故障注入确定退出且临时目录泄漏 0 | - | Reviewer 从头复审第二版与 Phase 1；candidate 变更则 Verdict 失效 |
 | P2-01 持久化任务状态机 | `queued` | P1-05 | - | - | - | - | - | - | - | - |
 | P2-02 checkpoint 与恢复 | `queued` | P2-01 | - | - | - | - | - | - | - | - |
 | P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
@@ -122,6 +122,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-04 完成 | 第二轮独立综合 Review PASS，绑定 Ledger `c92c1aa` 与第二版 revision；业务提交/集成提交 `0837567`；集成态全量三门 GREEN；OpenDesign 深浅/系统主题规范、UI Kit、mockup 和实际 React 工作台落地。 |
 | 2026-07-24 P1-05 candidate | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:d40a52726430d4d6ca76922b449f8aa0bf001fe6`；自包含下载 Project Gutenberg eBook #24264《红楼梦》，冻结 2,663,455 bytes 与 SHA-256 `ff1526996bf4b81807651921a85e5c1c0f1d1d123c9fa4553057ba6a3ec72011`；真实 HTTP 流式导入 124 章，重复导入 200/稳定 ID，关闭重启后全量分页可读，首/中/尾切片文本与内容哈希吻合；真实重复章节编号 `二`、`四`、`四十五` 未覆盖；RSS 峰值增量 18,972,672 bytes，低于 96 MiB 门限；全量三门 GREEN。 |
 | 2026-07-24 Phase 1 首轮阶段门禁 Review | FAIL，绑定 Ledger `e6ae4a0` 与 P1-05 首版 revision；P1：真实重复章节编号只统计未断言，解析覆盖回归仍可 `ok: true`；上传失败未清 RSS interval 且响应异常路径不完备。P2：自下载在外层 finally 前失败会残留，固定临时文件名使并发运行互相截断/删除。Phase 1 产品实现复核无其他阻断，旧 revision 失效。 |
+| 2026-07-24 P1-05 第二版 candidate | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6`；冻结来源稳定断言 124 个章节范围；强断言重复编号 `二/四/四十五` 均为 2 个不同 ID 与索引；HTTP 响应 aborted/error 与源流 error 确定失败；唯一下载临时目录；sampler、运行时、数据根、下载根统一 finally 清理；正常真实门禁 RSS 增量 17,907,712 bytes；sampler 后故障注入退出码 1、4.33 秒退出、临时目录泄漏 0；全量三门 GREEN。 |
 
 ## 决策与剩余风险
 

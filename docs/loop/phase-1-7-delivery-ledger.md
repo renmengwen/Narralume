@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`3b6ee213fe61d3b372b685dab22fe5a4bfb71112`（P5-04 启动总账；本冻结控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-04 首版 candidate 已失效，worktree 待在 4 个相关路径修复文件发布与图片流 TOCTOU，`node_modules` 为临时 Junction。
-- 最近验证：2026-07-25 P5-04 首轮综合 Review FAIL；三门与真实 Gate 仍 GREEN，但发布失败清理/双文件一致性和候选图校验到流式响应窗口两个 P1 未关闭。
+- 当前 HEAD：`61c434a31c66e318df39886f7d910fbddff8a5e0`（P5-04 首轮 finding 总账；本重冻控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P5-04 第二版已冻结原 6 个租约路径，零 unstaged/untracked，`node_modules` 为临时 Junction。
+- 最近验证：2026-07-25 P5-04 第二版全量三门/diff GREEN，server 89/89、web 6/6；临时写/sync/首次发布/覆盖发布故障恢复与同一 Buffer 响应回归通过，真实 Gate 仍 GREEN。
 - 当前 Task：`P5-04`
-- 唯一下一动作：提交并推送本 finding 控制记录，解除冻结后只修复两个 P1 及最小回归，全量重验并生成新 candidate，仅复审失效范围。
+- 唯一下一动作：提交并推送本重冻控制记录，然后由独立只读 Reviewer 仅复审两个失效边界，不重复已通过的 Spec/Phase 5 业务范围。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-04/Fix | Fix Writer | `D:\code3\Narralume-worktrees\P5-04` / `codex/p5-04` / `386df1d` | `contact-sheet.ts`、`contact-sheet.test.ts`、`app.ts`、`app.test.ts` | 临时文件失败清理、双文件发布恢复、校验与响应同一字节身份 | contact-sheet 输出目录 / candidate 图片流 | `implementing` |
+| P5-04/Fix | Fix Writer（已停写） | `D:\code3\Narralume-worktrees\P5-04` / `codex/p5-04` / `386df1d` | `contact-sheet.ts`、`contact-sheet.test.ts`、`app.ts`、`app.test.ts` | 临时文件失败清理、双文件发布恢复、校验与响应同一字节身份 | contact-sheet 输出目录 / candidate 图片流 | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -65,7 +65,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P5-01 资产合同 | `complete` | P4-03 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 集成态 `typecheck/test/build`、diff GREEN；server 64/64、web 6/6；INSERT/UPDATE 层级约束、真实资产 gate、重启与级联 GREEN | 冻结 `c8bef59`；集成 `ff38e6d` | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入 P5-02 |
 | P5-02 候选图与来源 | `complete` | P5-01 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:61fec58a9aff498dcb5a8f836f2ef0ab40a28f1f`；前两版失效 | `e2fe95f75177f6609cf465d8eabc4dbf438259c7`；前两版见事件日志 | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第三版 Ledger/revision；前两轮 findings 全部关闭，无新 findings | 集成态全量 `typecheck/test/build`、diff GREEN；server 74/74、web 6/6；真实模型 `doubao-seedream-4-5-251128` 生成 JPEG 1600×2848、1,038,668 bytes、SHA-256 `e6ce4d3aa60094f5aa6ee34fc680c008196e363204ed17234fd8172ca65ae471`，candidate `5fbac1d20c4e45c76edba81e9bfa2ed57684e1cf22e2e1d9b7252e013ce83cd9`；checkpoint、重启、上传、审核 GREEN | 冻结 `7911103`；集成 `1744857` | Node SQLite 实验性警告非阻断；进入 P5-03 |
 | P5-03 视觉段显式绑定 | `complete` | P5-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:8adc0ee594d962215b5b6e4f33a155b398068511`；首版失效 | `5e5b9148d35efef8cf5f23bd8db7b637e8378965`；首版 `a4b4d1a5668f73d3116c322121d51a41d3cd1af6` | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第二版 Ledger/revision；同系列 finding 关闭，无新 findings | 集成态全量三门/diff、server 83/83、web 6/6、真实本地 gate GREEN；264,688ms、10 段、PNG SHA-256 `1bcb326779bb61beed9241187c3724c061dbd7899b5c75a848be796cb2be7bec`、重启稳定、reject 阻断 | 冻结 `496673f`；集成 `f63f056` | Node SQLite 实验性警告非阻断；进入 P5-04 |
-| P5-04 联系表与真实审核 | `implementing` | P5-03 | Fix Writer；Ledger 仅 Coordinator | 首版 `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:3f4f27dac9b4585c050b53a9accc6289aadd575f` 已失效 | `6793f9de269d48636c288c329f22e844e7ae997a` | FAIL，综合 Review 同时覆盖 Spec/Phase 5；两个 P1 | FAIL，同一次综合 Review | 三门与真实 Gate GREEN，但未覆盖发布失败注入和路径替换窗口 | - | 修复后重冻，仅复审两个失效边界；其余范围继续有效 |
+| P5-04 联系表与真实审核 | `frozen_for_review` | P5-03 | Fix Writer 已停写；Ledger 仅 Coordinator | 第二版 `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:951cbe94291aa14fb52cf4eee28096e68925e04d`；首版失效 | 待本控制提交 SHA；首版 `6793f9d` | 首轮其余 Spec/Phase 5 范围继续有效；待仅复审两个 P1 | 待仅复审两个 P1 | 全量三门/diff GREEN，server 89/89、web 6/6；发布故障注入、同一有界 Buffer 响应、真实 Gate GREEN | - | 只复审两个失效边界 |
 | P6-01 唯一 9:16 模板 | `queued` | P5-04 | - | - | - | - | - | - | - | - |
 | P6-02 分片与身份 | `queued` | P6-01 | - | - | - | - | - | - | - | - |
 | P6-03 concat 与导出清单 | `queued` | P6-02 | - | - | - | - | - | - | - | - |
@@ -179,6 +179,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P5-04 启动 | 从 `dev` `386df1d` 创建 `D:\code3\Narralume-worktrees\P5-04` / `codex/p5-04`。复用 v9-v11 资产、候选审核与视觉段合同，只新增可重建的确定性联系表 JSON/HTML、受控导出/图片 API 和自包含 Phase 5 真实 gate；不新增 migration、Job、checkpoint、缩略图或静态目录暴露。Core/API/Gate 三条不重叠写线并行，同一 worktree 保持单一核心 Writer；冻结后一次独立综合 Review 同时覆盖 P5-04 与 Phase 5，不重复阶段审查。 |
 | 2026-07-25 P5-04 candidate | `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:3f4f27dac9b4585c050b53a9accc6289aadd575f`；恰好 6 个 staged 租约路径，零 unstaged/untracked。复用视觉就绪门禁与 Node 标准库，完成候选文件规范路径/普通文件/bytes/SHA-256 复验、确定性 JSON/HTML、受控导出与 candidate ID 图片流，无 migration/Job/checkpoint/新依赖。全量 `typecheck/test/build`、diff GREEN，server 86/86、web 6/6；真实 Gate 使用 System.Speech+ffprobe+ffmpeg 产生 291,200ms 时间轴与 10 段，JSON SHA-256 `1ce9a067d167989013dc2905116ad45f038431ac0f7453c9ecef3ff838e4f475`，HTML SHA-256 `c5ff9318fdf820109450cba530bbbc0cbbde9b55a00eac2890ee797e252254b7`，重启重导字节相同，reject/缺图均阻断且不覆盖旧导出；未重复调用外部模型。 |
 | 2026-07-25 P5-04 首轮综合 Review | FAIL，绑定 Ledger `6793f9de269d48636c288c329f22e844e7ae997a` 与首版 revision。P1：临时文件 open 后 write/sync/close 失败时 helper 不清理，且 JSON/HTML 顺序 rename 的第二步失败会留下新 JSON+旧 HTML 撕裂版本；P1：候选图 API 在 realpath/lstat/hash 校验后重新按路径打开流，路径可在校验到使用间被替换。首版 candidate 失效；只开放 helper 内部清理+双文件失败恢复、以及校验/响应同一字节身份的最小修复与故障注入回归；其余 Spec、业务门禁与确定性范围继续有效。 |
+| 2026-07-25 P5-04 第二版 candidate | `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:951cbe94291aa14fb52cf4eee28096e68925e04d`；原 6 个 staged 路径，零 unstaged/untracked。候选图通过同一 FileHandle 显式有界读取最多 30 MiB+1 字节，同一 Buffer 完成 bytes/SHA-256 校验与 HTTP 响应；联系表先在同级 staging 目录写入并 fsync，再以 target→backup→staged 目录切换发布，第二步失败恢复旧目录。新增 sync、首次发布、覆盖第二步失败注入和 Fastify onSend 路径替换回归。全量三门/diff GREEN，server 89/89、web 6/6；真实 Gate 291,200ms、10 段、重启确定、reject/缺图阻断且旧导出不变，JSON/HTML hash 与首版一致。 |
 
 ## 决策与剩余风险
 

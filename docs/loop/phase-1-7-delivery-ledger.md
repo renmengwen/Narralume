@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`17dee10`（P4-01 首轮审查问题控制提交；本重新冻结控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`284cfbb1fcc25b4948a531f23c6857222a77f9bf`（P4-01 集成提交；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P4-01 candidate；全量三门/diff GREEN，server 57/57、web 6/6；真实 System.Speech 中文 WAV 与取消/失败清理 gate GREEN。
-- 当前 Task：`P4-01`
-- 唯一下一动作：对第二版冻结 revision 重新执行独立 Spec Review 与 Code Quality Review；不增加其他审查。
+- 最近验证：2026-07-24 P4-01 集成态；全量三门/diff GREEN，server 57/57、web 6/6；正确 UTF-8 中文 System.Speech WAV、取消/失败清理 gate GREEN。
+- 当前 Task：`P4-02`
+- 唯一下一动作：从本控制提交建立 `codex/p4-02`，复用批准 guard 与 System.Speech 生成真实批准稿音频，以内容哈希持久化并用 ffprobe 建立真实时长和最小字幕 cue；不增加第二 provider。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P4-01 | Coordinator（已停止写入，待第二轮双 Review） | `D:\code3\Narralume-worktrees\P4-01` / `codex/p4-01` / `08fa14e` | `apps/server/package.json`、`tts-provider.ts`、`tts-provider.test.ts`、`gates/p4-system-tts-gate.ts`；排除本 Ledger | 单一 Windows System.Speech 命令边界、取消、输入身份、原子 WAV 与真实探针 | PowerShell 子进程、系统音频命令、Worker Git index | `frozen_for_review` |
+| P4-02 | Coordinator | `D:\code3\Narralume-worktrees\P4-02` / `codex/p4-02` / 本控制提交 | P4-02 migration/audio store/job/ffprobe/subtitle/tests/gate；排除本 Ledger | 批准稿真实音频、内容寻址复用、真实时长、字幕 cue 与失效身份 | SQLite migration、TTS/ffprobe 子进程、音频文件、Worker Git index | `leased` |
 
 ## Phase 依赖
 
@@ -59,8 +59,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P3-02 稿件版本 | `complete` | P3-01 | Coordinator / 已释放 | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5` | `8670066` | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | 集成态全量三门/diff GREEN；server 54/54、web 6/6；双连接相同内容同 ID/v1 且库内仅 1 版本；真实三版本、幂等 POST、重启查询 gate GREEN | 冻结 `b0259dd`；集成 `eecdde2` | Node SQLite 实验性警告；首轮并发幂等 finding 已关闭；进入 P3-03 |
 | P3-03 人工批准闸门 | `complete` | P3-02 | Coordinator / 已释放 | `git-index-tree-v1:01b34531a84cf7150e407be20736f6784f143baa:7b078e0190daf74f63ee03b096e285be8cf20a48` | `0b41f55` | PASS，绑定 `0b41f559741418b99eb24ca5df42596f564f6269`/冻结 revision | PASS，绑定 `0b41f559741418b99eb24ca5df42596f564f6269`/冻结 revision | 集成态全量三门/diff GREEN；server 56/56、web 6/6；批准放行同一包装稿，撤回与重启后 TTS/图片硬阻断 | 冻结 `94703a1`；集成 `7e46d88` | Node SQLite 实验性警告；进入 P3-04 |
 | P3-04 真实分集验收 | `complete` | P3-03 | Coordinator / 已释放 | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8` | `8414457` | PASS，绑定 `84144575adb0e6e24862d47dc0c220c48e3c45cb`/冻结 revision，同一次 Phase 3 综合 Review | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 56/56、web 6/6；真实批准稿 1,139 字/284.75 秒估算、8 段证据、最终 approved revision 3、重启精确放行 | 冻结 `516cce9`；集成 `bbd7953` | 估算非真实音频时长；Phase 3 complete，进入 P4-01 |
-| P4-01 TTS provider 边界 | `frozen_for_review` | P3-04 | Coordinator / 已停止写入，待第二轮双 Review | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850` | 本重新冻结控制提交 | 待第二轮独立 Review | 待第二轮独立 Review | 全量三门/diff GREEN；server 57/57、web 6/6；PowerShell 中文 code units 精确一致；取消在临时 WAV 已创建后触发且零泄漏；真实正确中文 WAV 221,542 bytes、5.022585 秒 | - | 第二轮只复验 UTF-8 stdin 与等待 close 后清理；不扩 provider 框架/P4-02 |
-| P4-02 真实音频时间轴 | `queued` | P4-01 | - | - | - | - | - | - | - | - |
+| P4-01 TTS provider 边界 | `complete` | P3-04 | Coordinator / 已释放 | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850` | `bb6b72c` | PASS，绑定 `bb6b72c065e52367ce722e6f60c7139bb65efb01`/第二版 revision | PASS，绑定同一 Ledger/revision | 集成态全量三门/diff GREEN；server 57/57、web 6/6；UTF-8 code units、已持有临时 WAV 后取消零泄漏、真实中文 WAV 221,542 bytes/5.022585 秒 | 冻结 `240e133`；集成 `284cfbb` | Windows System.Speech 单 provider；进入 P4-02 |
+| P4-02 真实音频时间轴 | `leased` | P4-01 | Coordinator / 写租约见上 | - | - | - | - | - | - | 复用 P4-01 和既有 Job/checkpoint，不新造 provider/状态机 |
 | P4-03 占位视频 | `queued` | P4-02 | - | - | - | - | - | - | - | - |
 | P5-01 资产合同 | `queued` | P4-03 | - | - | - | - | - | - | - | - |
 | P5-02 候选图与来源 | `queued` | P5-01 | - | - | - | - | - | - | - | - |
@@ -155,6 +155,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P4-01 首轮 Review | Code Quality FAIL，绑定 Ledger `b06d62a0f7b02f7f62eb6d0dc88c32984832962f` 与首版 revision：AbortSignal 的 child `error` 可能早于 `close`，当前 Promise 提前拒绝并清理仍被 PowerShell 占用的临时 WAV，Windows 下可由 EPERM/EBUSY 覆盖取消错误并泄漏文件。首版 revision 失效，只修等待 close 后清理并补固定时序回归。 |
 | 2026-07-24 P4-01 首轮 Spec Review | FAIL，绑定同一 Ledger/revision：PowerShell 5.1 的 `[Console]::In` 未设置 UTF-8，Node 写入的中文 UTF-8 可按系统控制台代码页误解码；有效 WAV 不等于朗读正文正确。只在读取前设置 `[Console]::InputEncoding` 并补 code-unit 回归。 |
 | 2026-07-24 P4-01 第二版 candidate | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850`；PowerShell 读取前显式设置 UTF-8，真实 code-unit 回归覆盖中文正文；成功 spawn 后 `error` 只记录，统一等待 `close` 再清理，取消测试先确认临时 WAV 已被创建/持有再 abort。全量三门、server 57、web 6、真实正确中文 WAV gate GREEN。 |
+| 2026-07-24 P4-01 完成 | 第二轮 Spec/Code Quality Review 均 PASS，绑定 Ledger `bb6b72c065e52367ce722e6f60c7139bb65efb01` 与第二版 revision；首轮 UTF-8 与取消清理 findings 均关闭。冻结业务提交 `240e133`，集成 `dev` 为 `284cfbb1fcc25b4948a531f23c6857222a77f9bf`；集成态全量三门、server 57/57、web 6/6、真实中文 WAV gate GREEN；进入 P4-02。 |
 
 ## 决策与剩余风险
 

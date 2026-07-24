@@ -440,6 +440,134 @@ test("资产 API 宽链路覆盖主状态资产、别名、幂等与中文错误
   }
 });
 
+test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错误", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-visual-segments-"));
+  const timelineHash = "b".repeat(64);
+  const seed = openDatabase(dataRoot);
+  try {
+    seed.database.prepare(
+      `INSERT INTO books (id, title, original_file_path, original_file_hash, encoding, import_status)
+       VALUES ('visual_book', '视觉段 API', 'source.txt', ?, 'utf-8', 'ready')`,
+    ).run("1".repeat(64));
+    seed.database.prepare(
+      `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+       VALUES ('visual_series', 'visual_book', '视觉段系列', 1, 1)`,
+    ).run();
+    seed.database.prepare(
+      `INSERT INTO episodes (
+        id, series_project_id, episode_index, title, story_arc, target_duration_seconds, created_at, updated_at
+      ) VALUES ('visual_episode', 'visual_series', 1, '第一集', '故事弧', 240, 1, 1)`,
+    ).run();
+    seed.database.prepare(
+      `INSERT INTO script_versions (
+        id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+      ) VALUES ('visual_script', 'visual_episode', 'packaged', 1, NULL, ?, ?, 1)`,
+    ).run(JSON.stringify({ paragraphs: [{ text: "画面旁白", sourceIndexes: [0] }] }), "2".repeat(64));
+    changeScriptApproval(seed.database, "visual_episode", {
+      action: "approve", expectedRevision: 0, scriptVersionId: "visual_script",
+    });
+    seed.database.prepare(
+      `INSERT INTO audio_segments (
+        timeline_hash, segment_index, episode_id, script_version_id, text, provider_id, voice, rate,
+        input_hash, relative_path, file_hash, bytes, duration_ms, created_at
+      ) VALUES (?, 0, 'visual_episode', 'visual_script', '画面旁白', 'test', 'test', 0,
+        ?, 'audio.wav', ?, 100, 2000, 1)`,
+    ).run(timelineHash, "3".repeat(64), "4".repeat(64));
+    const insertCue = seed.database.prepare(
+      `INSERT INTO subtitle_cues (
+        timeline_hash, cue_index, segment_index, episode_id, script_version_id, start_ms, end_ms, text
+      ) VALUES (?, ?, 0, 'visual_episode', 'visual_script', ?, ?, ?)`,
+    );
+    insertCue.run(timelineHash, 0, 0, 900, "第一句");
+    insertCue.run(timelineHash, 1, 900, 2000, "第二句");
+    seed.database.prepare(
+      `INSERT INTO assets (
+        id, series_project_id, asset_type, asset_role, canonical_name, normalized_name, created_at
+      ) VALUES ('visual_asset', 'visual_series', 'character', 'master', '林黛玉', '林黛玉', 1)`,
+    ).run();
+    seed.database.prepare(
+      `INSERT INTO asset_candidates (
+        id, asset_id, source_kind, source_identity_hash, source_json, file_hash,
+        mime, width, height, bytes, relative_path, created_at
+      ) VALUES ('visual_candidate', 'visual_asset', 'upload', ?, '{"kind":"upload"}', ?,
+        'image/png', 32, 48, 100, 'assets/candidates/aa/test.png', 1)`,
+    ).run("5".repeat(64), "6".repeat(64));
+    seed.database.prepare(
+      `INSERT INTO asset_candidate_review_events (candidate_id, revision, action, note, created_at)
+       VALUES ('visual_candidate', 1, 'approve', NULL, 1)`,
+    ).run();
+  } finally {
+    seed.close();
+  }
+
+  const app = buildApp({ dataRoot, logger: false });
+  const body = {
+    timelineHash,
+    cueStartIndex: 0,
+    cueEndIndex: 1,
+    motionKind: "zoom-in",
+    motionAmountPpm: 120_000,
+    fadeMs: 200,
+    expectedRevision: 0,
+    assets: [{ assetId: "visual_asset", selectedCandidateId: "visual_candidate" }],
+  };
+  try {
+    const saved = await app.inject({
+      method: "PUT", url: "/api/episodes/visual_episode/visual-segments/0", payload: body,
+    });
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(saved.json().message, "视觉段已保存");
+    assert.equal(saved.json().segment.startMs, 0);
+    assert.equal(saved.json().segment.endMs, 2000);
+    assert.equal(saved.json().segment.productionReady, true);
+    assert.deepEqual(saved.json().segment.assets.map((asset: Record<string, unknown>) => ({
+      assetId: asset.assetId,
+      selectedCandidateId: asset.selectedCandidateId,
+    })), [{ assetId: "visual_asset", selectedCandidateId: "visual_candidate" }]);
+
+    const repeated = await app.inject({
+      method: "PUT", url: "/api/episodes/visual_episode/visual-segments/0", payload: body,
+    });
+    assert.equal(repeated.statusCode, 200, repeated.body);
+    assert.equal(repeated.json().segment.id, saved.json().segment.id);
+    assert.equal(repeated.json().segment.revision, saved.json().segment.revision);
+
+    const listed = await app.inject({
+      method: "GET", url: `/api/episodes/visual_episode/visual-segments?timelineHash=${timelineHash}`,
+    });
+    assert.equal(listed.statusCode, 200, listed.body);
+    assert.equal(listed.json().total, 1);
+    assert.equal(listed.json().items[0].productionReady, true);
+    assert.equal(listed.json().items[0].startMs, 0);
+    assert.equal(listed.json().items[0].endMs, 2000);
+
+    const stale = await app.inject({
+      method: "PUT", url: "/api/episodes/visual_episode/visual-segments/0",
+      payload: { ...body, expectedRevision: 0, fadeMs: 100 },
+    });
+    assert.equal(stale.statusCode, 409);
+    assert.match(stale.json().message, /revision|版本|变化/);
+    const invalidIndex = await app.inject({
+      method: "PUT", url: "/api/episodes/visual_episode/visual-segments/-1", payload: body,
+    });
+    assert.equal(invalidIndex.statusCode, 400);
+    assert.equal(invalidIndex.json().message, "视觉段序号必须是非负安全整数");
+    const invalidHash = await app.inject({
+      method: "GET", url: "/api/episodes/visual_episode/visual-segments?timelineHash=bad",
+    });
+    assert.equal(invalidHash.statusCode, 400);
+    assert.equal(invalidHash.json().message, "时间轴哈希必须是 64 位小写十六进制");
+    const missing = await app.inject({
+      method: "PUT", url: "/api/episodes/missing/visual-segments/0", payload: body,
+    });
+    assert.equal(missing.statusCode, 404);
+    assert.match(missing.json().message, /分集不存在/);
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("非法 Worker 配置失败时关闭 SQLite", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-invalid-worker-"));
   try {

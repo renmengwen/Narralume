@@ -17,6 +17,7 @@
     "gate:p4-placeholder-video": "tsx src/gates/p4-placeholder-video-gate.ts",
     "gate:p5-assets": "tsx src/gates/p5-assets-gate.ts",
     "gate:p5-image-candidates": "node --no-warnings --import tsx src/gates/p5-image-candidates-gate.ts",
+    "gate:p5-visual-segments": "node --no-warnings --import tsx src/gates/p5-visual-segments-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

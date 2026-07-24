@@ -384,10 +384,89 @@ const MIGRATION_10 = `
   ) STRICT;
 `;
 
+const MIGRATION_11 = `
+  CREATE TABLE visual_segments (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    segment_index INTEGER NOT NULL CHECK (segment_index >= 0),
+    script_version_id TEXT NOT NULL REFERENCES script_versions(id),
+    approval_revision INTEGER NOT NULL CHECK (approval_revision >= 1),
+    timeline_hash TEXT NOT NULL CHECK (
+      length(timeline_hash) = 64 AND timeline_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    cue_start_index INTEGER NOT NULL CHECK (cue_start_index >= 0),
+    cue_end_index INTEGER NOT NULL CHECK (cue_end_index >= cue_start_index),
+    start_ms INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+    motion_kind TEXT NOT NULL CHECK (
+      motion_kind IN ('none', 'pan-left', 'pan-right', 'zoom-in', 'zoom-out')
+    ),
+    motion_amount_ppm INTEGER NOT NULL CHECK (motion_amount_ppm BETWEEN 0 AND 1000000),
+    fade_ms INTEGER NOT NULL CHECK (fade_ms BETWEEN 0 AND 10000),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+    UNIQUE (episode_id, timeline_hash, segment_index),
+    CHECK (motion_kind <> 'none' OR motion_amount_ppm = 0),
+    CHECK (fade_ms * 2 <= end_ms - start_ms)
+  ) STRICT;
+
+  CREATE INDEX visual_segments_timeline_order
+    ON visual_segments(episode_id, timeline_hash, segment_index);
+
+  CREATE UNIQUE INDEX asset_candidates_id_asset
+    ON asset_candidates(id, asset_id);
+
+  CREATE TABLE visual_segment_assets (
+    visual_segment_id TEXT NOT NULL REFERENCES visual_segments(id) ON DELETE CASCADE,
+    asset_index INTEGER NOT NULL CHECK (asset_index >= 0),
+    asset_id TEXT NOT NULL REFERENCES assets(id),
+    selected_candidate_id TEXT,
+    candidate_review_revision INTEGER,
+    PRIMARY KEY (visual_segment_id, asset_index),
+    UNIQUE (visual_segment_id, asset_id),
+    CHECK (
+      (selected_candidate_id IS NULL AND candidate_review_revision IS NULL)
+      OR (selected_candidate_id IS NOT NULL AND candidate_review_revision >= 1)
+    ),
+    FOREIGN KEY (selected_candidate_id, asset_id)
+      REFERENCES asset_candidates(id, asset_id)
+  ) STRICT;
+
+  CREATE TRIGGER visual_segment_assets_same_series
+  BEFORE INSERT ON visual_segment_assets
+  BEGIN
+    SELECT RAISE(ABORT, 'visual segment asset must belong to episode series')
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM visual_segments segment
+      JOIN episodes episode ON episode.id = segment.episode_id
+      JOIN assets asset ON asset.id = NEW.asset_id
+      WHERE segment.id = NEW.visual_segment_id
+        AND asset.series_project_id = episode.series_project_id
+    );
+  END;
+
+  CREATE TRIGGER visual_segment_assets_same_series_on_update
+  BEFORE UPDATE ON visual_segment_assets
+  BEGIN
+    SELECT RAISE(ABORT, 'visual segment asset must belong to episode series')
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM visual_segments segment
+      JOIN episodes episode ON episode.id = segment.episode_id
+      JOIN assets asset ON asset.id = NEW.asset_id
+      WHERE segment.id = NEW.visual_segment_id
+        AND asset.series_project_id = episode.series_project_id
+    );
+  END;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
   MIGRATION_10,
+  MIGRATION_11,
 ];
 
 export interface NarralumeDatabase {

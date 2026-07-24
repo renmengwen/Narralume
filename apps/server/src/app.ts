@@ -60,6 +60,12 @@ import {
   IMAGE_CANDIDATE_JOB_TYPE,
 } from "./image-candidate-job.js";
 import type { OpenAiImageConfig } from "./image-provider.js";
+import {
+  listVisualSegments,
+  putVisualSegment,
+  type PutVisualSegmentInput,
+  VisualSegmentStoreError,
+} from "./visual-segment-store.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
@@ -113,6 +119,16 @@ interface ReviewAssetCandidateBody {
   expectedRevision?: unknown;
   action?: unknown;
   note?: unknown;
+}
+interface PutVisualSegmentBody {
+  timelineHash?: unknown;
+  cueStartIndex?: unknown;
+  cueEndIndex?: unknown;
+  motionKind?: unknown;
+  motionAmountPpm?: unknown;
+  fadeMs?: unknown;
+  expectedRevision?: unknown;
+  assets?: unknown;
 }
 
 function imageProviderFromEnvironment(): OpenAiImageConfig | null {
@@ -434,6 +450,54 @@ export function buildApp(options: BuildAppOptions = {}) {
       }
     },
   );
+
+  app.put<{
+    Params: { episodeId: string; segmentIndex: string };
+    Body: PutVisualSegmentBody;
+  }>("/api/episodes/:episodeId/visual-segments/:segmentIndex", async (request, reply) => {
+    try {
+      const segmentIndex = Number(request.params.segmentIndex);
+      if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
+        throw new VisualSegmentStoreError(400, "视觉段序号必须是非负安全整数");
+      }
+      const input = {
+        timelineHash: request.body?.timelineHash,
+        cueStartIndex: request.body?.cueStartIndex,
+        cueEndIndex: request.body?.cueEndIndex,
+        motionKind: request.body?.motionKind,
+        motionAmountPpm: request.body?.motionAmountPpm,
+        fadeMs: request.body?.fadeMs,
+        expectedRevision: request.body?.expectedRevision,
+        assets: request.body?.assets,
+      } as PutVisualSegmentInput;
+      const segment = putVisualSegment(connection.database, request.params.episodeId, segmentIndex, input);
+      return { ok: true, message: "视觉段已保存", segment };
+    } catch (error) {
+      if (error instanceof VisualSegmentStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{
+    Params: { episodeId: string };
+    Querystring: { timelineHash?: string };
+  }>("/api/episodes/:episodeId/visual-segments", async (request, reply) => {
+    try {
+      const timelineHash = request.query.timelineHash;
+      if (typeof timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(timelineHash)) {
+        throw new VisualSegmentStoreError(400, "时间轴哈希必须是 64 位小写十六进制");
+      }
+      const items = listVisualSegments(connection.database, request.params.episodeId, timelineHash);
+      return { ok: true, items, total: items.length };
+    } catch (error) {
+      if (error instanceof VisualSegmentStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
 
   const episodeIdForRoute = (seriesId: string, episodeIndex: string) => {
     const index = Number(episodeIndex);

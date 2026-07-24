@@ -26,16 +26,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`cef1a1e`（P6-03 启动总账；本冻结控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P6-03 首版 6 路径仍 staged、零额外改动；双 Review 后只开放发布紧前身份/取消竞态修复。
-- 最近验证：2026-07-25 P6-03 首轮 Spec/Code Quality 均 FAIL，同一 P1；正常全量三门与真实 Gate 仍 GREEN，首版 candidate 失效。
+- 工作区：`dev` 仅本 Ledger 待提交；P6-03 第二版保持原 6 路径 staged，零 unstaged/untracked，修复写者已停写。
+- 最近验证：2026-07-25 P6-03 第二版全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 与 4 项竞态回归 GREEN。
 - 当前 Task：`P6-03`
-- 唯一下一动作：提交并推送本 findings 记录；Core Fix Writer 在目录发布紧前重新复算 current permit/visual/chunks/rows 并检查取消，补批准/视觉变化与最后窗口取消回归。
+- 唯一下一动作：提交并推送本第二版冻结记录；首轮 Spec/Quality Reviewer 各自只复审同一 P1。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P6-03/Fix-Publish | Core Fix Writer | `D:\code3\Narralume-worktrees\P6-03` / `codex/p6-03` / `2124925` | `final-video.ts/.test.ts` | 发布紧前 current identity/rows 重算、Abort 检查与竞态回归 | final video staging / target | `implementing` |
+| P6-03/Fix-Publish | Core Fix Writer（已停写） | `D:\code3\Narralume-worktrees\P6-03` / `codex/p6-03` / `2124925` | `final-video.ts/.test.ts` | 发布紧前 current identity/rows 重算、Abort 检查与竞态回归 | final video staging / target | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -68,7 +68,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P5-04 联系表与真实审核 | `complete` | P5-03 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:386df1db164ddba85068409b8ad43529127c17c4:951cbe94291aa14fb52cf4eee28096e68925e04d`；首版失效 | `b29e82eeefbe979276cb64a7461baa5de4742f1e`；首版 `6793f9d` | PASS；首轮已通过 Spec/Phase 5 范围+第二版两 P1 最小复审 | PASS；两个 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 89/89、web 6/6；真实 Gate 291,200ms、10 段、重启确定、reject/缺图/发布故障阻断 | 冻结 `d40b69c`；集成 `f63972c` | Phase 5 complete；Buffer 预分配风险非阻断，进入 P6-01 |
 | P6-01 唯一 9:16 模板 | `complete` | P5-04 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:f63972c092e76b3adc12f2ea79e36d945d980653:a73eaf03dcefcad0273a65e517f989709c198e4b`；首版失效 | `404a223634115c3e2bf708d2af15ac1c307fd5d6`；首版 `0c213d2` | PASS；首轮已通过范围+第二版 4 findings 最小复审 | PASS；首轮已通过范围+第二版 2 findings 最小复审 | 集成态全量三门/diff GREEN，server 92/92、web 6/6；P6 Gate 10,000ms/201,217 bytes、P4 Gate 220,960ms/3,102,618 bytes 均 GREEN | 冻结 `84a92e4`；集成 `8f4cf81` | 无新 findings；进入 P6-02 |
 | P6-02 分片与身份 | `complete` | P6-01 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:8f4cf8171e7e759ff6b57efbc7f2b43df2db3469:2d605acc33db23f386633d0a53457382fab07eaa`；前两版失效 | `9cddae3e178308c7286d699408fdf40a08961782`；第二版 `dbccc37503c2128b10f9061aea5b9187ab788b9f`；首版 `df963cc3aca6cdc9878fdfed387e079081bdc896` | PASS，绑定第二版 Ledger/revision；继续有效 | PASS，绑定第三版 Ledger/revision；全部 findings 关闭 | 集成态全量三门/diff GREEN，server 98/98、web 6/6；真实 Gate 220,541ms、2 片、重启全复用、局部只重渲目标片 | 冻结 `7b335c1`；集成 `2124925` | 无新 findings；进入 P6-03 |
-| P6-03 concat 与导出清单 | `implementing` | P6-02 | Core Fix Writer；Ledger 仅 Coordinator | 首版 `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:0399f644659980cc89233df7548996f82acd17bb` 已失效 | `2d501c074d3884f90834d629a5e96c0dcdd3986d` | FAIL；P1 发布前 current identity 重算过早 | FAIL；P1 最终 hash 后取消可穿透发布 | 首版全量三门/diff与真实 Gate GREEN，但不能封闭最后发布窗口 | - | 只修同一 P1；其他已通过范围不重复重做 |
+| P6-03 concat 与导出清单 | `frozen_for_review` | P6-02 | Core Fix Writer 已停写；Ledger 仅 Coordinator | 第二版 `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:ebe2f45d4aa5fa0ee6b77d528d2d044b6bf979a3`；首版失效 | 待本控制提交 SHA；首版 `2d501c074d3884f90834d629a5e96c0dcdd3986d` | 首轮其余范围有效；待最小复审 | 首轮其余范围有效；待最小复审 | 全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 与 4 项竞态回归 GREEN | - | 只复审发布紧前竞态 P1 |
 | P6-04 真实渲染恢复门禁 | `queued` | P6-03 | - | - | - | - | - | - | - | - |
 | P7-01 真实样片 E2E | `queued` | P6-04 | - | - | - | - | - | - | - | - |
 | P7-02 可恢复项目包 | `queued` | P7-01 | - | - | - | - | - | - | - | - |
@@ -197,6 +197,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P6-02 完成并启动 P6-03 | P6-02 中文业务提交 `7b335c1`，集成提交 `2124925`；集成态 typecheck/test/build/diff、server 98/98、web 6/6 与真实 220,541ms 分片 Gate 全部 GREEN。安全移除 P6-02 Junction 后，从集成提交建立 `D:\code3\Narralume-worktrees\P6-03` / `codex/p6-03`；P6-03 首版只做已登记分片的确定性 concat、最终视频复验和版本化清单，不提前做 P6-04 故障恢复总门禁或 Phase 7 项目包。 |
 | 2026-07-25 P6-03 candidate | `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:0399f644659980cc89233df7548996f82acd17bb`；恰好 6 个 staged 租约路径，零 unstaged/untracked。从当前批准稿/视觉计划复算 expected chunk identity，精确读取并复验 canonical path/row/probe/hash/bytes/duration，忽略计划外旧高 index；staging 安全相对输入视图+`-safe 1` stream-copy；`final-export-v1` identity 与版本化 manifest 排除路径/时间/随机/机器版本；MP4+manifest 文件 fsync 后通过 target→backup→staged 目录切换成对发布，发布前重查当前身份与分片文件；默认 Job/API 门禁接线。Coordinator 全量三门/diff GREEN，server 100/100、web 6/6；真实 final hash `c2194844d16c195ea141497900667ece30d706088422e6fb8a41d8c61651d910`，220,579ms、3,343,332 bytes，重启字节稳定、旧行忽略、缺片/篡改阻断且旧成片不变。 |
 | 2026-07-25 P6-03 首轮双 Review | Spec FAIL + Code Quality FAIL，均绑定 Ledger `2d501c074d3884f90834d629a5e96c0dcdd3986d` 与首版 revision，Review 前后 tree 不变。同一 P1：current snapshot/rows 在异步逐片 probe/hash 前加载，全部复验后到 `publishDirectory` 紧前未重新 load/compare；批准撤回、视觉/候选变化或最后一次 hash 期间取消可让旧身份 staging 仍替换 target，Job 随后才显示 cancelled。只开放发布紧前 current identity/rows 重算、Abort 检查与竞态回归；其余 expected chunks、safe concat、manifest、成对发布、重启复用和真实 Gate 继续有效。 |
+| 2026-07-25 P6-03 第二版 candidate | `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:ebe2f45d4aa5fa0ee6b77d528d2d044b6bf979a3`；原 6 个 staged 路径，零 unstaged/untracked。全部最终异步 probe/hash 后显式检查取消，再重新 load 当前批准/视觉/候选 expected chunks、查询 rows，并比较有序 renderHash/final identity/完整记录与已复验文件信息；再次检查取消后才发布。新增最后 probe 返回时取消、最终复验期间撤回批准两项竞态回归，均断言零 publish rename、旧 pair 字节不变、staging 清空。全量三门/diff GREEN，server 102/102、web 6/6，真实 Gate 与 4 项定向回归 GREEN。 |
 
 ## 决策与剩余风险
 

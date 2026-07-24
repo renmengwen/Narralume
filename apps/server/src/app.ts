@@ -4,6 +4,12 @@ import type { Readable } from "node:stream";
 
 import { BookImportError, importBookText } from "./book-import.js";
 import { BookLibraryError, listBooks, listChapters, readChapterText } from "./book-library.js";
+import {
+  ChapterEventError,
+  listChapterEvents,
+  replaceChapterEvents,
+  type ChapterEventInput,
+} from "./chapter-event-store.js";
 import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
@@ -24,6 +30,10 @@ interface CreateJobBody {
   priority?: unknown;
   maxAttempts?: unknown;
   runAfter?: unknown;
+}
+
+interface ReplaceChapterEventsBody {
+  events?: unknown;
 }
 
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
@@ -52,6 +62,25 @@ function optionalInteger(value: unknown, message: string) {
 
 export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? true });
+  app.setErrorHandler((error, _request, reply) => {
+    const possibleStatus = typeof error === "object" && error !== null && "statusCode" in error
+      ? (error as { statusCode?: unknown }).statusCode
+      : undefined;
+    const statusCode = typeof possibleStatus === "number" && possibleStatus >= 400 && possibleStatus < 600
+      ? possibleStatus
+      : 500;
+    if (statusCode >= 500) app.log.error(error instanceof Error ? error : { error }, "请求处理失败");
+    const message = statusCode === 400
+      ? "请求 JSON 或参数无效"
+      : statusCode === 413
+        ? "请求内容过大"
+        : statusCode === 415
+          ? "请求内容类型不支持"
+          : statusCode >= 500
+            ? "服务处理失败，请稍后重试"
+            : "请求无法处理";
+    return reply.code(statusCode).send({ ok: false, message });
+  });
   const dataRoot = resolveDataRoot(options.dataRoot);
   const connection = openDatabase(dataRoot);
   const jobHandlers = options.jobHandlers ?? {};
@@ -216,6 +245,49 @@ export function buildApp(options: BuildAppOptions = {}) {
       }
     },
   );
+
+  app.put<{
+    Params: { bookId: string; chapterId: string };
+    Body: ReplaceChapterEventsBody;
+  }>("/api/books/:bookId/chapters/:chapterId/events", async (request, reply) => {
+    try {
+      const events = await replaceChapterEvents(
+        connection.database,
+        dataRoot,
+        request.params.bookId,
+        request.params.chapterId,
+        request.body?.events as readonly ChapterEventInput[],
+      );
+      return { ok: true, message: "章节事件已保存", items: events, total: events.length };
+    } catch (error) {
+      if (error instanceof ChapterEventError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{
+    Params: { bookId: string; chapterId: string };
+    Querystring: { limit?: string; offset?: string };
+  }>("/api/books/:bookId/chapters/:chapterId/events", async (request, reply) => {
+    try {
+      const result = await listChapterEvents(
+        connection.database,
+        dataRoot,
+        request.params.bookId,
+        request.params.chapterId,
+        pagination(request.query.limit, 50, 1, 100),
+        pagination(request.query.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+      );
+      return { ok: true, ...result };
+    } catch (error) {
+      if (error instanceof BookLibraryError || error instanceof ChapterEventError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
 
   return app;
 }

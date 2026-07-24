@@ -136,27 +136,48 @@ export async function indexBookChapters(options: IndexOptions) {
   }
   finish(offset);
 
+  const existing = options.database.prepare(
+    `SELECT id, book_id, chapter_index, chapter_number, title,
+            byte_start, byte_end, char_count, content_hash
+     FROM chapters WHERE book_id = ? ORDER BY chapter_index`,
+  ).all(options.book.id) as unknown as ChapterRecord[];
+  const unchanged = existing.length === chapters.length && existing.every((saved, index) => {
+    const next = chapters[index];
+    return next !== undefined &&
+      saved.id === next.id &&
+      saved.book_id === next.book_id &&
+      saved.chapter_index === next.chapter_index &&
+      saved.chapter_number === next.chapter_number &&
+      saved.title === next.title &&
+      saved.byte_start === next.byte_start &&
+      saved.byte_end === next.byte_end &&
+      saved.char_count === next.char_count &&
+      saved.content_hash === next.content_hash;
+  });
+
   options.database.exec("BEGIN IMMEDIATE");
   try {
-    options.database.prepare("DELETE FROM chapters WHERE book_id = ?").run(options.book.id);
-    const insert = options.database.prepare(
-      `INSERT INTO chapters (
-        id, book_id, chapter_index, chapter_number, title,
-        byte_start, byte_end, char_count, content_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    for (const chapter of chapters) {
-      insert.run(
-        chapter.id,
-        chapter.book_id,
-        chapter.chapter_index,
-        chapter.chapter_number,
-        chapter.title,
-        chapter.byte_start,
-        chapter.byte_end,
-        chapter.char_count,
-        chapter.content_hash,
+    if (!unchanged) {
+      options.database.prepare("DELETE FROM chapters WHERE book_id = ?").run(options.book.id);
+      const insert = options.database.prepare(
+        `INSERT INTO chapters (
+          id, book_id, chapter_index, chapter_number, title,
+          byte_start, byte_end, char_count, content_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      for (const chapter of chapters) {
+        insert.run(
+          chapter.id,
+          chapter.book_id,
+          chapter.chapter_index,
+          chapter.chapter_number,
+          chapter.title,
+          chapter.byte_start,
+          chapter.byte_end,
+          chapter.char_count,
+          chapter.content_hash,
+        );
+      }
     }
     options.database
       .prepare("UPDATE books SET encoding = ?, import_status = 'ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?")

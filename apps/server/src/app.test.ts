@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,6 +103,93 @@ test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
     assert.equal(missingBook.json().message, "书籍不存在");
     assert.equal(missingChapter.statusCode, 404);
     assert.equal(missingChapter.json().message, "章节不存在");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("章节事件 HTTP 合同重算证据且重复导入不清空事件", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-events-"));
+  const app = buildApp({ dataRoot, logger: false });
+  const payload = Buffer.from("第一章\n宝玉来到大观园。", "utf8");
+
+  try {
+    const imported = await app.inject({
+      method: "POST",
+      url: "/api/books/import",
+      headers: { "content-type": "text/plain" },
+      payload,
+    });
+    const bookId = imported.json().book.id as string;
+    const chapters = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const evidence = Buffer.from("宝玉", "utf8");
+    const sourceByteStart = payload.indexOf(evidence);
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events`,
+      payload: {
+        events: [{
+          type: "character",
+          payload: { name: "宝玉", detail: "宝玉出现" },
+          sources: [{ byteStart: sourceByteStart, byteEnd: sourceByteStart + evidence.length }],
+        }],
+      },
+    });
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.json().message, "章节事件已保存");
+    assert.equal(
+      saved.json().items[0].sources[0].sourceHash,
+      createHash("sha256").update(evidence).digest("hex"),
+    );
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/books/import",
+      headers: { "content-type": "text/plain" },
+      payload,
+    });
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events?limit=1&offset=0`,
+    });
+    const invalid = await app.inject({
+      method: "PUT",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events`,
+      payload: { events: [{ type: "unknown", payload: {}, sources: [] }] },
+    });
+    const duplicateEvidence = await app.inject({
+      method: "PUT",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events`,
+      payload: {
+        events: [{
+          type: "character",
+          payload: { name: "重复证据" },
+          sources: [
+            { byteStart: sourceByteStart, byteEnd: sourceByteStart + evidence.length },
+            { byteStart: sourceByteStart, byteEnd: sourceByteStart + evidence.length },
+          ],
+        }],
+      },
+    });
+    const malformedJson = await app.inject({
+      method: "PUT",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events`,
+      headers: { "content-type": "application/json" },
+      payload: "{",
+    });
+    assert.equal(duplicate.statusCode, 200);
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.json().total, 1);
+    assert.deepEqual(listed.json().items[0].payload, { name: "宝玉", detail: "宝玉出现" });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.json().message, "章节事件类型无效");
+    assert.equal(duplicateEvidence.statusCode, 422);
+    assert.equal(duplicateEvidence.json().message, "同一事件不能重复引用相同原文范围");
+    assert.equal(JSON.stringify(duplicateEvidence.json()).includes("SQLITE"), false);
+    assert.equal(malformedJson.statusCode, 400);
+    assert.deepEqual(malformedJson.json(), { ok: false, message: "请求 JSON 或参数无效" });
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

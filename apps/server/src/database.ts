@@ -78,7 +78,37 @@ const MIGRATION_3 = `
   ) STRICT;
 `;
 
-const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3];
+const MIGRATION_4 = `
+  CREATE TABLE chapter_events (
+    id TEXT PRIMARY KEY,
+    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    event_index INTEGER NOT NULL CHECK (event_index >= 0),
+    occurrence INTEGER NOT NULL CHECK (occurrence >= 0),
+    event_type TEXT NOT NULL CHECK (
+      event_type IN ('character', 'location', 'prop', 'causality', 'revelation', 'suspense')
+    ),
+    payload_json TEXT NOT NULL CHECK (length(payload_json) > 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    UNIQUE (chapter_id, event_index)
+  ) STRICT;
+
+  CREATE TABLE chapter_event_sources (
+    event_id TEXT NOT NULL REFERENCES chapter_events(id) ON DELETE CASCADE,
+    source_index INTEGER NOT NULL CHECK (source_index >= 0),
+    source_byte_start INTEGER NOT NULL CHECK (source_byte_start >= 0),
+    source_byte_end INTEGER NOT NULL CHECK (source_byte_end > source_byte_start),
+    source_hash TEXT NOT NULL CHECK (
+      length(source_hash) = 64 AND source_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    PRIMARY KEY (event_id, source_index),
+    UNIQUE (event_id, source_byte_start, source_byte_end)
+  ) STRICT;
+
+  CREATE INDEX chapter_events_chapter_order
+    ON chapter_events(chapter_id, event_index);
+`;
+
+const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4];
 
 export interface NarralumeDatabase {
   database: DatabaseSync;

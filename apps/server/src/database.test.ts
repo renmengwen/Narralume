@@ -48,6 +48,32 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
           .run("chapter_invalid_range", "book_sha256", 1, "无效范围", 20, 12, 4, "bad_hash"),
       /CHECK constraint failed/,
     );
+    first.database.prepare(
+      `INSERT INTO chapter_events (
+         id, chapter_id, event_index, occurrence, event_type, payload_json, created_at
+       ) VALUES ('event_1', 'chapter_1', 0, 0, 'character', '{"name":"人物"}', 1)`,
+    ).run();
+    first.database.prepare(
+      `INSERT INTO chapter_event_sources (
+         event_id, source_index, source_byte_start, source_byte_end, source_hash
+       ) VALUES ('event_1', 0, 0, 3, ?)`,
+    ).run("a".repeat(64));
+    assert.throws(
+      () => first.database.prepare(
+        `INSERT INTO chapter_events (
+           id, chapter_id, event_index, occurrence, event_type, payload_json, created_at
+         ) VALUES ('event_bad', 'chapter_1', 1, 0, 'unknown', '{}', 1)`,
+      ).run(),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => first.database.prepare(
+        `INSERT INTO chapter_event_sources (
+           event_id, source_index, source_byte_start, source_byte_end, source_hash
+         ) VALUES ('event_1', 1, 3, 4, 'ABC')`,
+      ).run(),
+      /CHECK constraint failed/,
+    );
     first.close();
 
     const reopened = openDatabase(dataRoot);
@@ -57,12 +83,16 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
       .get();
     reopened.database.prepare("DELETE FROM books WHERE id = ?").run("book_sha256");
     const chapterCount = reopened.database.prepare("SELECT COUNT(*) AS count FROM chapters").get();
+    const eventCount = reopened.database.prepare("SELECT COUNT(*) AS count FROM chapter_events").get();
+    const sourceCount = reopened.database.prepare("SELECT COUNT(*) AS count FROM chapter_event_sources").get();
     reopened.close();
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 3);
+    assert.equal(migration?.version, 4);
     assert.equal(chapterCount?.count, 0);
+    assert.equal(eventCount?.count, 0);
+    assert.equal(sourceCount?.count, 0);
     assert.equal((await readFile(join(dataRoot, "narralume.sqlite3"))).length > 0, true);
   } finally {
     await rm(dataRoot, { recursive: true, force: true });
@@ -92,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (4)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (5)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -104,12 +134,14 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
   }
 });
 
-test("既有 migration v2 数据库可原地升级 checkpoint 表", async () => {
+test("既有 migration v2 数据库可原地升级 checkpoint 与章节事件表", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE chapter_event_sources");
+    current.database.exec("DROP TABLE chapter_events");
     current.database.exec("DROP TABLE job_checkpoints");
-    current.database.prepare("DELETE FROM schema_migrations WHERE version = 3").run();
+    current.database.prepare("DELETE FROM schema_migrations WHERE version >= 3").run();
     current.close();
 
     const upgraded = openDatabase(dataRoot);
@@ -119,8 +151,12 @@ test("既有 migration v2 数据库可原地升级 checkpoint 表", async () => 
     const checkpointTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'job_checkpoints'")
       .get();
-    assert.equal(migration?.version, 3);
+    const eventTable = upgraded.database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
+      .get();
+    assert.equal(migration?.version, 4);
     assert.equal(checkpointTable?.name, "job_checkpoints");
+    assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
   } finally {
     await rm(dataRoot, { recursive: true, force: true });

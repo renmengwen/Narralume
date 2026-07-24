@@ -84,7 +84,7 @@ export function buildNineSixteenFfmpegArgs(input: NineSixteenRenderInput, render
     "-v", "error", "-y", ...inputs, "-i", resolve(input.audioPath),
     "-filter_complex", filters.join(";"),
     "-map", "[subtitled]", "-map", `${input.scenes.length}:a:0`,
-    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", "25",
     "-c:a", "aac", "-shortest", "-movflags", "+faststart", renderedOutputPath,
   ];
 }

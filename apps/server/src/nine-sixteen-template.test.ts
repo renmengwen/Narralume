@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 
+import { probeNineSixteenVideo, runVideoProcess } from "./ffmpeg-video.js";
 import { JobCancelledError } from "./job-worker.js";
 import {
   buildNineSixteenFfmpegArgs,
@@ -45,8 +46,8 @@ test("9:16 模板覆盖五类运镜、编码参数与安全边界", async () => 
     assert.match(filter, /1\+0\.100000\*\(on\/49\)/);
     assert.match(filter, /1\+0\.100000\*\(1-on\/49\)/);
     assert.match(filter, /concat=n=5:v=1:a=0\[visual\];\[visual\]ass=timeline\.ass/);
-    assert.deepEqual(args.slice(-12), [
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25",
+    assert.deepEqual(args.slice(-14), [
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", "25",
       "-c:a", "aac", "-shortest", "-movflags", "+faststart", outputPath,
     ]);
 
@@ -115,6 +116,39 @@ test("9:16 模板覆盖五类运镜、编码参数与安全边界", async () => 
     }), /rename failed/);
     assert.equal(await readFile(outputPath, "utf8"), "durable-old");
     assert.deepEqual((await readdir(root)).filter((name) => name.includes(".tmp.mp4")), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("9:16 模板把真实 JPEG 直接渲染为 yuv420p", async () => {
+  const root = await mkdtemp(join(tmpdir(), "narralume-nine-sixteen-jpeg-"));
+  try {
+    const imagePath = join(root, "image.jpg");
+    const audioPath = join(root, "audio.wav");
+    const assPath = join(root, "timeline.ass");
+    const outputPath = join(root, "output.mp4");
+    await runVideoProcess("ffmpeg", [
+      "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x8b674c:s=320x568",
+      "-frames:v", "1", imagePath,
+    ]);
+    await runVideoProcess("ffmpeg", [
+      "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+      "-c:a", "pcm_s16le", audioPath,
+    ]);
+    await writeFile(assPath, "[Script Info]\nScriptType: v4.00+\n\n[Events]\n", "utf8");
+
+    await renderNineSixteenTemplate({
+      scenes: [{ imagePath, durationMs: 1_000, motionKind: "none", motionAmountPpm: 0, fadeMs: 0 }],
+      audioPath,
+      assPath,
+      outputPath,
+    });
+
+    assert.deepEqual(await probeNineSixteenVideo(outputPath), {
+      bytes: (await stat(outputPath)).size,
+      durationMs: 1_000,
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

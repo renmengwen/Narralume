@@ -43,11 +43,13 @@ export interface ProjectPackageManifest {
 interface PackageOps {
   backup: typeof backup;
   rename: typeof rename;
+  remove: typeof rm;
   syncDirectory(path: string): Promise<void>;
   afterCopy?(relativePath: string): Promise<void>;
+  afterPayloadCopied?(): Promise<void>;
 }
 
-const defaultOps: PackageOps = { backup, rename, syncDirectory };
+const defaultOps: PackageOps = { backup, rename, remove: rm, syncDirectory };
 
 function safeRelativePath(value: string) {
   if (!value || value.includes("\\") || /[:*?"<>|]/u.test(value) || isAbsolute(value) || /^[A-Za-z]:/u.test(value) || value.startsWith("//") ||
@@ -62,6 +64,49 @@ function safeRelativePath(value: string) {
 function inside(root: string, path: string) {
   const value = relative(root, path);
   return value !== "" && value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
+}
+
+async function physicalPath(pathValue: string) {
+  let cursor = resolve(pathValue);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      await lstat(cursor);
+      return resolve(await realpath(cursor), ...missing);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(cursor);
+      if (parent === cursor) throw error;
+      missing.unshift(basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function sameOrInside(parent: string, child: string) {
+  return parent === child || inside(parent, child);
+}
+
+async function assertSeparateTrees(leftValue: string, rightValue: string) {
+  const [left, right] = await Promise.all([physicalPath(leftValue), physicalPath(rightValue)]);
+  if (sameOrInside(left, right) || sameOrInside(right, left)) {
+    throw new Error("源数据、项目包与恢复目标不能相同或互为父子目录");
+  }
+}
+
+async function assertRealDirectory(pathValue: string, label: string) {
+  const path = resolve(pathValue);
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink() || await realpath(path) !== path) {
+    throw new Error(`${label} 必须是真实目录`);
+  }
+}
+
+async function pathExists(path: string) {
+  try { await lstat(path); return true; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function controlledPath(root: string, relativePath: string) {
@@ -226,9 +271,11 @@ function enumerateProject(database: Database, finalManifestPath: string, finalMa
   const books = database.prepare("SELECT id, original_file_path, original_file_hash FROM books ORDER BY id").all() as
     Array<{ id: string; original_file_path: string; original_file_hash: string }>;
   if (books.length !== 1 || books[0]!.id !== series[0]!.book_id) throw new Error("首版项目包数据根必须只包含目标项目原文");
-  const episode = database.prepare("SELECT series_project_id FROM episodes WHERE id = ?").get(finalManifest.episodeId) as
-    { series_project_id: string } | undefined;
-  if (!episode || episode.series_project_id !== series[0]!.id) throw new Error("最终视频不属于唯一系列项目");
+  const episodes = database.prepare("SELECT id, series_project_id FROM episodes ORDER BY id").all() as
+    Array<{ id: string; series_project_id: string }>;
+  if (episodes.length !== 1 || episodes[0]!.id !== finalManifest.episodeId || episodes[0]!.series_project_id !== series[0]!.id) {
+    throw new Error("首版项目包只支持恰好一个目标分集的数据根");
+  }
   if (finalManifestPath !== `episodes/${finalManifest.episodeId}/exports/${finalManifest.exportHash.slice(0, 2)}/${finalManifest.exportHash}/manifest.json`) {
     throw new Error("最终视频清单不是规范内容寻址路径");
   }
@@ -244,17 +291,21 @@ function enumerateProject(database: Database, finalManifestPath: string, finalMa
     "SELECT relative_path, file_hash, bytes FROM audio_segments WHERE episode_id = ? AND timeline_hash = ? ORDER BY segment_index",
   ).all(finalManifest.episodeId, finalManifest.timelineHash) as Array<{ relative_path: string; file_hash: string; bytes: number }>;
   if (!audio.length) throw new Error("当前项目没有音频段");
+  const allAudio = (database.prepare("SELECT COUNT(*) AS count FROM audio_segments").get() as { count: number }).count;
+  if (allAudio !== audio.length) throw new Error("数据根包含目标时间轴之外的音频文件记录");
   audio.forEach((row) => addSpec(specs, row.relative_path, "audio-segment", row.bytes, row.file_hash));
   addSpec(specs, `episodes/${finalManifest.episodeId}/audio/${finalManifest.timelineHash}.srt`, "subtitle-srt");
   addSpec(specs, `episodes/${finalManifest.episodeId}/audio/${finalManifest.timelineHash}.ass`, "subtitle-ass");
   const images = database.prepare(
-    `SELECT DISTINCT candidate.relative_path, candidate.file_hash, candidate.bytes
+    `SELECT DISTINCT candidate.id, candidate.relative_path, candidate.file_hash, candidate.bytes
      FROM visual_segments segment
      JOIN visual_segment_assets relation ON relation.visual_segment_id = segment.id
      JOIN asset_candidates candidate ON candidate.id = relation.selected_candidate_id
      WHERE segment.episode_id = ? AND segment.timeline_hash = ? ORDER BY candidate.relative_path`,
-  ).all(finalManifest.episodeId, finalManifest.timelineHash) as Array<{ relative_path: string; file_hash: string; bytes: number }>;
+  ).all(finalManifest.episodeId, finalManifest.timelineHash) as Array<{ id: string; relative_path: string; file_hash: string; bytes: number }>;
   if (!images.length) throw new Error("当前视觉计划没有选中图片");
+  const allCandidates = (database.prepare("SELECT COUNT(*) AS count FROM asset_candidates").get() as { count: number }).count;
+  if (allCandidates !== images.length) throw new Error("数据根包含当前视觉计划之外的候选图片文件记录");
   images.forEach((row) => addSpec(specs, row.relative_path, "selected-image", row.bytes, row.file_hash));
   const chunks = database.prepare(
     `SELECT render_hash, chunk_index, relative_path, file_hash, bytes FROM render_chunks
@@ -266,6 +317,17 @@ function enumerateProject(database: Database, finalManifestPath: string, finalMa
     return !chunk || row.render_hash !== chunk.renderHash || row.chunk_index !== chunk.index || row.relative_path !== chunk.relativePath ||
       row.file_hash !== chunk.fileHash || row.bytes !== chunk.bytes;
   })) throw new Error("最终清单分片与当前数据库不一致");
+  const allChunks = (database.prepare("SELECT COUNT(*) AS count FROM render_chunks").get() as { count: number }).count;
+  if (allChunks !== chunks.length) throw new Error("数据根包含当前渲染计划之外的分片文件记录");
+  const allCues = (database.prepare("SELECT COUNT(*) AS count FROM subtitle_cues").get() as { count: number }).count;
+  const currentCues = (database.prepare(
+    "SELECT COUNT(*) AS count FROM subtitle_cues WHERE episode_id = ? AND timeline_hash = ?",
+  ).get(finalManifest.episodeId, finalManifest.timelineHash) as { count: number }).count;
+  const allVisuals = (database.prepare("SELECT COUNT(*) AS count FROM visual_segments").get() as { count: number }).count;
+  const currentVisuals = (database.prepare(
+    "SELECT COUNT(*) AS count FROM visual_segments WHERE episode_id = ? AND timeline_hash = ?",
+  ).get(finalManifest.episodeId, finalManifest.timelineHash) as { count: number }).count;
+  if (allCues !== currentCues || allVisuals !== currentVisuals) throw new Error("数据根包含目标时间轴之外的字幕或视觉记录");
   chunks.forEach((row) => addSpec(specs, row.relative_path, "render-chunk", row.bytes, row.file_hash));
   addSpec(specs, finalManifest.finalVideo.relativePath, "final-video", finalManifest.finalVideo.bytes, finalManifest.finalVideo.fileHash);
   addSpec(specs, finalManifestPath, "final-manifest");
@@ -298,24 +360,37 @@ async function publishDirectory(target: string, staging: string, ops: PackageOps
   const backupPath = `${target}.backup`;
   if (await assertDirectoryTarget(backupPath)) throw new Error("项目包目标存在未恢复备份");
   const existed = await assertDirectoryTarget(target);
+  const stagingInfo = await lstat(staging);
   let moved = false;
-  let published = false;
+  let installed = false;
   try {
     if (existed) { await ops.rename(target, backupPath); moved = true; }
     await ops.rename(staging, target);
-    published = true;
-    await ops.syncDirectory(dirname(target));
-    if (moved) {
-      await rm(backupPath, { recursive: true });
-      await ops.syncDirectory(dirname(target));
+    const targetInfo = await lstat(target);
+    if (targetInfo.dev !== stagingInfo.dev || targetInfo.ino !== stagingInfo.ino || !targetInfo.isDirectory() || targetInfo.isSymbolicLink()) {
+      throw new Error("项目包目标在 rename 后身份异常");
     }
+    installed = true;
+    await ops.syncDirectory(dirname(target));
   } catch (error) {
-    if (published) await rm(target, { recursive: true, force: true }).catch(() => undefined);
+    if (installed) {
+      const current = await lstat(target).catch(() => undefined);
+      if (current?.dev === stagingInfo.dev && current.ino === stagingInfo.ino) {
+        await ops.remove(target, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
     if (moved) {
       await ops.rename(backupPath, target).catch(() => undefined);
       await ops.syncDirectory(dirname(target)).catch(() => undefined);
     }
     throw error;
+  }
+  if (!moved) return;
+  try {
+    await ops.remove(backupPath, { recursive: true });
+    await ops.syncDirectory(dirname(target));
+  } catch (error) {
+    throw new Error("新项目包已发布，但旧包清理未完整完成", { cause: error });
   }
 }
 
@@ -328,6 +403,10 @@ export async function createProjectPackage(
   const dataRoot = resolve(dataRootValue);
   const packagePath = resolve(input.packagePath);
   safeRelativePath(input.finalManifestRelativePath);
+  await assertRealDirectory(dataRoot, "数据根");
+  await assertSeparateTrees(dataRoot, packagePath);
+  await assertDirectoryTarget(packagePath);
+  if (await assertDirectoryTarget(`${packagePath}.backup`)) throw new Error("项目包目标存在未恢复备份");
   const ops = { ...defaultOps, ...overrides };
   const staging = resolve(dirname(packagePath), `.${basename(packagePath)}.${process.pid}.${randomUUID()}.tmp`);
   await mkdir(dirname(packagePath), { recursive: true });
@@ -438,7 +517,7 @@ async function walkPayload(root: string) {
   return paths.sort(compareText);
 }
 
-async function verifyPackage(packagePathValue: string) {
+async function loadPackageStructure(packagePathValue: string) {
   const packagePath = resolve(packagePathValue);
   if (!await assertDirectoryTarget(packagePath)) throw new Error("项目包目录不存在");
   const manifestMeasured = await readOrdinaryFile(packagePath, "manifest.json", { maxBytes: MAX_MANIFEST_BYTES, capture: true });
@@ -450,13 +529,21 @@ async function verifyPackage(packagePathValue: string) {
   const actual = await walkPayload(payload);
   const expected = manifest.files.map((file) => file.path).sort(compareText);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("项目包 payload 存在缺失或额外文件");
-  for (const file of manifest.files) await readOrdinaryFile(payload, file.path, { expectedBytes: file.bytes, expectedHash: file.sha256 });
   const databaseFile = manifest.files.find((file) => file.path === "narralume.sqlite3" && file.roles.includes("database"));
   const finalManifestFile = manifest.files.find((file) => file.path === manifest.project.finalManifestPath && file.roles.includes("final-manifest"));
-  if (!databaseFile || !finalManifestFile) throw new Error("项目包缺少数据库或最终清单");
-  const database = new DatabaseSync(resolve(payload, "narralume.sqlite3"), { readOnly: true });
+  if (!databaseFile || JSON.stringify(databaseFile.roles) !== JSON.stringify(["database"]) || !finalManifestFile) {
+    throw new Error("项目包缺少数据库或最终清单");
+  }
+  return { manifest, packagePath, payload };
+}
+
+async function validateStagedPackage(staging: string, manifest: ProjectPackageManifest) {
+  const actual = await walkPayload(staging);
+  const expected = manifest.files.map((file) => file.path).sort(compareText);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("恢复 staging 存在缺失或额外文件");
+  const database = new DatabaseSync(resolve(staging, "narralume.sqlite3"), { readOnly: true });
   try {
-    const finalMeasured = await readOrdinaryFile(payload, manifest.project.finalManifestPath, { maxBytes: MAX_MANIFEST_BYTES, capture: true });
+    const finalMeasured = await readOrdinaryFile(staging, manifest.project.finalManifestPath, { maxBytes: MAX_MANIFEST_BYTES, capture: true });
     const finalText = finalMeasured.content!.toString("utf8");
     const enumerated = enumerateProject(database, manifest.project.finalManifestPath, parseFinalManifest(finalText));
     if (JSON.stringify(enumerated.project) !== JSON.stringify(manifest.project)) throw new Error("项目包项目身份与数据库不一致");
@@ -471,7 +558,25 @@ async function verifyPackage(packagePathValue: string) {
     }
     if (expectedSpecs.size) throw new Error("项目包缺少数据库要求的文件");
   } finally { database.close(); }
-  return { manifest, packagePath, payload };
+}
+
+async function renameNoReplace(staging: string, target: string, ops: PackageOps) {
+  if (await pathExists(target)) throw new Error("恢复目标在发布前已存在");
+  if (process.platform !== "win32") {
+    throw new Error("当前平台缺少目录 rename no-replace 保证，拒绝不安全恢复");
+  }
+  const before = await lstat(staging);
+  try {
+    await ops.rename(staging, target);
+    const after = await lstat(target);
+    if (before.dev !== after.dev || before.ino !== after.ino || !after.isDirectory() || after.isSymbolicLink()) {
+      throw new Error("恢复目标在 rename 后身份异常");
+    }
+    return { dev: before.dev, ino: before.ino };
+  } catch (error) {
+    if (await pathExists(target)) throw new Error("恢复发布期间出现并发目标，未覆盖该目标", { cause: error });
+    throw error;
+  }
 }
 
 export async function restoreProjectPackage(
@@ -479,34 +584,37 @@ export async function restoreProjectPackage(
   targetDataRootValue: string,
   overrides: Partial<PackageOps> = {},
 ) {
-  const verified = await verifyPackage(packagePathValue);
+  const packagePath = resolve(packagePathValue);
   const target = resolve(targetDataRootValue);
-  if (await lstat(target).then(() => true, (error) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  })) throw new Error("恢复目标必须完全不存在");
+  await assertSeparateTrees(packagePath, target);
+  if (await pathExists(target)) throw new Error("恢复目标必须完全不存在");
+  const structure = await loadPackageStructure(packagePath);
   const ops = { ...defaultOps, ...overrides };
   const staging = resolve(dirname(target), `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`);
   await mkdir(dirname(target), { recursive: true });
+  await assertSeparateTrees(packagePath, target);
+  if (await pathExists(target)) throw new Error("恢复目标必须完全不存在");
   await mkdir(staging);
   try {
-    for (const file of verified.manifest.files) {
-      await readOrdinaryFile(verified.payload, file.path, {
+    for (const file of structure.manifest.files) {
+      await readOrdinaryFile(structure.payload, file.path, {
         destination: controlledPath(staging, file.path), expectedBytes: file.bytes, expectedHash: file.sha256,
       });
       await readOrdinaryFile(staging, file.path, { expectedBytes: file.bytes, expectedHash: file.sha256 });
       await ops.afterCopy?.(file.path);
     }
-    const copiedDb = new DatabaseSync(resolve(staging, "narralume.sqlite3"), { readOnly: true });
-    try { validateDatabase(copiedDb); } finally { copiedDb.close(); }
+    await ops.afterPayloadCopied?.();
+    await validateStagedPackage(staging, structure.manifest);
     await ops.syncDirectory(staging);
-    if (await lstat(target).then(() => true, () => false)) throw new Error("恢复目标在发布前已存在");
-    await ops.rename(staging, target);
+    const installed = await renameNoReplace(staging, target, ops);
     try { await ops.syncDirectory(dirname(target)); } catch (error) {
-      await rm(target, { recursive: true, force: true });
+      const current = await lstat(target).catch(() => undefined);
+      if (current?.dev === installed.dev && current.ino === installed.ino) {
+        await ops.remove(target, { recursive: true, force: true });
+      }
       throw error;
     }
-    return { manifest: verified.manifest, dataRoot: target };
+    return { manifest: structure.manifest, dataRoot: target };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

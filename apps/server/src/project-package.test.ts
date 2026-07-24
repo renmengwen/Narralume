@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -193,6 +193,66 @@ test("首版拒绝混有第二个系列项目的数据根", async () => {
   } finally { await cleanup(current); }
 });
 
+test("首版唯一分集合同拒绝其他 file-backed 数据库行", async (t) => {
+  await t.test("第二个分集", async () => {
+    const current = await fixture();
+    try {
+      current.connection.database.prepare("INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at) VALUES ('episode2','series',2,'第二集','弧',180,2,2)").run();
+      await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath: join(current.root, "package"), finalManifestRelativePath: current.finalManifestRelativePath }), /恰好一个目标分集/);
+    } finally { await cleanup(current); }
+  });
+  await t.test("旧音频、未选候选和旧分片", async () => {
+    for (const kind of ["audio", "candidate", "chunk"] as const) {
+      const current = await fixture();
+      try {
+        if (kind === "audio") current.connection.database.prepare(`INSERT INTO audio_segments
+          (timeline_hash,segment_index,episode_id,script_version_id,text,provider_id,voice,rate,input_hash,relative_path,file_hash,bytes,duration_ms,created_at)
+          VALUES (?,0,'episode','script','旧音频','test','voice',0,?,'old.wav',?,1,60000,2)`)
+          .run("b".repeat(64), "c".repeat(64), "d".repeat(64));
+        if (kind === "candidate") current.connection.database.prepare(`INSERT INTO asset_candidates
+          (id,asset_id,source_kind,source_identity_hash,source_json,file_hash,mime,width,height,bytes,relative_path,created_at)
+          VALUES ('unused','asset','upload',?,'{}',?,'image/png',1080,1920,1,'unused.png',2)`)
+          .run("e".repeat(64), "f".repeat(64));
+        if (kind === "chunk") current.connection.database.prepare(`INSERT INTO render_chunks
+          (render_hash,episode_id,timeline_hash,chunk_index,script_version_id,approval_revision,start_ms,end_ms,relative_path,file_hash,bytes,duration_ms,created_at)
+          VALUES (?,'episode',?,9,'script',1,60000,120000,'old.mp4',?,1,60000,2)`)
+          .run("b".repeat(64), TIMELINE, "c".repeat(64));
+        await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+          { packagePath: join(current.root, `package-${kind}`), finalManifestRelativePath: current.finalManifestRelativePath }),
+        /之外的(?:音频|候选图片|分片)/);
+      } finally { await cleanup(current); }
+    }
+  });
+});
+
+test("创建与恢复拒绝相同、祖先、后代及 Junction 映射的目录", async (t) => {
+  const current = await fixture();
+  try {
+    for (const packagePath of [current.dataRoot, join(current.dataRoot, "package"), current.root]) {
+      await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath, finalManifestRelativePath: current.finalManifestRelativePath }), /互为父子目录/);
+    }
+    const packagePath = join(current.root, "package-ok");
+    await createProjectPackage(current.connection.database, current.dataRoot,
+      { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+    for (const target of [packagePath, join(packagePath, "restored"), current.root]) {
+      await assert.rejects(restoreProjectPackage(packagePath, target), /互为父子目录/);
+    }
+    await t.test("真实父路径穿过 Junction", async (context) => {
+      const junction = join(current.root, "data-link");
+      let linked = false;
+      try {
+        try { await symlink(current.dataRoot, junction, "junction"); linked = true; } catch (error) {
+          context.skip(`当前平台不能创建 Junction：${(error as Error).message}`); return;
+        }
+        await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+          { packagePath: join(junction, "nested-package"), finalManifestRelativePath: current.finalManifestRelativePath }), /互为父子目录/);
+      } finally { if (linked) await unlink(junction); }
+    });
+  } finally { await cleanup(current); }
+});
+
 test("发布写入、同步或 rename 失败不泄漏且覆盖失败恢复旧包", async (t) => {
   await t.test("写入阶段失败", async () => {
     const current = await fixture();
@@ -229,6 +289,43 @@ test("发布写入、同步或 rename 失败不泄漏且覆盖失败恢复旧包
       assert.deepEqual((await readdir(current.root)).filter((name) => name.includes(".tmp") || name.endsWith(".backup")), []);
     } finally { await cleanup(current); }
   });
+  await t.test("旧 backup 部分删除失败不回滚已提交的新包", async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, "package");
+      await mkdir(packagePath);
+      await writeFile(join(packagePath, "old-a.txt"), "old-a");
+      await writeFile(join(packagePath, "old-b.txt"), "old-b");
+      await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath, finalManifestRelativePath: current.finalManifestRelativePath }, {
+          remove: async (path, options) => {
+            if (String(path).endsWith(".backup")) {
+              await rm(join(String(path), "old-a.txt"));
+              throw new Error("partial-rm-fault");
+            }
+            await rm(path, options);
+          },
+        }), /已发布/);
+      assert.equal(JSON.parse(await readFile(join(packagePath, "manifest.json"), "utf8")).version, "narralume-project-package-v1");
+      await assert.rejects(readFile(join(packagePath, "old-b.txt")));
+      assert.equal(await readFile(`${packagePath}.backup/old-b.txt`, "utf8"), "old-b");
+    } finally { await cleanup(current); }
+  });
+  await t.test("提交后的父目录 sync 失败不回滚新包", async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, "package");
+      await mkdir(packagePath);
+      await writeFile(join(packagePath, "old.txt"), "old");
+      let syncCalls = 0;
+      await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath, finalManifestRelativePath: current.finalManifestRelativePath }, {
+          syncDirectory: async () => { syncCalls += 1; if (syncCalls === 4) throw new Error("post-commit-sync-fault"); },
+        }), /已发布/);
+      assert.equal(JSON.parse(await readFile(join(packagePath, "manifest.json"), "utf8")).version, "narralume-project-package-v1");
+      await assert.rejects(readFile(join(packagePath, "old.txt")));
+    } finally { await cleanup(current); }
+  });
 });
 
 test("恢复拒绝已存在目标，发布失败也不创建半成品目标", async () => {
@@ -246,5 +343,75 @@ test("恢复拒绝已存在目标，发布失败也不创建半成品目标", as
     }), /restore-rename-fault/);
     await assert.rejects(readFile(target));
     assert.deepEqual((await readdir(current.root)).filter((name) => name.includes(".tmp") || name.endsWith(".backup")), []);
+  } finally { await cleanup(current); }
+});
+
+test("恢复复制完成后不再重开不可信 payload", async () => {
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "package");
+    await createProjectPackage(current.connection.database, current.dataRoot,
+      { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+    const target = join(current.root, "restored");
+    await restoreProjectPackage(packagePath, target, {
+      afterPayloadCopied: async () => { await rm(join(packagePath, "payload"), { recursive: true }); },
+    });
+    const database = new DatabaseSync(join(target, "narralume.sqlite3"), { readOnly: true });
+    try { assert.equal((database.prepare("SELECT COUNT(*) AS count FROM episodes").get() as { count: number }).count, 1); }
+    finally { database.close(); }
+  } finally { await cleanup(current); }
+});
+
+test("恢复发布并发目标使用 no-replace 且保留竞争者字节", async () => {
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "package");
+    await createProjectPackage(current.connection.database, current.dataRoot,
+      { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+    const target = join(current.root, "concurrent-target");
+    await assert.rejects(restoreProjectPackage(packagePath, target, {
+      rename: async (source, destination) => {
+        await mkdir(destination);
+        await writeFile(join(String(destination), "competitor.txt"), "competitor");
+        await rename(source, destination);
+      },
+    }), /并发目标/);
+    assert.equal(await readFile(join(target, "competitor.txt"), "utf8"), "competitor");
+    await assert.rejects(readFile(join(target, "narralume.sqlite3")));
+  } finally { await cleanup(current); }
+});
+
+test("Windows 空目录并发目标也不会被 rename 覆盖", async (t) => {
+  if (process.platform !== "win32") { t.skip("生产 no-replace 合同当前明确只支持 Windows"); return; }
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "package");
+    await createProjectPackage(current.connection.database, current.dataRoot,
+      { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+    const target = join(current.root, "empty-concurrent-target");
+    let competitorIno: bigint | undefined;
+    await assert.rejects(restoreProjectPackage(packagePath, target, {
+      rename: async (source, destination) => {
+        await mkdir(destination);
+        competitorIno = (await stat(destination, { bigint: true })).ino;
+        await rename(source, destination);
+      },
+    }), /并发目标/);
+    assert.equal((await stat(target, { bigint: true })).ino, competitorIno);
+    assert.deepEqual(await readdir(target), []);
+  } finally { await cleanup(current); }
+});
+
+test("目标探测只把 ENOENT 当作不存在", async () => {
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "package");
+    await createProjectPackage(current.connection.database, current.dataRoot,
+      { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+    const parentFile = join(current.root, "not-a-directory");
+    await writeFile(parentFile, "file");
+    await assert.rejects(restoreProjectPackage(packagePath, join(parentFile, "target")),
+      (error: unknown) => Boolean((error as NodeJS.ErrnoException).code && (error as NodeJS.ErrnoException).code !== "ENOENT"));
+    assert.equal(await readFile(parentFile, "utf8"), "file");
   } finally { await cleanup(current); }
 });

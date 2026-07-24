@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import {
+  commitCheckpoint,
+  getCheckpoint,
+  type CheckpointRecord,
+  type CheckpointTransaction,
+} from "./checkpoint-store.js";
+import {
   cancelRunningJob,
   claimNextJob,
   failJob,
@@ -22,6 +28,13 @@ export interface JobExecutionContext {
   reportProgress(progress: number): void;
   isCancellationRequested(): boolean;
   throwIfCancellationRequested(): void;
+  getCheckpoint(stage: string, scopeKey: string): CheckpointRecord | undefined;
+  commitCheckpoint(
+    stage: string,
+    scopeKey: string,
+    inputHash: string,
+    writer: (transaction: CheckpointTransaction) => undefined,
+  ): { checkpoint: CheckpointRecord; created: boolean; replaced: boolean };
 }
 
 export type JobHandler = (context: JobExecutionContext) => Promise<unknown>;
@@ -101,6 +114,18 @@ export class JobWorker {
         throwIfCancellationRequested() {
           if (this.isCancellationRequested()) throw new JobCancelledError();
         },
+        getCheckpoint: (stage, scopeKey) => getCheckpoint(this.database, {
+          jobId: job.id,
+          stage,
+          scopeKey,
+        }),
+        commitCheckpoint: (stage, scopeKey, inputHash, writer) => commitCheckpoint(this.database, {
+          jobId: job.id,
+          stage,
+          scopeKey,
+          inputHash,
+          workerId: this.workerId,
+        }, writer),
       };
 
       try {

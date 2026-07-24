@@ -61,7 +61,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 2);
+    assert.equal(migration?.version, 3);
     assert.equal(chapterCount?.count, 0);
     assert.equal((await readFile(join(dataRoot, "narralume.sqlite3"))).length > 0, true);
   } finally {
@@ -92,7 +92,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (3)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (4)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -101,5 +101,28 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     } finally {
       await rm(dataRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test("既有 migration v2 数据库可原地升级 checkpoint 表", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE job_checkpoints");
+    current.database.prepare("DELETE FROM schema_migrations WHERE version = 3").run();
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    const migration = upgraded.database
+      .prepare("SELECT MAX(version) AS version FROM schema_migrations")
+      .get();
+    const checkpointTable = upgraded.database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'job_checkpoints'")
+      .get();
+    assert.equal(migration?.version, 3);
+    assert.equal(checkpointTable?.name, "job_checkpoints");
+    upgraded.close();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
   }
 });

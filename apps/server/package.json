@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/**/*.test.ts",
     "gate:phase1-large-text": "tsx src/gates/phase1-large-text-gate.ts",
+    "gate:p2-checkpoint-recovery": "tsx src/gates/p2-checkpoint-recovery-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

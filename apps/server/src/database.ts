@@ -65,7 +65,20 @@ const MIGRATION_2 = `
   CREATE INDEX jobs_expired_lease ON jobs(status, lease_expires_at);
 `;
 
-const MIGRATIONS = [MIGRATION_1, MIGRATION_2];
+const MIGRATION_3 = `
+  CREATE TABLE job_checkpoints (
+    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    stage TEXT NOT NULL CHECK (length(stage) > 0),
+    scope_key TEXT NOT NULL CHECK (length(scope_key) > 0),
+    input_hash TEXT NOT NULL CHECK (
+      length(input_hash) = 64 AND input_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    completed_at INTEGER NOT NULL CHECK (completed_at >= 0),
+    PRIMARY KEY (job_id, stage, scope_key)
+  ) STRICT;
+`;
+
+const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3];
 
 export interface NarralumeDatabase {
   database: DatabaseSync;

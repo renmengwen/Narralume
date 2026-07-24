@@ -55,6 +55,7 @@ import {
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
 import { createPlaceholderVideoJobHandler, PLACEHOLDER_VIDEO_JOB_TYPE } from "./placeholder-video-job.js";
 import { createRenderChunksJobHandler, RENDER_CHUNKS_JOB_TYPE } from "./render-chunk-job.js";
+import { createFinalVideoJobHandler, FINAL_VIDEO_JOB_TYPE } from "./final-video.js";
 import {
   createImageCandidateJobHandler,
   enqueueImageCandidateJob,
@@ -203,6 +204,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
+    [FINAL_VIDEO_JOB_TYPE]: createFinalVideoJobHandler(connection.database, dataRoot),
     ...(imageProvider ? {
       [IMAGE_CANDIDATE_JOB_TYPE]: createImageCandidateJobHandler(connection.database, dataRoot, imageProvider),
     } : {}),
@@ -703,7 +705,7 @@ export function buildApp(options: BuildAppOptions = {}) {
         throw error;
       }
     }
-    if (type === PLACEHOLDER_VIDEO_JOB_TYPE || type === RENDER_CHUNKS_JOB_TYPE) {
+    if (type === PLACEHOLDER_VIDEO_JOB_TYPE || type === RENDER_CHUNKS_JOB_TYPE || type === FINAL_VIDEO_JOB_TYPE) {
       const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? body.payload as { episodeId?: unknown; timelineHash?: unknown }
         : {};

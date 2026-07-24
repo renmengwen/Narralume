@@ -21,6 +21,7 @@
     "gate:p5-contact-sheet": "node --no-warnings --import tsx src/gates/p5-contact-sheet-gate.ts",
     "gate:p6-nine-sixteen-template": "node --no-warnings --import tsx src/gates/p6-nine-sixteen-template-gate.ts",
     "gate:p6-render-chunks": "node --no-warnings --import tsx src/gates/p6-render-chunks-gate.ts",
+    "gate:p6-final-video": "node --no-warnings --import tsx src/gates/p6-final-video-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

@@ -54,6 +54,21 @@ export interface RenderChunkPlan {
   segments: VisualSegmentRecord[];
 }
 
+export interface ExpectedRenderChunk {
+  index: number;
+  startMs: number;
+  endMs: number;
+  renderHash: string;
+}
+
+export interface RenderPlanSnapshot {
+  episodeId: string;
+  scriptVersionId: string;
+  approvalRevision: number;
+  timelineHash: string;
+  chunks: ExpectedRenderChunk[];
+}
+
 interface RenderChunkDependencies {
   render: typeof renderNineSixteenTemplate;
   probe: typeof probeNineSixteenVideo;
@@ -85,7 +100,7 @@ function isInside(root: string, path: string) {
   return value !== "" && value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
 }
 
-async function ensureSafeOutputDirectory(dataRoot: string, directory: string) {
+export async function ensureSafeOutputDirectory(dataRoot: string, directory: string) {
   const root = resolve(dataRoot);
   const controlled = relative(root, directory);
   if (!controlled || controlled === ".." || controlled.startsWith(`..${sep}`) || isAbsolute(controlled)) {
@@ -292,6 +307,48 @@ function selectedCandidates(database: DatabaseSync, segments: VisualSegmentRecor
     result.set(id, row);
   }
   return result;
+}
+
+export function loadRenderPlanSnapshot(
+  database: DatabaseSync,
+  episodeId: string,
+  timelineHash: string,
+): RenderPlanSnapshot {
+  const permit = requireApprovedScriptForProduction(database, episodeId, "video");
+  const segments = assertVisualPlanReady(database, episodeId, timelineHash);
+  if (segments.some((segment) => segment.scriptVersionId !== permit.scriptVersionId ||
+      segment.approvalRevision !== permit.approvalRevision)) throw new Error("视觉计划与当前批准稿不一致");
+  const candidates = selectedCandidates(database, segments);
+  const audio = database.prepare(
+    `SELECT segment_index, input_hash, relative_path, file_hash, bytes, duration_ms
+     FROM audio_segments WHERE episode_id = ? AND timeline_hash = ? ORDER BY segment_index`,
+  ).all(episodeId, timelineHash) as unknown as AudioRow[];
+  const cues = database.prepare(
+    `SELECT cue_index, segment_index, start_ms, end_ms, text
+     FROM subtitle_cues WHERE episode_id = ? AND timeline_hash = ? ORDER BY cue_index`,
+  ).all(episodeId, timelineHash) as unknown as CueRow[];
+  if (!audio.length || cues.length !== audio.length || cues[0]!.start_ms !== 0 ||
+      cues.some((cue, index) => cue.cue_index !== index || cue.segment_index !== index ||
+        cue.end_ms - cue.start_ms !== audio[index]!.duration_ms ||
+        (index > 0 && cue.start_ms !== cues[index - 1]!.end_ms))) throw new Error("音频时间轴不连续");
+  const chunks = planRenderChunks(segments).map((chunk) => {
+    const chunkCues = cues.filter((cue) => cue.start_ms >= chunk.startMs && cue.end_ms <= chunk.endMs);
+    if (!chunkCues.length || chunkCues[0]!.start_ms !== chunk.startMs || chunkCues.at(-1)!.end_ms !== chunk.endMs) {
+      throw new Error("分片边界不是完整 cue 边界");
+    }
+    const chunkAudio = chunkCues.map((cue) => audio[cue.segment_index]!);
+    return {
+      index: chunk.index,
+      startMs: chunk.startMs,
+      endMs: chunk.endMs,
+      renderHash: renderChunkIdentity({
+        episodeId, scriptVersionId: permit.scriptVersionId, approvalRevision: permit.approvalRevision,
+        timelineHash, chunk, candidates, audio: chunkAudio, assHash: sha256(localAss(chunkCues, chunk.startMs)),
+      }).renderHash,
+    };
+  });
+  return { episodeId, scriptVersionId: permit.scriptVersionId, approvalRevision: permit.approvalRevision,
+    timelineHash, chunks };
 }
 
 export function createRenderChunksJobHandler(

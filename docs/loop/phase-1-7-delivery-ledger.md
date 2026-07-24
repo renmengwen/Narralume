@@ -25,18 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`0277738`（P7-01/P7-02 集成业务提交；本启动控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P7-03 已形成 commit/tree 并在独立洁净 review worktree 冻结，临时 Junction 指向主仓库依赖。
-- 最近验证：2026-07-25 P7-03 真实 Gate 连续 3 次 GREEN；项目包 17 files/53,929,675 bytes，空目录恢复、证据查询、删除 final 后同字节重导出、4类负向与完整解码 GREEN；全量三门/diff GREEN。
-- 当前 Task：`P7-03`，同时完成 P7-02 真实目录包验收。
-- 唯一下一动作：提交并推送 P7-03 candidate 冻结控制点；做一次独立综合 Review，同时覆盖 P7-02 真实包与 P7-03 空目录恢复门禁。
+- 当前 HEAD：`a09be8b`（P7-03 集成业务提交；本最终冻结控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P7-03 原实现/review worktrees 与 Junction 已安全清理，主依赖目标完好；最终产品 commit/tree 已固定。
+- 最近验证：2026-07-25 最终集成态 typecheck/test/build/diff GREEN，server 134 项 133 PASS/1 symlink权限 SKIP、web 6/6；P7真实样片 Gate 128,163ms GREEN；项目包/恢复 Gate 5,648ms GREEN；两个视频严格 probe/full decode GREEN。
+- 当前 Task：`P7-04`
+- 唯一下一动作：提交并推送最终 candidate 冻结控制点；在同一 `a09be8b` commit/tree 上并行做完成性/规格证据 Review 与代码质量/恢复安全 Review。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P7-01/Gate | Gate Writer | `D:\code3\Narralume-worktrees\P7-01` / `codex/p7-01` / `8010dcb` | `apps/server/src/gates/p3-real-episode-gate.ts`、`apps/server/src/gates/p7-real-sample-gate.ts`、`apps/server/package.json` | 持久真实原文→批准稿→TTS/字幕→真实审核图→视觉段→chunks→final | P7 真实样片 data root / Gutenberg 下载 / System.Speech / ffmpeg | `leased` |
-| P7-03/Gate | Reviewer（只读） | `D:\code3\Narralume-worktrees\P7-03-review` / detached `2a6ef67` | 冻结 commit/tree 只读；禁止修改文件/index/Ledger | P7-02真实包 + P7-03空目录恢复综合审查 | P7 real sample dataRoot/package/restore roots / ffmpeg | `frozen_for_review` |
+| P7-04/Final | Final Reviewers（只读） | `dev@a09be8b` / tree `54f499d`；主工作区仅 Ledger 控制提交后洁净 | 产品 commit/tree、产物、包、恢复根与 Ledger 只读；禁止修改/index/提交 | 完成性/规格证据 + 代码质量/恢复安全最终双审 | P7 sample/package/restore roots / Git history | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -72,9 +71,9 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P6-03 concat 与导出清单 | `complete` | P6-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:ebe2f45d4aa5fa0ee6b77d528d2d044b6bf979a3`；首版失效 | `546c2a921a537bd5ad92793dd4f06d29aa91b2f6`；首版 `2d501c074d3884f90834d629a5e96c0dcdd3986d` | PASS；同一 P1 关闭，无新 findings | PASS；同一 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 final 220,579ms/3,343,332 bytes，重启稳定、旧行忽略、缺片/篡改阻断 | 冻结 `08c78da`；集成 `918fadf` | 无新 findings；进入 P6-04 |
 | P6-04 真实渲染恢复门禁 | `complete` | P6-03 | Coordinator / 已释放 | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100` | `19849805ec5a4448eef4efa7d1a4c064f113c666` | PASS，首轮综合 Review + 第二版最小复审 | PASS，绑定同一次 Review | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，恢复/定向重做/final/负向阻断/完整解码/异常清理全部 GREEN | `8010dcb`（冻结业务提交 `0e8e017`） | Node SQLite 实验性警告；Phase 6 complete，进入 P7-01 |
 | P7-01 真实样片 E2E | `complete` | P6-04 | Coordinator / 已释放 | `git-commit-tree-v1:7f2731621e99be96cab496d52570e383606d2af8:a8e4363fefb605630f6a867ee96a794a950b1366`（父 Core `65a16b6`） | Gate `d74947852c5e1e8c78c1b09d5e55d6b8b28124b9`；Core `38c4960…` | Core Spec PASS；Gate 综合 PASS | Core Quality PASS；Gate 同一次综合 PASS | 真实 Gate/产物/DB独立复验，严格媒体合同/full decode/restart reuse；集成态全量三门 GREEN | Core `4fb94fe`、Gate `91ab194`（冻结提交 `65a16b6`/`7f27316`） | 固定本机真实验收路径/排他数据根仅属 Gate；P7 自身已自包含 |
-| P7-02 可恢复项目包 | `frozen_for_review` | P7-01 | Reviewer 只读；核心写租约已释放 | Core `git-commit-tree-v1:d0ece56ae2d4a63448a6d5c3a6139bf5cda291a4:5027c53cae2cba02c80517bbca5fd1d4cc1c7b8a`；真实 Gate candidate 见 P7-03 | Core `d672d2e…`；Gate本冻结控制提交后定位 | Core最小复审 PASS；真实包待综合 Review | Core最小复审 PASS；真实包待同一次综合 Review | 真实包 `8a353294…`，v1，17 files/53,929,675 bytes，所有角色/hash/bytes/自包含 GREEN；随 P7-03 综合审查 | 核心 `c451bca`/`0277738`；Gate `2a6ef67` | 综合 PASS 后与 P7-03 同时 complete；Windows-only no-replace 首版合同 |
-| P7-03 空目录恢复演练 | `frozen_for_review` | P7-02核心 verified；真实包随本 Task验收 | Reviewer 只读；Ledger 仅 Coordinator | `git-commit-tree-v1:2a6ef67b99656049ec2dc4d577579906b15c0d1f:5c324d3bfe567761c8a91a90c8dbc6d3ffbf4805` | 本冻结控制提交后由 Git 历史定位 | 待一次独立综合 Review | 待同一次独立综合 Review | Gate连续3次GREEN：新根恢复6证据/3章事件/packaged rev3/8音频cue视觉/approved generation图/2 chunks；删恢复final后正式重导出同finalHash/同SHA/同18,536,549 bytes/287,236ms，严格合同/full decode/restart reuse；篡改/缺失/额外/已有目标拒绝；全量三门 GREEN | `2a6ef67` | 综合 Review 同时覆盖 P7-02真实包与P7-03，不重复核心双审 |
-| P7-04 最终验收 | `queued` | P7-03 | - | - | - | - | - | - | - | - |
+| P7-02 可恢复项目包 | `complete` | P7-01 | Coordinator / 已释放 | Core `git-commit-tree-v1:d0ece56ae2d4a63448a6d5c3a6139bf5cda291a4:5027c53cae2cba02c80517bbca5fd1d4cc1c7b8a`；真实 Gate `2a6ef67…:5c324d3…` | Core `d672d2e…`；Gate `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` | Core最小复审 PASS；真实包综合 PASS | Core最小复审 PASS；真实包同一次综合 PASS | 最终包 `4ee61c2ecdbafc50fd7f31da8cf0abfc4db5a62f09e912c522359cc60b3b2f2b`，v1，17 files/53,929,675 bytes，逐项hash/bytes/自包含/SQLite GREEN | 核心 `c451bca`/`0277738`；Gate集成 `a09be8b`（冻结`2a6ef67`） | Windows-only no-replace 首版合同；跨平台恢复未来按真实需求增加 |
+| P7-03 空目录恢复演练 | `complete` | P7-02 | Coordinator / 已释放 | `git-commit-tree-v1:2a6ef67b99656049ec2dc4d577579906b15c0d1f:5c324d3bfe567761c8a91a90c8dbc6d3ffbf4805` | `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` | 综合 PASS | 同一次综合 PASS | 最终恢复根查询6证据/3章事件/packaged rev3/8音频cue视觉/approved图/2 chunks；删final后正式重导出同hash/bytes，严格合同/full decode/restart reuse；4类负向拒绝 | `a09be8b`（冻结`2a6ef67`） | 固定 Gate 根并发排他依赖 Ledger；产品恢复核心本身有 no-replace 合同 |
+| P7-04 最终验收 | `frozen_for_review` | P7-03 | Final Reviewers 只读；Ledger 仅 Coordinator | `git-commit-tree-v1:a09be8bfa04c5e215fcf539a0c21b67ee7d51947:54f499d88a7823fa4112e665dd8b9af23b82bab6` | 本最终冻结控制提交后由 Git 历史定位 | 待独立完成性/规格证据 Review | 待独立代码质量/恢复安全 Review | 最终全量三门/diff GREEN；sample Gate 128,163ms；package/restore Gate 5,648ms；样片与恢复重导出均 SHA `82b6e294…`、18,536,549 bytes、287,236ms、严格1080×1920@25/H.264/yuv420p/AAC/full decode；包 `4ee61c2e…` 17 files/53,929,675 bytes | 最终产品 HEAD `a09be8b`；最终总账提交待 Review PASS 后生成 | 指标：生产Jobs 6/6成功、retry0/failure0；P7增量模型调用/成本0、历史图片价格unknown；批准动作4、人工等待0ms；开发诊断失败2次均已根修 |
 
 ## Requirement 唯一状态
 
@@ -93,8 +92,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | REQ-P4-01 | `verified` | 真实 System.Speech TTS/ffprobe 时间轴、SRT/ASS、220,960ms 的 1080×1920 H.264+AAC 占位视频、内容寻址复用与重启验证 | P4-01～P4-03 |
 | REQ-P5-01 | `verified` | 主/状态资产、别名、真实 Seedream 与上传候选、追加式审核、显式视觉段关系、确定性联系表与失效阻断均有集成态真实证据 | P5-01～P5-04 |
 | REQ-P6-01 | `pending` | 唯一 9:16 模板、微动淡化、ASS、分片恢复、concat 与探测验证 | P6-01～P6-04 |
-| REQ-P7-01 | `pending` | 真实 3～5 分钟样片 | P7-01 |
-| REQ-P7-02 | `pending` | 带 manifest/hash 的项目包可在空数据目录恢复并重新导出 | P7-02、P7-03 |
+| REQ-P7-01 | `satisfied` | 真实 3～5 分钟样片 | P7-01 |
+| REQ-P7-02 | `satisfied` | 带 manifest/hash 的项目包可在空数据目录恢复并重新导出 | P7-02、P7-03 |
 | REQ-P7-03 | `pending` | 成本/耗时/失败率/人工耗时、全量验证和独立双 Review | P7-04 |
 
 ## 验证与 Review 证据索引
@@ -218,6 +217,9 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P7-02 Package Core 第二版双复审 | Spec PASS + Code Quality PASS，均绑定 Ledger `d672d2ea38f430ff5ee82c517baf737453bee066` 与第二版 candidate，Review 前后 tree不变。唯一 file-backed闭包、物理根隔离、明确提交点、backup 部分清理、私有 staged snapshot、源删除竞态、仅ENOENT与Windows no-replace/dev-ino绑定 findings 全关闭；定向31项30 PASS/1权限SKIP、typecheck/diff GREEN，无新问题。 |
 | 2026-07-25 P7-01/P7-02 集成并启动 P7-03 | dev 集成：JPEG Core `4fb94fe`、真实样片 Gate `91ab194`、Package Core `c451bca`、安全修复 `0277738`。原实现/review worktrees与Junction均安全清理。集成态 typecheck/test/build/diff GREEN，server 134项133 PASS/1 symlink权限SKIP、web6/6。P7-01 complete；P7-02 核心 verified，真实目录包创建/恢复验收与 P7-03 合并为一次宽门禁。 |
 | 2026-07-25 P7-03 真实包/恢复 candidate | `git-commit-tree-v1:2a6ef67b99656049ec2dc4d577579906b15c0d1f:5c324d3bfe567761c8a91a90c8dbc6d3ffbf4805`；只新增 Gate 与 package script，未改双审核心。真实 Gate 连续3次GREEN。包 `D:\code3\Narralume\data\gates\p7-project-package\8a353294908cc2d7711dd9ff30c93d01726dc3828fdd527dc4c2827ba2e4a91d`，v1、17 files/53,929,675 bytes：DB1/原文1/音频8/SRT1/ASS1/图1/chunks2/final1/manifest1，逐项hash/bytes，自包含且SQLite无外部P5/MuseDock路径。恢复根 `D:\code3\Narralume\data\gates\p7-project-restore`；查询6证据、3章各2事件、packaged rev3、8音频/cue/visual、generation+approved图、2 current chunks。删除恢复final版本目录后正式 `exportFinalVideo` 重建相同 final `af9dea5e…`、视频SHA `82b6e294…`、18,536,549 bytes、287,236ms，逐字节一致、严格合同/full decode；重启复用稳定。篡改/缺失/额外payload/已有目标均拒绝且成功根不污染；unexpected failure/retry/manual/model call/cost均0。全量三门/diffGREEN，server133 PASS/1权限SKIP、web6/6。 |
+| 2026-07-25 P7-02/P7-03 综合 Review | PASS，绑定 Ledger `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` 与 Gate candidate，只审2个Gate路径，不重复Package核心。独立复算当次包hash/17文件/53,929,675 bytes/9角色、payload精确集合与逐项hash/bytes、SQLite integrity/FK/全表外部路径；恢复查询、规范final目录删除、正式重导出reused=false、重启再导出reused=true、严格probe/full decode及4类负向均PASS。无findings；固定Gate根无脚本锁为非阻断，Ledger排他租约覆盖首版本机验收。 |
+| 2026-07-25 P7-03 集成与最终验收复跑 | Gate集成提交 `a09be8b`（冻结`2a6ef67`）。最终集成态 typecheck/test/build/diff GREEN，server134项133 PASS/1文件symlink权限SKIP、web6/6；P7真实样片Gate 128,163ms GREEN；项目包/恢复Gate 5,648ms GREEN。当前包 `D:\code3\Narralume\data\gates\p7-project-package\4ee61c2ecdbafc50fd7f31da8cf0abfc4db5a62f09e912c522359cc60b3b2f2b`，17 files/53,929,675 bytes；恢复根 `D:\code3\Narralume\data\gates\p7-project-restore`。源样片与恢复重导出均独立ffprobe/full decode：SHA `82b6e2941e6366ccf039c1c71215bc8e92de178944f92ff92853bee46d99c3b6`、18,536,549 bytes、287,236ms、1视频/1音频、1080×1920@25、H.264/yuv420p/AAC。最终生产+打包恢复Gate墙钟合计133,811ms；6 Jobs/6 attempts/0 retry/0 failure，验收失败率0%；P7增量模型调用/成本0，历史Seedream价格unknown；程序代执行批准动作4、人工等待0ms。开发过程中真实JPEG格式失败1次与null-prototype断言假阴性1次，均已根修并有回归。 |
+| 2026-07-25 P7-04 final candidate | `git-commit-tree-v1:a09be8bfa04c5e215fcf539a0c21b67ee7d51947:54f499d88a7823fa4112e665dd8b9af23b82bab6`；Phase1-7全部业务提交已集成，工作区仅本Ledger冻结记录待提交。最终双Reviewer在同一产品commit/tree上分别核对完成性/规格证据与代码质量/恢复安全，不再重复实现审查。 |
 
 ## 决策与剩余风险
 

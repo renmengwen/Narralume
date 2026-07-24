@@ -23,17 +23,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`002620f`
+- 当前 HEAD：`6668455`
 - 工作区：clean。
 - 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
 - 当前 Task：`P1-03`
-- 唯一下一动作：修复 P1-03 全文件编码判定、单行有界内存、Unicode 字符计数和 HTTP 状态一致性，补反例测试后重新冻结双审。
+- 唯一下一动作：对 P1-03 第二版 candidate 重新执行独立双 Review，旧 Verdict 不得复用。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-03 | Coordinator | `D:\code3\Narralume-worktrees\P1-03` / `codex/p1-03` / `8884491` | `app.ts`、`app.test.ts`、`chapter-index.ts`、`chapter-index.test.ts` | 编码判定、章节原始字节范围、稳定章节身份 | 测试临时目录、Worker Git index | `changes_requested` |
+| P1-03 | Coordinator | `D:\code3\Narralume-worktrees\P1-03` / `codex/p1-03` / `8884491` | `app.ts`、`app.test.ts`、`chapter-index.ts`、`chapter-index.test.ts` | 编码判定、章节原始字节范围、稳定章节身份 | 测试临时目录、Worker Git index | `frozen_for_review`（停止写入） |
 
 ## Phase 依赖
 
@@ -46,7 +46,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |
-| P1-03 编码与章节索引 | `changes_requested` | P1-02 | Coordinator / `codex/p1-03` 当前租约 | 旧 `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:2bd99aa5b3ada9f6ef57e2374e962de12e361950` 已失效 | `a01e8ff` | FAIL：GBK 前缀误判、状态/字符数 | FAIL：编码边界与无界单行缓存 | 原 GREEN 未覆盖反例 | - | 修复后重新冻结双审 |
+| P1-03 编码与章节索引 | `frozen_for_review` | P1-02 | Coordinator / `codex/p1-03` 冻结租约 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | 本控制提交 | - | - | 12 项 server tests；完整流编码验证、64 KiB 边界、1 MiB 单行门、Unicode code point、HTTP ready；全量三门 GREEN | - | 等待第二轮双 Review |
 | P1-04 书库 API 与最小 UI | `queued` | P1-03 | - | - | - | - | - | - | - | - |
 | P1-05 真实大文本门禁 | `queued` | P1-04 | - | - | - | - | - | - | - | - |
 | P2-01 持久化任务状态机 | `queued` | P1-05 | - | - | - | - | - | - | - | - |
@@ -112,6 +112,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-02 完成 | 第三轮 Spec/Quality Review PASS，均绑定 Ledger `eeced89` 与第三版 revision；业务提交/集成提交 `8884491`；集成态 8 项 server tests 与全量三门 GREEN。 |
 | 2026-07-24 P1-03 candidate | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:2bd99aa5b3ada9f6ef57e2374e962de12e361950`；64 KiB 严格编码探测，UTF-8/GB18030 行流解析，原始字节偏移/哈希/稳定章节 ID，重复编号不覆盖，原子重建章节；10 项 server tests 与全量三门 GREEN。 |
 | 2026-07-24 P1-03 首轮 Review | Spec/Quality 均 FAIL：64 KiB 样本可能截断 UTF-8 或把 ASCII 前缀 GBK 误判为 UTF-8；无 LF 时 pending 无界且 O(n²)；GB18030 非 BMP 字符按 UTF-16 单元多计；HTTP book 状态仍为索引前值。旧 revision 失效。 |
+| 2026-07-24 P1-03 第二版 candidate | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063`；完整文件流式严格 UTF-8/GB18030 验证；1 MiB 单行中文门限制内存；Unicode code point 计数；HTTP book 状态 ready；12 项 server tests 与全量三门 GREEN。 |
 
 ## 决策与剩余风险
 

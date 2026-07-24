@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`eecdde239e3521f5f5cdfcb162a4f6eb4ca36303`（P3-02 集成提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`01b34531a84cf7150e407be20736f6784f143baa`（P3-02 完成控制提交；本冻结控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P3-02 集成态；全量三门/diff GREEN，server 54/54、web 6/6；真实《红楼梦》3 章、6 事件、3 个不可变稿件版本、幂等 POST 与重启查询 gate GREEN。
+- 最近验证：2026-07-24 P3-03 candidate；全量三门/diff GREEN，server 56/56、web 6/6；真实《红楼梦》批准/撤回与 TTS/图片生产硬阻断 gate GREEN。
 - 当前 Task：`P3-03`
-- 唯一下一动作：从本控制提交建立 `codex/p3-03` 工作区，实现首版人工批准/撤回、乐观并发保护，以及未批准时下游生产硬阻断；不提前实现 provider 或 Phase 4 业务。
+- 唯一下一动作：对冻结 P3-03 revision 执行一次独立 Spec Review 与一次独立 Code Quality Review；不增加阶段性或重复 Review。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P3-03 | Coordinator | `D:\code3\Narralume-worktrees\P3-03` / `codex/p3-03` / 本控制提交 | P3-03 所需 migration/store/API/tests/gate；排除本 Ledger | 稿件人工批准/撤回、乐观并发保护、下游生产硬阻断 | SQLite migration、批准状态写锁、Worker Git index | `leased` |
+| P3-03 | Coordinator（已停止写入，待双 Review） | `D:\code3\Narralume-worktrees\P3-03` / `codex/p3-03` / `01b3453` | `app.ts`、`app.test.ts`、`database.ts`、`database.test.ts`、`script-approval-store.ts`、`script-approval-store.test.ts`、`gates/p3-real-episode-gate.ts`；排除本 Ledger | 追加批准事件、乐观 revision、批准/撤回 API、TTS/图片生产 guard 与真实门禁 | SQLite migration、批准状态写锁、Worker Git index | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -57,7 +57,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P2-04 真实章节任务门禁 | `complete` | P2-03 | Coordinator / 已释放 | `git-index-tree-v1:9d75144a73bdb12a8a4d573c20e9f9672fd1cdf4:4b59c6d54aa8889655cfe0fe71d5c5934130482a` | `14c31c3` | PASS，绑定 `14c31c3`/冻结 revision | PASS，绑定同一次 Phase 2 综合 Review | 集成态全量三门/diff GREEN；server 44、web 6；P2 恢复 gate GREEN；真实 3 章 gate：硬退出 91、attempts=2、processed=1/reused=2、取消 checkpoint=0、重启六类事件 6 条 | `86ce213` | 人工 PUT 后旧 checkpoint 可能命中；Node SQLite 实验性警告；Phase 2 complete |
 | P3-01 故事弧与分集证据 | `complete` | P2-04 | Coordinator / 已释放 | `git-index-tree-v1:86ce213515c4b2d598651a5feb88200cd22f4672:ba09275959aca1349712f0dce86670355ba38144` | `6341496` | PASS，绑定 `6341496`/冻结 revision | PASS，绑定 `6341496`/冻结 revision | 集成态全量三门/diff GREEN；server 49、web 6；真实 gate：3 章、6 来源事件、240 秒单集、6 证据快照、重启查询与重复 PUT 幂等 | `b83f774` | Node SQLite 实验性警告；进入 P3-02 |
 | P3-02 稿件版本 | `complete` | P3-01 | Coordinator / 已释放 | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5` | `8670066` | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | 集成态全量三门/diff GREEN；server 54/54、web 6/6；双连接相同内容同 ID/v1 且库内仅 1 版本；真实三版本、幂等 POST、重启查询 gate GREEN | 冻结 `b0259dd`；集成 `eecdde2` | Node SQLite 实验性警告；首轮并发幂等 finding 已关闭；进入 P3-03 |
-| P3-03 人工批准闸门 | `leased` | P3-02 | Coordinator / 写租约见上 | - | - | - | - | - | - | 首版只做批准/撤回、乐观并发和未批准下游硬阻断，不提前扩展 provider |
+| P3-03 人工批准闸门 | `frozen_for_review` | P3-02 | Coordinator / 已停止写入，待双 Review | `git-index-tree-v1:01b34531a84cf7150e407be20736f6784f143baa:7b078e0190daf74f63ee03b096e285be8cf20a48` | 本冻结控制提交 | 待独立 Review | 待独立 Review | 全量三门/diff GREEN；server 56/56、web 6/6；真实 gate：批准 revision 1 放行同一包装稿，撤回 revision 2 与重启后 TTS/图片均阻断，副作用探针仅批准态执行 2 次 | - | Review 聚焦迁移级联、锁内乐观并发和硬闸门；不扩展 provider/任务类型/前端工作台 |
 | P3-04 真实分集验收 | `queued` | P3-03 | - | - | - | - | - | - | - | - |
 | P4-01 TTS provider 边界 | `queued` | P3-04 | - | - | - | - | - | - | - | 真实 provider 若需密钥时再触发用户阻塞 |
 | P4-02 真实音频时间轴 | `queued` | P4-01 | - | - | - | - | - | - | - | - |
@@ -147,6 +147,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P3-02 第二版 candidate | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5`；幂等查找移入 `BEGIN IMMEDIATE` 写锁，SQLite 连接设置 5 秒 busy timeout；新增两个独立子进程同时提交相同忠实稿的回归，二者返回同 ID、同 v1，数据库仅 1 行。其余稿件合同与真实门禁保持不变；全量三门、server 54、web 6、真实 gate GREEN。 |
 | 2026-07-24 P3-02 第二轮 Review | 独立 Spec Review PASS、独立 Code Quality Review PASS，均绑定 Ledger `8670066396f55211a939245877595bc8bb33d2ca` 与第二版 revision；独立复验锁内幂等、双连接同 ID/v1/单行、全量三门及真实稿件 gate，无阻断 findings。 |
 | 2026-07-24 P3-02 完成 | 冻结业务提交 `b0259dd`，集成 `dev` 为 `eecdde239e3521f5f5cdfcb162a4f6eb4ca36303`；集成态 typecheck/test/build/diff GREEN，server 54/54、web 6/6；真实《红楼梦》2,663,455 bytes、3 章、6 事件、3 稿件版本、幂等 POST 与重启查询 gate GREEN；释放 P3-02 租约并进入 P3-03。 |
+| 2026-07-24 P3-03 candidate | `git-index-tree-v1:01b34531a84cf7150e407be20736f6784f143baa:7b078e0190daf74f63ee03b096e285be8cf20a48`；migration v7 只新增追加式批准事件表；同分集包装稿可批准/撤回，`expectedRevision` 在 `BEGIN IMMEDIATE` 写锁内比较；统一生产 guard 返回批准稿 ID/hash/revision，未批准或撤回时以 409 阻断语音与图片生产。全量三门、server 56、web 6、真实批准/撤回/重启硬门 gate GREEN。 |
 
 ## 决策与剩余风险
 

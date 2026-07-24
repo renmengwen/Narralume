@@ -23,17 +23,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`e75b1c33140f92703cce07c89673ec06b8393f92`
-- 工作区：控制面文档正在建立；基线开始时 clean。
+- 当前 HEAD：`428af35a9e015a2f39431f12ab7709074fc5f5cb`
+- 工作区：clean。
 - 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
-- 当前 Task：`CTRL-01`
-- 唯一下一动作：完成控制面文档校验，提交并推送 `总账：初始化 Narralume Phase 1-7 交付循环`，随后将 `P1-01` 置为 `leased` 并直接实现。
+- 当前 Task：`P1-01`
+- 唯一下一动作：读取 P1-01 将修改的服务器配置/生命周期文件，先写 SQLite 迁移与重启查询的失败测试，再实现最小数据根和数据库基线。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| CTRL-01 | Coordinator | `D:\code3\Narralume` / `dev` / `e75b1c3` | `AGENTS.md`、`docs/README.md`、`docs/project-design.md`、`docs/source-provenance.md`、`docs/loop/*` | Delivery Ledger bootstrap | Git index、`dev` | `implementing` |
+| P1-01 | Coordinator | `D:\code3\Narralume` / `dev` / `428af35` | `apps/server/src/config.ts`、`apps/server/src/database.ts`、`apps/server/src/database.test.ts`、必要的 server lifecycle 调用方 | 数据根、SQLite schema v1、数据库生命周期 | 测试临时目录、Git index、`dev` | `implementing` |
 
 ## Phase 依赖
 
@@ -43,8 +43,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| CTRL-01 控制面初始化 | `implementing` | Phase 0 | Coordinator / 当前租约 | bootstrap 提交后填写 | bootstrap 提交后由下一控制提交登记 | - | - | Phase 0 三门通过 | - | 完成 bootstrap 提交并按 commit tree 复审 |
-| P1-01 数据根与 SQLite 基线 | `queued` | CTRL-01 | - | - | - | - | - | - | - | 等待 CTRL-01 |
+| CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
+| P1-01 数据根与 SQLite 基线 | `implementing` | CTRL-01 | Coordinator / 当前租约 | - | - | - | - | - | - | 先写失败测试 |
 | P1-02 TXT 流式导入 | `queued` | P1-01 | - | - | - | - | - | - | - | - |
 | P1-03 编码与章节索引 | `queued` | P1-02 | - | - | - | - | - | - | - | - |
 | P1-04 书库 API 与最小 UI | `queued` | P1-03 | - | - | - | - | - | - | - | - |
@@ -77,7 +77,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 | Requirement | 状态 | 验收摘要 | 对应 Task |
 | --- | --- | --- | --- |
-| REQ-CTRL-01 | `implementing` | `dev`、文档权威层级、唯一 Ledger、冻结/双 Review/恢复规则已建立并推送 | CTRL-01 |
+| REQ-CTRL-01 | `verified` | `dev`、文档权威层级、唯一 Ledger、冻结/双 Review/恢复规则已建立；待本控制提交一并推送 | CTRL-01 |
 | REQ-P1-01 | `pending` | 稳定书籍 ID；真实 TXT 流式原子导入、限制与幂等 | P1-02 |
 | REQ-P1-02 | `pending` | UTF-8、GBK/CP936、GB18030 编码识别 | P1-03 |
 | REQ-P1-03 | `pending` | 稳定章节 ID、原始字节偏移、字符数、SHA-256 和重复编号 | P1-03 |
@@ -99,6 +99,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 日期 / Task | 证据 |
 | --- | --- |
 | 2026-07-24 Phase 0 基线 | `main/dev@e75b1c3`；`npm run typecheck`、`npm test`、`npm run build` 均通过；Node `v22.22.3`；FFmpeg/FFprobe `8.1.1` |
+| 2026-07-24 CTRL-01 | 业务提交 `428af35`；candidate `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000`；独立 Spec Review PASS；独立 Code Quality Review PASS；两者均复算 commit tree 且工作区 clean |
 
 ## 决策与剩余风险
 

@@ -27,15 +27,15 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 当前分支：`dev`
 - 当前 HEAD：`3cf04ac`（P2-01 写租约已建立；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P2-01 candidate；全量 `typecheck/test/build`、cached diff 通过；server 27 项、web 6 项测试；HTTP 创建/查询/取消、重启租约回收、监听失败与关闭顺序 GREEN。
+- 最近验证：2026-07-24 P2-01 双 Review；Spec 与 Code Quality 均独立复算冻结 tree、复跑全量三门并 PASS；Quality 额外重复时序测试 5/5 PASS。
 - 当前 Task：`P2-01`
-- 唯一下一动作：独立 Spec Reviewer 与 Code Quality Reviewer 只读复算 P2-01 candidate，并分别给出绑定本冻结控制提交与 candidate revision 的 Verdict。
+- 唯一下一动作：在 `codex/p2-01` 对冻结 index 创建中文业务提交，再集成 `dev` 并执行集成态全量三门。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2-01 | Coordinator（Review 期间停止写入） | `D:\code3\Narralume-worktrees\P2-01` / `codex/p2-01` / `7d23438` | `apps/server/src/app.ts`、`app.test.ts`、`database.ts`、`database.test.ts`、`job-store.ts`、`job-store.test.ts`、`job-worker.ts`、`job-worker.test.ts`、`server.ts`、`server-runtime.ts`、`server-runtime.test.ts`；排除本 Ledger | jobs 持久化、状态跃迁、租约、重试、取消 | 测试数据根、SQLite 写锁、Worker 计时器、Worker Git index | `frozen_for_review` |
+| P2-01 | Coordinator（双 Review 已通过，待提交） | `D:\code3\Narralume-worktrees\P2-01` / `codex/p2-01` / `7d23438` | `apps/server/src/app.ts`、`app.test.ts`、`database.ts`、`database.test.ts`、`job-store.ts`、`job-store.test.ts`、`job-worker.ts`、`job-worker.test.ts`、`server.ts`、`server-runtime.ts`、`server-runtime.test.ts`；排除本 Ledger | jobs 持久化、状态跃迁、租约、重试、取消 | 测试数据根、SQLite 写锁、Worker 计时器、Worker Git index | `verified` |
 
 ## Phase 依赖
 
@@ -51,7 +51,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-03 编码与章节索引 | `complete` | P1-02 | Coordinator / 已释放 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | `8110fe7` | PASS，绑定第二版 revision | PASS，绑定第二版 revision | 集成态 12 项 server tests；全量三门 GREEN；编码/内存/事务真实探针 | `9df94e2` | 1 MiB 单行门；进入 P1-04 |
 | P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
 | P1-05 真实大文本门禁 | `complete` | P1-04 | Coordinator / 已释放 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | `a7de1e2` | PASS，绑定 `a7de1e2`/第二版 revision | PASS，绑定同一次 Phase 1 阶段门禁综合 Review | 集成态全量三门与真实门禁 GREEN；124 章、RSS 增量 9,027,584 bytes；故障清理探针 GREEN | `7d23438` | Node SQLite 实验性警告；Phase 1 complete，进入 P2-01 |
-| P2-01 持久化任务状态机 | `frozen_for_review` | P1-05 | Coordinator / `codex/p2-01` 冻结租约 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | 本控制提交，以 Git 历史定位 | 待独立 Spec Review | 待独立 Code Quality Review | 全量三门/cached diff GREEN；server 27 项、web 6 项；持久化/租约/重试/取消/陈旧 Worker/HTTP/关闭失败路径覆盖 | - | Reviewer 复算 candidate；revision 变更则 Verdict 失效 |
+| P2-01 持久化任务状态机 | `verified` | P1-05 | Coordinator / `codex/p2-01` 待提交 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 全量三门/cached diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5；持久化/租约/重试/取消/陈旧 Worker/HTTP/关闭失败路径覆盖 | - | 创建中文业务提交并集成 `dev` |
 | P2-02 checkpoint 与恢复 | `queued` | P2-01 | - | - | - | - | - | - | - | - |
 | P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
 | P2-04 真实章节任务门禁 | `queued` | P2-03 | - | - | - | - | - | - | - | - |
@@ -125,6 +125,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-05 第二版 candidate | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6`；冻结来源稳定断言 124 个章节范围；强断言重复编号 `二/四/四十五` 均为 2 个不同 ID 与索引；HTTP 响应 aborted/error 与源流 error 确定失败；唯一下载临时目录；sampler、运行时、数据根、下载根统一 finally 清理；正常真实门禁 RSS 增量 17,907,712 bytes；sampler 后故障注入退出码 1、4.33 秒退出、临时目录泄漏 0；全量三门 GREEN。 |
 | 2026-07-24 Phase 1 完成 | 第二轮独立阶段门禁综合 Review PASS，绑定 Ledger `a7de1e2` 与 P1-05 第二版 revision；正常门禁、sampler 后故障注入、下载后早期失败清理均独立复验；业务提交/集成提交 `7d23438`；集成态全量三门及真实门禁 GREEN，RSS 增量 9,027,584 bytes。 |
 | 2026-07-24 P2-01 candidate | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026`；migration v2 jobs STRICT 表；单 Worker 租约/续租/回收、进度、错误、重试、取消与陈旧所有者拒绝；仅领取已注册类型；HTTP 创建/查询/取消；Fastify 启停与监听失败资源清理；全量 `typecheck/test/build`、cached diff GREEN，server 27 项、web 6 项。 |
+| 2026-07-24 P2-01 双 Review | Spec PASS、Code Quality PASS，均绑定 Ledger `e575591` 与 candidate revision；两者独立复算 tree 并复跑全量三门，Quality 额外重复 Worker/HTTP/租约时序测试 5/5；无 findings，剩余风险进入 P2-02 checkpoint 与实际 handler 协作取消。 |
 
 ## 决策与剩余风险
 

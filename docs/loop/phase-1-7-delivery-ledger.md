@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`1282550`（P6-04 启动控制提交；本冻结控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P6-04 第二版冻结恰好 3 个 staged 路径、零 unstaged/untracked；临时 `node_modules` Junction 指向主仓库依赖目录。
-- 最近验证：2026-07-25 P6-04 第二版 server typecheck/diff 与真实恢复 Gate GREEN；220,579ms、2 chunks，异常等待故障注入证明 Node/FFmpeg 树零残留；首版全量三门及其余真实证据继续有效。
-- 当前 Task：`P6-04`
-- 唯一下一动作：提交并推送 P6-04 第二版冻结控制点；只对首轮子 Worker 异常清理 finding 做独立最小复审。
+- 当前 HEAD：`8010dcb`（P6-04 集成业务提交；本收口控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P6-04 临时 Junction 已安全移除且目标依赖目录完好，独立 worktree 待清理；P7-01 worktree 待从 `8010dcb` 建立。
+- 最近验证：2026-07-25 P6-04 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，硬退出恢复、定向失效、final 当前性、缺片/缺音频/取消、完整解码与异常等待进程树零残留全部 GREEN。
+- 当前 Task：`P7-01`
+- 唯一下一动作：提交并推送 Phase 6 收口/P7-01 启动控制点；建立 P7-01 worktree，复用 P1-P6 核心完成持久真实《红楼梦》3～5 分钟样片 E2E。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P6-04/Gate | Reviewer（只读） | `D:\code3\Narralume-worktrees\P6-04` / `codex/p6-04` / `918fadf` | 第二版冻结 tree 只读；禁止修改文件/index/Ledger | 首轮子 Worker 异常清理 finding 最小复审 | P6-04 gate data root / 子进程 / ffmpeg | `frozen_for_review` |
+| P7-01/Gate | Gate Writer | `D:\code3\Narralume-worktrees\P7-01` / `codex/p7-01` / `8010dcb` | `apps/server/src/gates/p3-real-episode-gate.ts`、`apps/server/src/gates/p7-real-sample-gate.ts`、`apps/server/package.json` | 持久真实原文→批准稿→TTS/字幕→真实审核图→视觉段→chunks→final | P7 真实样片 data root / Gutenberg 下载 / System.Speech / ffmpeg | `leased` |
 
 ## Phase 依赖
 
@@ -69,8 +69,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P6-01 唯一 9:16 模板 | `complete` | P5-04 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:f63972c092e76b3adc12f2ea79e36d945d980653:a73eaf03dcefcad0273a65e517f989709c198e4b`；首版失效 | `404a223634115c3e2bf708d2af15ac1c307fd5d6`；首版 `0c213d2` | PASS；首轮已通过范围+第二版 4 findings 最小复审 | PASS；首轮已通过范围+第二版 2 findings 最小复审 | 集成态全量三门/diff GREEN，server 92/92、web 6/6；P6 Gate 10,000ms/201,217 bytes、P4 Gate 220,960ms/3,102,618 bytes 均 GREEN | 冻结 `84a92e4`；集成 `8f4cf81` | 无新 findings；进入 P6-02 |
 | P6-02 分片与身份 | `complete` | P6-01 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:8f4cf8171e7e759ff6b57efbc7f2b43df2db3469:2d605acc33db23f386633d0a53457382fab07eaa`；前两版失效 | `9cddae3e178308c7286d699408fdf40a08961782`；第二版 `dbccc37503c2128b10f9061aea5b9187ab788b9f`；首版 `df963cc3aca6cdc9878fdfed387e079081bdc896` | PASS，绑定第二版 Ledger/revision；继续有效 | PASS，绑定第三版 Ledger/revision；全部 findings 关闭 | 集成态全量三门/diff GREEN，server 98/98、web 6/6；真实 Gate 220,541ms、2 片、重启全复用、局部只重渲目标片 | 冻结 `7b335c1`；集成 `2124925` | 无新 findings；进入 P6-03 |
 | P6-03 concat 与导出清单 | `complete` | P6-02 | Coordinator / 已释放 | 第二版 `git-index-tree-v1:21249256273805e0cf6897b8326737db3b7a1c4a:ebe2f45d4aa5fa0ee6b77d528d2d044b6bf979a3`；首版失效 | `546c2a921a537bd5ad92793dd4f06d29aa91b2f6`；首版 `2d501c074d3884f90834d629a5e96c0dcdd3986d` | PASS；同一 P1 关闭，无新 findings | PASS；同一 P1 关闭，无新 findings | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 final 220,579ms/3,343,332 bytes，重启稳定、旧行忽略、缺片/篡改阻断 | 冻结 `08c78da`；集成 `918fadf` | 无新 findings；进入 P6-04 |
-| P6-04 真实渲染恢复门禁 | `frozen_for_review` | P6-03 | Reviewer 只读；Ledger 仅 Coordinator | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100` | 本冻结控制提交后由 Git 历史定位 | 首轮 FAIL；待第二版最小复审 | 首轮 FAIL；待同一次最小复审 | 第二版真实 Gate 220,579ms/2 chunks 与 server typecheck/diff GREEN；checkpoint/status 两类等待失败均启动真实 Node→FFmpeg 树，finally 树终止并等待退出，两个 PID 均不存在，门禁结束残留 0；首版全量三门和其他真实范围继续有效 | - | 最小复审只核对首轮 P1；PASS 后提交集成并进入 P7-01 |
-| P7-01 真实样片 E2E | `queued` | P6-04 | - | - | - | - | - | - | - | - |
+| P6-04 真实渲染恢复门禁 | `complete` | P6-03 | Coordinator / 已释放 | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100` | `19849805ec5a4448eef4efa7d1a4c064f113c666` | PASS，首轮综合 Review + 第二版最小复审 | PASS，绑定同一次 Review | 集成态全量三门/diff GREEN，server 102/102、web 6/6；真实 Gate 220,579ms/2 chunks，恢复/定向重做/final/负向阻断/完整解码/异常清理全部 GREEN | `8010dcb`（冻结业务提交 `0e8e017`） | Node SQLite 实验性警告；Phase 6 complete，进入 P7-01 |
+| P7-01 真实样片 E2E | `leased` | P6-04 | Gate Writer；Ledger 仅 Coordinator；允许路径见当前租约 | - | - | - | - | - | - | 只编排已审核心；复用真实 Seedream 图片，不新增模型调用、运行时依赖或生产抽象 |
 | P7-02 可恢复项目包 | `queued` | P7-01 | - | - | - | - | - | - | - | - |
 | P7-03 空目录恢复演练 | `queued` | P7-02 | - | - | - | - | - | - | - | - |
 | P7-04 最终验收 | `queued` | P7-03 | - | - | - | - | - | - | - | - |
@@ -203,6 +203,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P6-04 candidate | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:dfc9e0be6e486af10b3adba9188a9e25ab7d6f9c`；恰好 3 个 staged 路径，零 unstaged/untracked，只新增真实 Gate、子 Worker 和 package script，未修改 P6 产品核心。全量三门/diff GREEN，server 102/102、web 6/6。真实 Gate 220,579ms/2 chunks：首 checkpoint 后 `taskkill /T /F` 强杀 Node+FFmpeg 树，2,100ms 租约过期后恢复同一 Job；可信完成片不重做，损坏与视觉变化仅重做目标片，非目标 path/hash/bytes/实际字节/mtime 不变；当前 final `c628025283894ec0a96b5d87234d0c2d81e6d7a391680a1cf86f1247c922b507`，旧 final 保持；缺片、缺音频、运行中取消均不成功发布；视频 SHA-256 `5b8fe8e12714e1cf8d5610e6ffa35e39a0ff47d131c530f77cca5e1100b41080`，完整解码 GREEN。 |
 | 2026-07-25 P6-04 首轮综合 Review | FAIL，绑定 Ledger `2007b02065c1e7f454b58d2f681083a2a686aa02` 与首版 revision，Review 前后 tree 不变。P1：硬退出 Worker 和取消 Worker 仅在正常路径终止/等待；checkpoint/status 等待或中间断言提前失败时，外层 finally 只关闭 Coordinator SQLite，可能遗留 Node/FFmpeg 树与句柄并污染共享 Gate 数据根。只开放两个 spawn 生命周期的 finally 树回收、等待退出、不覆盖原始异常及最小故障注入；其余真实恢复、定向失效、final 当前性与负向阻断范围继续有效。 |
 | 2026-07-25 P6-04 第二版 candidate | `git-index-tree-v1:918fadf21b17311ee92ba807551fdc827581eb85:fa3792b3917a6c9fa13982b42dd2580356d45100`；仍恰好 3 个 staged 路径，零 unstaged/untracked，只改 Gate。统一 `withChildLifecycle` 将硬退出/取消 Worker 的完整 action 包进 finally；仍存活时 `/T /F` 回收进程树并等待 exit，action 已失败时清理异常不覆盖原异常。checkpoint/status 两类等待失败故障注入真实启动 Node→FFmpeg 树，返回后 Worker/FFmpeg PID 均不存在；完整 220,579ms 真实 Gate、server typecheck/diff GREEN，结束残留进程 0；首版其他全量验证与规格范围继续有效。 |
+| 2026-07-25 P6-04 第二版最小复审 | PASS，绑定 Ledger `19849805ec5a4448eef4efa7d1a4c064f113c666` 与第二版 revision，Review 前后 tree 不变。两个 spawn 的完整 try/finally 生命周期、树回收/等待 exit、原异常优先级与 checkpoint/status 两类真实 Node→FFmpeg 故障注入均通过；定向环境门禁、server typecheck/cached diff GREEN，零残留；首轮 P1 关闭，无新 findings。 |
+| 2026-07-25 Phase 6 完成并启动 P7-01 | P6-04 冻结业务提交 `0e8e017`，集成提交 `8010dcb`；安全移除 P6-04 Junction 后目标 `D:\code3\Narralume\node_modules` 完好。集成态全量 typecheck/test/build/diff GREEN，server 102/102、web 6/6；真实恢复 Gate 220,579ms/2 chunks，最终视频 SHA-256 `5b8fe8e12714e1cf8d5610e6ffa35e39a0ff47d131c530f77cca5e1100b41080`，完整解码 GREEN。Phase 6 complete；P7-01 只编排现有真实原文、批准、System.Speech、真实 Seedream 审核图、视觉段、chunks 与 final 核心。 |
 
 ## 决策与剩余风险
 

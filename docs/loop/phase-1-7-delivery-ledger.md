@@ -23,17 +23,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`931f401`
+- 当前 HEAD：`48fd24d`
 - 工作区：clean。
 - 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
 - 当前 Task：`P1-02`
-- 唯一下一动作：为 P1-02 原生写流启用关闭前 fsync，重验后生成第三版 candidate 并重新双审；旧 revision/Verdict 失效。
+- 唯一下一动作：对 P1-02 第三版 candidate 重新执行独立双 Review，确认 fsync 耐久修复且无回归。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-02 | Coordinator | `D:\code3\Narralume-worktrees\P1-02` / `codex/p1-02` / `154a391` | `app.ts`、`app.test.ts`、`book-import.ts`、`book-import.test.ts` | TXT 原始请求流、临时文件、书籍身份与导入幂等 | 测试临时目录、Worker Git index | `changes_requested` |
+| P1-02 | Coordinator | `D:\code3\Narralume-worktrees\P1-02` / `codex/p1-02` / `154a391` | `app.ts`、`app.test.ts`、`book-import.ts`、`book-import.test.ts` | TXT 原始请求流、临时文件、书籍身份与导入幂等 | 测试临时目录、Worker Git index | `frozen_for_review`（停止写入） |
 
 ## Phase 依赖
 
@@ -45,7 +45,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
-| P1-02 TXT 流式导入 | `changes_requested` | P1-01 | Coordinator / `codex/p1-02` 当前租约 | 第二版 `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:bf1bdb2368cd420a4ddc7ff73dab57b1ef1fafc2` 已失效 | `8ad1a76` | PASS（随 revision 失效） | FAIL：写流关闭未 fsync | 第二版 GREEN 不含断电耐久保证 | - | 加 `flush:true` 后重冻双审 |
+| P1-02 TXT 流式导入 | `frozen_for_review` | P1-01 | Coordinator / `codex/p1-02` 冻结租约 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | 本控制提交 | - | - | 8 项 server tests；Windows 并发/失败清理；写流 `flush:true`；全量三门 GREEN | - | 等待第三轮双 Review |
 | P1-03 编码与章节索引 | `queued` | P1-02 | - | - | - | - | - | - | - | - |
 | P1-04 书库 API 与最小 UI | `queued` | P1-03 | - | - | - | - | - | - | - | - |
 | P1-05 真实大文本门禁 | `queued` | P1-04 | - | - | - | - | - | - | - | - |
@@ -108,6 +108,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-02 首轮 Review | Spec/Quality 均 FAIL：Windows 并发 rename 返回 `EPERM` 未识别；写入完成后的查库/建目录等失败可残留 staging；`FileHandle.write` 未处理短写。旧 revision 失效。 |
 | 2026-07-24 P1-02 第二版 candidate | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:bf1bdb2368cd420a4ddc7ff73dab57b1ef1fafc2`；原生 `pipeline/createWriteStream` 处理背压/短写；按目标目录实存识别 Windows 并发认领；统一所有权 `finally` 清理；8 路并发与写后 FS 失败测试通过；全量三门 GREEN。 |
 | 2026-07-24 P1-02 第二轮 Review | Spec PASS；Quality FAIL：`createWriteStream` 未要求关闭前 fsync，突然断电可能出现 DB 已登记但原文未持久化。第二版 revision 失效。 |
+| 2026-07-24 P1-02 第三版 candidate | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5`；Node 22 原生 `createWriteStream({flush:true})` 在关闭前 fsync；8 项 server tests 与全量三门 GREEN。 |
 
 ## 决策与剩余风险
 

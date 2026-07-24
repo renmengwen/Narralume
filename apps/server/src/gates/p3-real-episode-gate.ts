@@ -9,6 +9,11 @@ import { pipeline } from "node:stream/promises";
 
 import { buildApp } from "../app.js";
 import type { ChapterEventInput } from "../chapter-event-store.js";
+import { openDatabase } from "../database.js";
+import {
+  requireApprovedScriptForProduction,
+  ScriptApprovalStoreError,
+} from "../script-approval-store.js";
 
 const SOURCE_URL = "https://www.gutenberg.org/cache/epub/24264/pg24264.txt";
 const SOURCE_SHA256 = "ff1526996bf4b81807651921a85e5c1c0f1d1d123c9fa4553057ba6a3ec72011";
@@ -52,6 +57,15 @@ interface ScriptVersion {
   parentVersionId: string | null;
   contentHash: string;
   paragraphs: Array<{ text: string; sources: ScriptSource[] }>;
+}
+
+function expectProductionBlocked(fn: () => unknown) {
+  assert.throws(fn, (error) => {
+    assert(error instanceof ScriptApprovalStoreError);
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /未人工批准/);
+    return true;
+  });
 }
 
 function hash(bytes: Buffer) {
@@ -208,7 +222,7 @@ try {
     assert.equal(response.statusCode, 200, `重启后分集查询失败：${response.body}`);
     return response.json().episode as { index: number; sources: EpisodeSource[] };
   };
-  const episode = await getEpisode();
+  const episode = await getEpisode() as { id: string; index: number; sources: EpisodeSource[] };
   assert.equal(episode.index, 1);
   assert.equal(episode.sources.length, 6, "分集必须保存六份独立证据快照");
   assert.deepEqual(new Set(episode.sources.map((item) => item.sourceEventId)), new Set(sourceEventIds));
@@ -276,6 +290,45 @@ try {
   assert.equal(faithfulV2.parentVersionId, null);
   const createdScripts = new Map([faithfulV1, packagedV1, faithfulV2].map((script) => [script.id, script]));
 
+  let productionSideEffects = 0;
+  const probeProduction = (purpose: "tts" | "image") => {
+    const connection = openDatabase(dataRoot);
+    try {
+      const permit = requireApprovedScriptForProduction(connection.database, episode.id, purpose);
+      productionSideEffects += 1;
+      return permit;
+    } finally {
+      connection.close();
+    }
+  };
+  expectProductionBlocked(() => probeProduction("tts"));
+  expectProductionBlocked(() => probeProduction("image"));
+  assert.equal(productionSideEffects, 0, "未批准时不得触发任何生产副作用");
+
+  const approvalUrl = `/api/series/${seriesId}/episodes/1/approval`;
+  const approvedResponse = await app.inject({
+    method: "PUT",
+    url: approvalUrl,
+    payload: { action: "approve", expectedRevision: 0, scriptVersionId: packagedV1.id },
+  });
+  assert.equal(approvedResponse.statusCode, 200, `人工批准失败：${approvedResponse.body}`);
+  const ttsPermit = probeProduction("tts");
+  const imagePermit = probeProduction("image");
+  assert.equal(ttsPermit.scriptVersionId, packagedV1.id);
+  assert.equal(ttsPermit.contentHash, packagedV1.contentHash);
+  assert.deepEqual(imagePermit, ttsPermit);
+  assert.equal(productionSideEffects, 2, "批准后语音与图片生产探针应各通过一次");
+
+  const withdrawnResponse = await app.inject({
+    method: "PUT",
+    url: approvalUrl,
+    payload: { action: "withdraw", expectedRevision: 1 },
+  });
+  assert.equal(withdrawnResponse.statusCode, 200, `撤回批准失败：${withdrawnResponse.body}`);
+  expectProductionBlocked(() => probeProduction("tts"));
+  expectProductionBlocked(() => probeProduction("image"));
+  assert.equal(productionSideEffects, 2, "撤回后不得继续触发生产副作用");
+
   await app.close();
   app = buildApp({ dataRoot, logger: false });
   const scriptsResponse = await app.inject({ method: "GET", url: scriptsUrl });
@@ -315,6 +368,13 @@ try {
       }
     }
   }
+  const restartedApproval = await app.inject({ method: "GET", url: approvalUrl });
+  assert.equal(restartedApproval.statusCode, 200, `重启后批准状态查询失败：${restartedApproval.body}`);
+  assert.equal(restartedApproval.json().approval.status, "withdrawn");
+  assert.equal(restartedApproval.json().approval.revision, 2);
+  expectProductionBlocked(() => probeProduction("tts"));
+  expectProductionBlocked(() => probeProduction("image"));
+  assert.equal(productionSideEffects, 2, "重启后撤回状态仍必须阻断生产");
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
@@ -329,6 +389,9 @@ try {
     script_versions: scripts.length,
     idempotent_script_post: true,
     script_restart_query: true,
+    approval_revision: restartedApproval.json().approval.revision,
+    production_guard: true,
+    production_side_effects: productionSideEffects,
   }, null, 2)}\n`);
 } finally {
   if (app) await app.close();

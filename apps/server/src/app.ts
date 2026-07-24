@@ -31,6 +31,12 @@ import {
   type ScriptVersionInput,
   type ScriptVersionKind,
 } from "./script-version-store.js";
+import {
+  changeScriptApproval,
+  getScriptApproval,
+  ScriptApprovalStoreError,
+  type ScriptApprovalInput,
+} from "./script-approval-store.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
@@ -65,6 +71,11 @@ interface CreateScriptBody {
   kind?: unknown;
   parentVersionId?: unknown;
   paragraphs?: unknown;
+}
+interface ChangeScriptApprovalBody {
+  action?: unknown;
+  expectedRevision?: unknown;
+  scriptVersionId?: unknown;
 }
 
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
@@ -308,6 +319,45 @@ export function buildApp(options: BuildAppOptions = {}) {
       };
     } catch (error) {
       if (error instanceof ScriptVersionStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { seriesId: string; episodeIndex: string } }>(
+    "/api/series/:seriesId/episodes/:episodeIndex/approval",
+    async (request, reply) => {
+      try {
+        const episodeId = episodeIdForRoute(request.params.seriesId, request.params.episodeIndex);
+        return { ok: true, approval: getScriptApproval(connection.database, episodeId) };
+      } catch (error) {
+        if (error instanceof ScriptVersionStoreError || error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.put<{
+    Params: { seriesId: string; episodeIndex: string };
+    Body: ChangeScriptApprovalBody;
+  }>("/api/series/:seriesId/episodes/:episodeIndex/approval", async (request, reply) => {
+    try {
+      const episodeId = episodeIdForRoute(request.params.seriesId, request.params.episodeIndex);
+      const approval = changeScriptApproval(connection.database, episodeId, {
+        action: request.body?.action,
+        expectedRevision: request.body?.expectedRevision,
+        scriptVersionId: request.body?.scriptVersionId,
+      } as ScriptApprovalInput);
+      return {
+        ok: true,
+        message: approval.status === "approved" ? "包装稿已人工批准" : "稿件批准已撤回",
+        approval,
+      };
+    } catch (error) {
+      if (error instanceof ScriptVersionStoreError || error instanceof ScriptApprovalStoreError) {
         return reply.code(error.statusCode).send({ ok: false, message: error.message });
       }
       throw error;

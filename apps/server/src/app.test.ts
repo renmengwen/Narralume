@@ -278,6 +278,33 @@ test("故事弧分集 API 保存服务端证据快照并可重启查询", async 
     assert.equal(packaged.statusCode, 201);
     assert.equal(packaged.json().script.parentVersionId, faithful.json().script.id);
 
+    const approvalUrl = `/api/series/${seriesId}/episodes/1/approval`;
+    const initialApproval = await app.inject({ method: "GET", url: approvalUrl });
+    assert.equal(initialApproval.statusCode, 200);
+    assert.deepEqual(initialApproval.json().approval, {
+      episodeId: saved.json().episode.id,
+      status: "unapproved",
+      revision: 0,
+      scriptVersionId: null,
+      changedAt: null,
+    });
+    const approved = await app.inject({
+      method: "PUT",
+      url: approvalUrl,
+      payload: { action: "approve", expectedRevision: 0, scriptVersionId: packaged.json().script.id },
+    });
+    assert.equal(approved.statusCode, 200);
+    assert.equal(approved.json().message, "包装稿已人工批准");
+    assert.equal(approved.json().approval.status, "approved");
+    assert.equal(approved.json().approval.revision, 1);
+    const staleApproval = await app.inject({
+      method: "PUT",
+      url: approvalUrl,
+      payload: { action: "approve", expectedRevision: 0, scriptVersionId: packaged.json().script.id },
+    });
+    assert.equal(staleApproval.statusCode, 409);
+    assert.equal(staleApproval.json().message, "批准状态已变化，请按 revision=1 重试");
+
     await app.close();
     app = buildApp({ dataRoot, logger: false });
     const listed = await app.inject({ method: "GET", url: `/api/books/${bookId}/series` });
@@ -297,6 +324,19 @@ test("故事弧分集 API 保存服务端证据快照并可重启查询", async 
     assert.equal(scripts.json().items[0].paragraphs[0].sources[0].sourceText, undefined);
     assert.equal(scripts.json().items[0].paragraphs[0].sources[0].sourceHash,
       createHash("sha256").update(evidence).digest("hex"));
+    const persistedApproval = await app.inject({ method: "GET", url: approvalUrl });
+    assert.equal(persistedApproval.statusCode, 200);
+    assert.equal(persistedApproval.json().approval.status, "approved");
+    assert.equal(persistedApproval.json().approval.scriptVersionId, packaged.json().script.id);
+    const withdrawn = await app.inject({
+      method: "PUT",
+      url: approvalUrl,
+      payload: { action: "withdraw", expectedRevision: 1 },
+    });
+    assert.equal(withdrawn.statusCode, 200);
+    assert.equal(withdrawn.json().message, "稿件批准已撤回");
+    assert.equal(withdrawn.json().approval.status, "withdrawn");
+    assert.equal(withdrawn.json().approval.revision, 2);
 
     const invalid = await app.inject({
       method: "PUT",

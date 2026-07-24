@@ -182,7 +182,24 @@ const MIGRATION_6 = `
     ON script_versions(episode_id, kind, version);
 `;
 
-const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6];
+const MIGRATION_7 = `
+  CREATE TABLE script_approval_events (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    action TEXT NOT NULL CHECK (action IN ('approve', 'withdraw')),
+    script_version_id TEXT NOT NULL REFERENCES script_versions(id),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    UNIQUE (episode_id, revision)
+  ) STRICT;
+
+  CREATE INDEX script_approval_events_episode_revision
+    ON script_approval_events(episode_id, revision DESC);
+`;
+
+const MIGRATIONS = [
+  MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7,
+];
 
 export interface NarralumeDatabase {
   database: DatabaseSync;

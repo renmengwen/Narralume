@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 7);
+    assert.equal(migration?.version, 8);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (8)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (9)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -138,6 +138,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events");
     current.database.exec("DROP TABLE script_version_sources");
     current.database.exec("DROP TABLE script_versions");
@@ -160,7 +161,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 7);
+    assert.equal(migration?.version, 8);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
@@ -173,6 +174,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v5-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 6").run();
     current.database.prepare(
@@ -195,7 +197,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      7,
+      8,
     );
     upgraded.database.prepare(
       `INSERT INTO script_versions (
@@ -223,10 +225,114 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
   }
 });
 
+test("既有 migration v7 数据库可升级音频段与字幕并约束不可变历史", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v7-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
+    current.database.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    current.database.prepare(
+      `INSERT INTO books (
+         id, title, original_file_path, original_file_hash, encoding, import_status
+       ) VALUES ('book_v7', '旧书', 'books/book_v7/source.txt', ?, 'UTF-8', 'ready')`,
+    ).run("1".repeat(64));
+    current.database.prepare(
+      `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+       VALUES ('series_v7', 'book_v7', '系列', 1, 1)`,
+    ).run();
+    current.database.prepare(
+      `INSERT INTO episodes (
+         id, series_project_id, episode_index, title, story_arc,
+         target_duration_seconds, created_at, updated_at
+       ) VALUES ('episode_v7', 'series_v7', 1, '第一集', '开端', 180, 1, 1)`,
+    ).run();
+    current.database.prepare(
+      `INSERT INTO script_versions (
+         id, episode_id, kind, version, content_json, content_hash, created_at
+       ) VALUES ('script_v7', 'episode_v7', 'packaged', 1, '{}', ?, 1)`,
+    ).run("2".repeat(64));
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    assert.equal(
+      upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
+      8,
+    );
+    const audioTables = upgraded.database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'audio_%' ORDER BY name")
+      .all() as Array<{ name: string }>;
+    assert.deepEqual(audioTables.map((table) => table.name), ["audio_segments"]);
+
+    const insertSegment = upgraded.database.prepare(
+      `INSERT INTO audio_segments (
+         timeline_hash, segment_index, episode_id, script_version_id, text,
+         provider_id, voice, rate, input_hash, relative_path, file_hash,
+         bytes, duration_ms, created_at
+       ) VALUES (?, ?, 'episode_v7', 'script_v7', ?, 'system-speech', 'Huihui', ?, ?, ?, ?, ?, ?, 1)`,
+    );
+    const runSegment = (overrides: {
+      timelineHash?: string;
+      segmentIndex?: number;
+      text?: string;
+      rate?: number;
+      inputHash?: string;
+      relativePath?: string;
+      fileHash?: string;
+      bytes?: number;
+      durationMs?: number;
+    } = {}) => insertSegment.run(
+      overrides.timelineHash ?? "3".repeat(64),
+      overrides.segmentIndex ?? 0,
+      overrides.text ?? "第一段旁白",
+      overrides.rate ?? 0,
+      overrides.inputHash ?? "4".repeat(64),
+      overrides.relativePath ?? "episodes/episode_v7/audio/segment.wav",
+      overrides.fileHash ?? "5".repeat(64),
+      overrides.bytes ?? 1024,
+      overrides.durationMs ?? 1200,
+    );
+
+    runSegment();
+    for (const invalid of [
+      { timelineHash: "ABC" },
+      { segmentIndex: 1, text: "" },
+      { segmentIndex: 1, rate: 11 },
+      { segmentIndex: 1, bytes: 0 },
+      { segmentIndex: 1, durationMs: 0 },
+    ]) {
+      assert.throws(() => runSegment(invalid), /CHECK constraint failed/);
+    }
+
+    upgraded.database.prepare(
+      `INSERT INTO subtitle_cues (
+         timeline_hash, cue_index, segment_index, episode_id, script_version_id,
+         start_ms, end_ms, text
+       ) VALUES (?, 0, 0, 'episode_v7', 'script_v7', 0, 1200, '第一段旁白')`,
+    ).run("3".repeat(64));
+    assert.throws(
+      () => upgraded.database.prepare(
+        `INSERT INTO subtitle_cues (
+           timeline_hash, cue_index, segment_index, episode_id, script_version_id,
+           start_ms, end_ms, text
+         ) VALUES (?, 1, 99, 'episode_v7', 'script_v7', 1200, 1300, '不存在的段')`,
+      ).run("3".repeat(64)),
+      /FOREIGN KEY constraint failed/,
+    );
+
+    upgraded.database.prepare("DELETE FROM episodes WHERE id = 'episode_v7'").run();
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM audio_segments").get()?.count, 0);
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM subtitle_cues").get()?.count, 0);
+    upgraded.close();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集数据", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v4-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
     current.database.exec("DROP TABLE episode_sources; DROP TABLE episodes; DROP TABLE series_projects");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 5").run();
@@ -240,7 +346,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      7,
+      8,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)

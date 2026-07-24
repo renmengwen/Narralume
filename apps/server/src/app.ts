@@ -34,9 +34,11 @@ import {
 import {
   changeScriptApproval,
   getScriptApproval,
+  requireApprovedScriptForProduction,
   ScriptApprovalStoreError,
   type ScriptApprovalInput,
 } from "./script-approval-store.js";
+import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
@@ -127,6 +129,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   const connection = openDatabase(dataRoot);
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
+    [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     ...(options.jobHandlers ?? {}),
   };
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
@@ -372,6 +375,22 @@ export function buildApp(options: BuildAppOptions = {}) {
     const type = body.type.trim();
     if (!supportedJobTypes.has(type)) {
       return reply.code(400).send({ ok: false, message: `不支持的任务类型：${type || "（空）"}` });
+    }
+    if (type === TTS_TIMELINE_JOB_TYPE) {
+      const episodeId = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+        ? (body.payload as { episodeId?: unknown }).episodeId
+        : undefined;
+      if (typeof episodeId !== "string" || !episodeId) {
+        return reply.code(400).send({ ok: false, message: "语音时间轴任务缺少有效分集 ID" });
+      }
+      try {
+        requireApprovedScriptForProduction(connection.database, episodeId, "tts");
+      } catch (error) {
+        if (error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
     }
     let priority: number | undefined;
     let maxAttempts: number | undefined;

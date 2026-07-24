@@ -197,3 +197,11 @@ export function listScriptVersions(database: DatabaseSync, episodeId: string, ki
     ).all(episodeId);
   return (rows as unknown as VersionRow[]).map((row) => versionResult(database, row));
 }
+
+export function getScriptVersion(database: DatabaseSync, id: string) {
+  const row = database.prepare(
+    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+     FROM script_versions WHERE id = ?`,
+  ).get(id) as VersionRow | undefined;
+  return row ? versionResult(database, row) : undefined;
+}

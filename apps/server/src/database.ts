@@ -197,8 +197,58 @@ const MIGRATION_7 = `
     ON script_approval_events(episode_id, revision DESC);
 `;
 
+const MIGRATION_8 = `
+  CREATE TABLE audio_segments (
+    timeline_hash TEXT NOT NULL CHECK (
+      length(timeline_hash) = 64 AND timeline_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    segment_index INTEGER NOT NULL CHECK (segment_index >= 0),
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    script_version_id TEXT NOT NULL REFERENCES script_versions(id) ON DELETE CASCADE,
+    text TEXT NOT NULL CHECK (length(text) > 0),
+    provider_id TEXT NOT NULL CHECK (length(provider_id) > 0),
+    voice TEXT NOT NULL CHECK (length(voice) > 0),
+    rate INTEGER NOT NULL CHECK (rate BETWEEN -10 AND 10),
+    input_hash TEXT NOT NULL CHECK (
+      length(input_hash) = 64 AND input_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    relative_path TEXT NOT NULL CHECK (length(relative_path) > 0),
+    file_hash TEXT NOT NULL CHECK (
+      length(file_hash) = 64 AND file_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    bytes INTEGER NOT NULL CHECK (bytes > 0),
+    duration_ms INTEGER NOT NULL CHECK (duration_ms > 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (timeline_hash, segment_index),
+    UNIQUE (timeline_hash, segment_index, episode_id, script_version_id)
+  ) STRICT;
+
+  CREATE INDEX audio_segments_episode_script_order
+    ON audio_segments(episode_id, script_version_id, timeline_hash, segment_index);
+
+  CREATE TABLE subtitle_cues (
+    timeline_hash TEXT NOT NULL CHECK (
+      length(timeline_hash) = 64 AND timeline_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    cue_index INTEGER NOT NULL CHECK (cue_index >= 0),
+    segment_index INTEGER NOT NULL CHECK (segment_index >= 0),
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    script_version_id TEXT NOT NULL REFERENCES script_versions(id) ON DELETE CASCADE,
+    start_ms INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+    text TEXT NOT NULL CHECK (length(text) > 0),
+    PRIMARY KEY (timeline_hash, cue_index),
+    FOREIGN KEY (timeline_hash, segment_index, episode_id, script_version_id)
+      REFERENCES audio_segments(timeline_hash, segment_index, episode_id, script_version_id)
+      ON DELETE CASCADE
+  ) STRICT;
+
+  CREATE INDEX subtitle_cues_episode_script_order
+    ON subtitle_cues(episode_id, script_version_id, timeline_hash, cue_index);
+`;
+
 const MIGRATIONS = [
-  MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7,
+  MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
 ];
 
 export interface NarralumeDatabase {

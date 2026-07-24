@@ -13,6 +13,7 @@
     "gate:p2-real-chapter-jobs": "tsx src/gates/p2-real-chapter-jobs-gate.ts",
     "gate:p3-real-episode": "tsx src/gates/p3-real-episode-gate.ts",
     "gate:p4-system-tts": "tsx src/gates/p4-system-tts-gate.ts",
+    "gate:p4-tts-timeline": "tsx src/gates/p4-tts-timeline-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

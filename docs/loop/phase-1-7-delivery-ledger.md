@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`bbd7953a17a289ba7327591354a23f8932c697d1`（P3-04 集成提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`08fa14e6dbc60d42f0d415b686c6368a71a5865c`（Phase 3 完成控制提交；本冻结控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P3-04/Phase 3 集成态；全量三门/diff GREEN，server 56/56、web 6/6；真实《红楼梦》批准稿 1,139 字、估算 284.75 秒、逐段证据与最终批准重启 gate GREEN。
+- 最近验证：2026-07-24 P4-01 candidate；全量三门/diff GREEN，server 57/57、web 6/6；真实 System.Speech 中文 WAV 与取消/失败清理 gate GREEN。
 - 当前 Task：`P4-01`
-- 唯一下一动作：从本控制提交建立 `codex/p4-01` 工作区，先盘点本机无密钥中文 TTS/外部命令能力，再实现可取消的 provider 边界、输入身份与中文失败合同；不提前做完整时间轴。
+- 唯一下一动作：对 P4-01 冻结 revision 执行独立 Spec Review 与 Code Quality Review；不增加 provider 框架或 P4-02 时间轴范围。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P4-01 | Coordinator | `D:\code3\Narralume-worktrees\P4-01` / `codex/p4-01` / 本控制提交 | P4-01 provider/command/identity/tests；排除本 Ledger | 本地/外部命令 TTS 边界、中文错误、取消与批准稿输入身份 | TTS 子进程、系统音频命令、Worker Git index | `leased` |
+| P4-01 | Coordinator（已停止写入，待双 Review） | `D:\code3\Narralume-worktrees\P4-01` / `codex/p4-01` / `08fa14e` | `apps/server/package.json`、`tts-provider.ts`、`tts-provider.test.ts`、`gates/p4-system-tts-gate.ts`；排除本 Ledger | 单一 Windows System.Speech 命令边界、取消、输入身份、原子 WAV 与真实探针 | PowerShell 子进程、系统音频命令、Worker Git index | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -59,7 +59,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P3-02 稿件版本 | `complete` | P3-01 | Coordinator / 已释放 | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5` | `8670066` | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | 集成态全量三门/diff GREEN；server 54/54、web 6/6；双连接相同内容同 ID/v1 且库内仅 1 版本；真实三版本、幂等 POST、重启查询 gate GREEN | 冻结 `b0259dd`；集成 `eecdde2` | Node SQLite 实验性警告；首轮并发幂等 finding 已关闭；进入 P3-03 |
 | P3-03 人工批准闸门 | `complete` | P3-02 | Coordinator / 已释放 | `git-index-tree-v1:01b34531a84cf7150e407be20736f6784f143baa:7b078e0190daf74f63ee03b096e285be8cf20a48` | `0b41f55` | PASS，绑定 `0b41f559741418b99eb24ca5df42596f564f6269`/冻结 revision | PASS，绑定 `0b41f559741418b99eb24ca5df42596f564f6269`/冻结 revision | 集成态全量三门/diff GREEN；server 56/56、web 6/6；批准放行同一包装稿，撤回与重启后 TTS/图片硬阻断 | 冻结 `94703a1`；集成 `7e46d88` | Node SQLite 实验性警告；进入 P3-04 |
 | P3-04 真实分集验收 | `complete` | P3-03 | Coordinator / 已释放 | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8` | `8414457` | PASS，绑定 `84144575adb0e6e24862d47dc0c220c48e3c45cb`/冻结 revision，同一次 Phase 3 综合 Review | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 56/56、web 6/6；真实批准稿 1,139 字/284.75 秒估算、8 段证据、最终 approved revision 3、重启精确放行 | 冻结 `516cce9`；集成 `bbd7953` | 估算非真实音频时长；Phase 3 complete，进入 P4-01 |
-| P4-01 TTS provider 边界 | `leased` | P3-04 | Coordinator / 写租约见上 | - | - | - | - | - | - | 优先本机无密钥能力；确需外部密钥时才触发用户阻塞，不把 provider 实现扩成多平台框架 |
+| P4-01 TTS provider 边界 | `frozen_for_review` | P3-04 | Coordinator / 已停止写入，待双 Review | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:9a2cc8e5a171501490d5b4910fde54ff445bba52` | 本冻结控制提交 | 待独立 Review | 待独立 Review | 全量三门/diff GREEN；server 57/57、web 6/6；真实 Huihui 中文 WAV 290,298 bytes、PCM s16le/22050 Hz/mono/6.581678 秒；错误 voice 与中途取消无 final/temp 泄漏 | - | Windows 本机 voice 能力；单任务独占最终路径，内容寻址复用与真实长音频进入 P4-02 |
 | P4-02 真实音频时间轴 | `queued` | P4-01 | - | - | - | - | - | - | - | - |
 | P4-03 占位视频 | `queued` | P4-02 | - | - | - | - | - | - | - | - |
 | P5-01 资产合同 | `queued` | P4-03 | - | - | - | - | - | - | - | - |
@@ -151,6 +151,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P3-03 完成 | 独立 Spec Review 与 Code Quality Review 均 PASS，绑定 Ledger `0b41f559741418b99eb24ca5df42596f564f6269` 和冻结 revision，无阻断 findings；冻结业务提交 `94703a1`，集成 `dev` 为 `7e46d8836a01901a547f1f55d1c8adfc5007a1dc`；集成态全量三门、server 56/56、web 6/6、真实批准/撤回/重启硬门 gate GREEN；释放 P3-03 并进入 P3-04。 |
 | 2026-07-24 P3-04 candidate | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8`；只修改真实 P3 gate，将 faithful/packaged 稿扩展为 8 段完整叙事，最终批准包装稿 1,139 字，按每秒 4 字保守估算 284.75 秒；每段引用 6 份真实事件证据之一，批准/撤回/重新批准后重启仍只放行最终包装稿。全量三门、server 56、web 6、真实 gate GREEN；估算只用于 Phase 3 文本量级，Phase 4 仍以真实 TTS/ffprobe 为准。 |
 | 2026-07-24 P3-04 / Phase 3 完成 | 单次独立综合 Review PASS，绑定 Ledger `84144575adb0e6e24862d47dc0c220c48e3c45cb` 与冻结 revision，同时覆盖 Spec、Code Quality、P3-04 和 Phase 3 阶段门禁，无阻断 findings；冻结业务提交 `516cce9`，集成 `dev` 为 `bbd7953a17a289ba7327591354a23f8932c697d1`；集成态全量三门、server 56/56、web 6/6、真实 P3 gate GREEN；Phase 3 complete，进入 P4-01。 |
+| 2026-07-24 P4-01 candidate | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:9a2cc8e5a171501490d5b4910fde54ff445bba52`；只实现一个 Windows PowerShell `System.Speech` 调用函数，无接口/工厂/注册表和新增依赖；正文经 UTF-8 stdin，voice/rate/批准稿身份进入 SHA-256，输出同目录唯一临时 WAV，成功后 rename，失败/取消清理。全量三门、server 57、web 6、真实 WAV/ffprobe gate GREEN。 |
 
 ## 决策与剩余风险
 

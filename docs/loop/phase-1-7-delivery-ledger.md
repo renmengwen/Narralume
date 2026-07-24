@@ -27,13 +27,13 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 工作区：clean。
 - 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
 - 当前 Task：`P1-02`
-- 唯一下一动作：对 P1-02 frozen candidate 执行独立 Spec Review 与 Code Quality Review；Reviewer 复算 Ledger commit、base、tree 和 changed paths。
+- 唯一下一动作：修复 P1-02 Windows 并发认领、完整事务临时清理和短写风险，补故障注入测试后重新冻结双审；旧 revision 全部 Verdict 失效。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-02 | Coordinator | `D:\code3\Narralume-worktrees\P1-02` / `codex/p1-02` / `154a391` | `app.ts`、`app.test.ts`、`book-import.ts`、`book-import.test.ts` | TXT 原始请求流、临时文件、书籍身份与导入幂等 | 测试临时目录、Worker Git index | `frozen_for_review`（停止写入） |
+| P1-02 | Coordinator | `D:\code3\Narralume-worktrees\P1-02` / `codex/p1-02` / `154a391` | `app.ts`、`app.test.ts`、`book-import.ts`、`book-import.test.ts` | TXT 原始请求流、临时文件、书籍身份与导入幂等 | 测试临时目录、Worker Git index | `changes_requested` |
 
 ## Phase 依赖
 
@@ -45,7 +45,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
-| P1-02 TXT 流式导入 | `frozen_for_review` | P1-01 | Coordinator / `codex/p1-02` 冻结租约 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:ba8c665e5403110304bb119f794bfcd8bee9f41c` | 本控制提交 | - | - | 缺模块 RED；6 项 server tests；全量 `typecheck/test/build` GREEN；流式分块/超限清理/HTTP 幂等 GREEN | - | 等待双 Review |
+| P1-02 TXT 流式导入 | `changes_requested` | P1-01 | Coordinator / `codex/p1-02` 当前租约 | 旧 `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:ba8c665e5403110304bb119f794bfcd8bee9f41c` 已失效 | `4729ccd` | FAIL：Windows 并发 `EPERM` | FAIL：并发、事务清理、短写风险 | 原 GREEN 仅适用旧 revision | - | 修复并补 Windows/故障注入测试 |
 | P1-03 编码与章节索引 | `queued` | P1-02 | - | - | - | - | - | - | - | - |
 | P1-04 书库 API 与最小 UI | `queued` | P1-03 | - | - | - | - | - | - | - | - |
 | P1-05 真实大文本门禁 | `queued` | P1-04 | - | - | - | - | - | - | - | - |
@@ -105,6 +105,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-01 第二版 candidate | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447`；统一外层失败关闭，rollback 失败不覆盖原异常；章节唯一/范围/级联约束与损坏迁移表后 Windows 文件可删除测试通过；全量三门 GREEN。 |
 | 2026-07-24 P1-01 完成 | 第二轮 Spec Review PASS、Code Quality Review PASS，均绑定 Ledger `72438d0` 与第二版 revision；业务提交/集成提交 `154a391`；`dev` 集成态全量三门 GREEN。 |
 | 2026-07-24 P1-02 candidate | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:ba8c665e5403110304bb119f794bfcd8bee9f41c`；原始 HTTP 流、分块文件流、SHA-256、默认 512 MiB 上限、空/超限清理、内容寻址原子目录认领和重复哈希幂等；6 项 server tests 与全量三门 GREEN。 |
+| 2026-07-24 P1-02 首轮 Review | Spec/Quality 均 FAIL：Windows 并发 rename 返回 `EPERM` 未识别；写入完成后的查库/建目录等失败可残留 staging；`FileHandle.write` 未处理短写。旧 revision 失效。 |
 
 ## 决策与剩余风险
 

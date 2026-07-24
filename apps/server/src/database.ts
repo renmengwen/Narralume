@@ -462,11 +462,41 @@ const MIGRATION_11 = `
   END;
 `;
 
+const MIGRATION_12 = `
+  CREATE TABLE render_chunks (
+    render_hash TEXT PRIMARY KEY CHECK (
+      length(render_hash) = 64 AND render_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    timeline_hash TEXT NOT NULL CHECK (
+      length(timeline_hash) = 64 AND timeline_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+    script_version_id TEXT NOT NULL REFERENCES script_versions(id),
+    approval_revision INTEGER NOT NULL CHECK (approval_revision >= 1),
+    start_ms INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+    relative_path TEXT NOT NULL CHECK (length(relative_path) > 0),
+    file_hash TEXT NOT NULL CHECK (
+      length(file_hash) = 64 AND file_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    bytes INTEGER NOT NULL CHECK (bytes > 0),
+    duration_ms INTEGER NOT NULL CHECK (duration_ms > 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    UNIQUE (episode_id, timeline_hash, chunk_index),
+    CHECK (end_ms - start_ms BETWEEN 60000 AND 180000)
+  ) STRICT;
+
+  CREATE INDEX render_chunks_episode_order
+    ON render_chunks(episode_id, timeline_hash, chunk_index);
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
   MIGRATION_10,
   MIGRATION_11,
+  MIGRATION_12,
 ];
 
 export interface NarralumeDatabase {

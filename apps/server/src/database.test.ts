@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 11);
+    assert.equal(migration?.version, 12);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (12)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (13)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -138,7 +138,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
-    current.database.exec("DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
+    current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events");
@@ -163,7 +163,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 11);
+    assert.equal(migration?.version, 12);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
@@ -176,7 +176,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v5-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
-    current.database.exec("DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
+    current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
@@ -201,7 +201,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      11,
+      12,
     );
     upgraded.database.prepare(
       `INSERT INTO script_versions (
@@ -233,7 +233,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v7-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
-    current.database.exec("DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
+    current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 8").run();
@@ -262,7 +262,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      11,
+      12,
     );
     const audioTables = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'audio_%' ORDER BY name")
@@ -338,7 +338,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v4-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
-    current.database.exec("DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
+    current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
@@ -354,7 +354,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      11,
+      12,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
@@ -391,7 +391,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v8-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
-    current.database.exec("DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
+    current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 9").run();
     current.database.prepare(
@@ -409,7 +409,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      11,
+      12,
     );
     const tables = upgraded.database.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('assets', 'asset_aliases') ORDER BY name",
@@ -544,15 +544,15 @@ test("既有 migration v10 数据库可升级视觉段与显式资产关系", as
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v10-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
-    current.database.exec("DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
+    current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP INDEX asset_candidates_id_asset");
-    current.database.prepare("DELETE FROM schema_migrations WHERE version = 11").run();
+    current.database.prepare("DELETE FROM schema_migrations WHERE version >= 11").run();
     current.close();
 
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      11,
+      12,
     );
     const tables = upgraded.database.prepare(
       `SELECT name FROM sqlite_master
@@ -567,6 +567,77 @@ test("既有 migration v10 数据库可升级视觉段与显式资产关系", as
       "visual_segment_assets_same_series",
       "visual_segment_assets_same_series_on_update",
     ]);
+    upgraded.close();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("既有 migration v11 数据库保留数据升级 render_chunks 并执行完整约束", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v11-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    current.database.prepare(
+      `INSERT INTO books (id, title, original_file_path, original_file_hash, encoding, import_status)
+       VALUES ('book_v11', '旧数据', 'books/book_v11/source.txt', ?, 'UTF-8', 'ready')`,
+    ).run("1".repeat(64));
+    current.database.prepare(
+      "INSERT INTO series_projects (id, book_id, title, created_at, updated_at) VALUES ('series_v11', 'book_v11', '系列', 1, 1)",
+    ).run();
+    current.database.prepare(
+      `INSERT INTO episodes (id, series_project_id, episode_index, title, story_arc,
+         target_duration_seconds, created_at, updated_at)
+       VALUES ('episode_v11', 'series_v11', 1, '第一集', '故事弧', 180, 1, 1)`,
+    ).run();
+    current.database.prepare(
+      `INSERT INTO script_versions (id, episode_id, kind, version, content_json, content_hash, created_at)
+       VALUES ('script_v11', 'episode_v11', 'packaged', 1, '{}', ?, 1)`,
+    ).run("2".repeat(64));
+    current.database.exec("DROP TABLE render_chunks");
+    current.database.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    const database = upgraded.database;
+    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 12);
+    assert.equal(database.prepare("SELECT title FROM books WHERE id = 'book_v11'").get()?.title, "旧数据");
+    assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='render_chunks'").get()?.name, "render_chunks");
+    const insert = database.prepare(
+      `INSERT INTO render_chunks (render_hash, episode_id, timeline_hash, chunk_index,
+         script_version_id, approval_revision, start_ms, end_ms, relative_path,
+         file_hash, bytes, duration_ms, created_at)
+       VALUES (?, ?, ?, ?, 'script_v11', 1, ?, ?, ?, ?, 10, ?, 1)`,
+    );
+    const timeline = "3".repeat(64);
+    insert.run("4".repeat(64), "episode_v11", timeline, 0, 0, 60_000, "episodes/episode_v11/renders/chunks/44/4.mp4", "5".repeat(64), 60_000);
+    insert.run("6".repeat(64), "episode_v11", timeline, 1, 60_000, 240_000, "episodes/episode_v11/renders/chunks/66/6.mp4", "7".repeat(64), 180_000);
+    assert.throws(
+      () => insert.run("bad", "episode_v11", timeline, 2, 240_000, 300_000, "bad.mp4", "8".repeat(64), 60_000),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => insert.run("8".repeat(64), "episode_v11", timeline, 2, 240_000, 299_999, "bad.mp4", "9".repeat(64), 59_999),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => insert.run("8".repeat(64), "episode_v11", timeline, 2, 240_000, 420_001, "bad.mp4", "9".repeat(64), 180_001),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => insert.run("8".repeat(64), "episode_v11", timeline, 2, 240_000, 300_000, "bad.mp4", "BAD", 60_000),
+      /CHECK constraint failed/,
+    );
+    assert.throws(
+      () => insert.run("8".repeat(64), "missing_episode", timeline, 2, 240_000, 300_000, "bad.mp4", "9".repeat(64), 60_000),
+      /FOREIGN KEY constraint failed/,
+    );
+    assert.throws(
+      () => insert.run("8".repeat(64), "episode_v11", timeline, 0, 240_000, 300_000, "duplicate.mp4", "9".repeat(64), 60_000),
+      /UNIQUE constraint failed/,
+    );
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM render_chunks").get()?.count, 2);
+    database.prepare("DELETE FROM episodes WHERE id = 'episode_v11'").run();
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM render_chunks").get()?.count, 0);
     upgraded.close();
   } finally {
     await rm(dataRoot, { recursive: true, force: true });

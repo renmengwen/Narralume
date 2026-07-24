@@ -54,6 +54,7 @@ import {
 } from "./script-approval-store.js";
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
 import { createPlaceholderVideoJobHandler, PLACEHOLDER_VIDEO_JOB_TYPE } from "./placeholder-video-job.js";
+import { createRenderChunksJobHandler, RENDER_CHUNKS_JOB_TYPE } from "./render-chunk-job.js";
 import {
   createImageCandidateJobHandler,
   enqueueImageCandidateJob,
@@ -201,6 +202,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
+    [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
     ...(imageProvider ? {
       [IMAGE_CANDIDATE_JOB_TYPE]: createImageCandidateJobHandler(connection.database, dataRoot, imageProvider),
     } : {}),
@@ -701,13 +703,13 @@ export function buildApp(options: BuildAppOptions = {}) {
         throw error;
       }
     }
-    if (type === PLACEHOLDER_VIDEO_JOB_TYPE) {
+    if (type === PLACEHOLDER_VIDEO_JOB_TYPE || type === RENDER_CHUNKS_JOB_TYPE) {
       const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? body.payload as { episodeId?: unknown; timelineHash?: unknown }
         : {};
       if (typeof payload.episodeId !== "string" || !payload.episodeId ||
           typeof payload.timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(payload.timelineHash)) {
-        return reply.code(400).send({ ok: false, message: "占位视频任务缺少有效分集 ID 或时间轴哈希" });
+        return reply.code(400).send({ ok: false, message: "视频任务缺少有效分集 ID 或时间轴哈希" });
       }
       try {
         requireApprovedScriptForProduction(connection.database, payload.episodeId, "video");

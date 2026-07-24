@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`4acdbc0`（P1-03 已集成且 Review 风险分级已登记；本控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`0837567`（P1-04 业务提交已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P1-04 第二版 candidate；全量三门、server 13 项、web 6 项与 cached diff 通过；真实 HTTP 导入 105 章，浏览器从 100/105 加载到 105/105 且第 105 章可访问；首轮 4 项 findings 已修复。
-- 当前 Task：`P1-04`
-- 唯一下一动作：独立 Reviewer 从头复算并综合审查 P1-04 第二版 candidate；Coordinator 在 Review 期间停止修改 candidate。
+- 最近验证：2026-07-24 P1-04 集成态；全量 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` 通过；server 13 项、web 6 项；第二轮独立综合 Review PASS。
+- 当前 Task：`P1-05`
+- 唯一下一动作：在仓库与合法公开来源中定位真实长篇中文 TXT，冻结来源与哈希后建立可重复的大文本门禁，验证内存、重启、偏移、重复导入和重复章节编号。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-04 | Coordinator（Review 期间停止写入） | `D:\code3\Narralume-worktrees\P1-04` / `codex/p1-04` / `9df94e2` | `apps/server/src/app.ts`、`apps/server/src/app.test.ts`、`apps/server/src/book-library.ts`、`apps/server/src/book-library.test.ts`、`apps/web/**`、`opendesign/**`、`docs/source-provenance.md`；排除本 Ledger | 书库查询、章节分页与原文切片、前端异步状态、深浅/系统主题、OpenDesign 规范与来源记录 | 测试临时目录、Worker Git index、前端构建、端口 3100/4173/8289 | `frozen_for_review` |
+| P1-05 | Coordinator | `D:\code3\Narralume-worktrees\P1-05` / `codex/p1-05` / `0837567` | 待真实输入与调用链核对后收窄为门禁脚本、测试和必要修复；排除本 Ledger | 真实长篇输入、内存/重启/偏移/幂等/重复编号证据 | 真实输入缓存、测试数据根、端口 3100/4173 | `implementing` |
 
 ## Phase 依赖
 
@@ -49,8 +49,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |
 | P1-03 编码与章节索引 | `complete` | P1-02 | Coordinator / 已释放 | `git-index-tree-v1:8884491a865b9ed334c2ca493621c7e93e4f51da:325e71d7da8923bf65b3c8bedd96457c8325d063` | `8110fe7` | PASS，绑定第二版 revision | PASS，绑定第二版 revision | 集成态 12 项 server tests；全量三门 GREEN；编码/内存/事务真实探针 | `9df94e2` | 1 MiB 单行门；进入 P1-04 |
-| P1-04 书库 API 与最小 UI | `frozen_for_review` | P1-03 | Coordinator / `codex/p1-04` 冻结租约 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | 本控制提交，以 Git 历史定位 | 待第二轮独立综合 Review | 待第二轮独立综合 Review | 全量三门与 cached diff GREEN；server 13 项、web 6 项；105 章真实 HTTP/UI 加载更多 GREEN；首轮 4 项 findings 已修复 | - | Reviewer 从头复审第二版；candidate 变更则 Verdict 失效 |
-| P1-05 真实大文本门禁 | `queued` | P1-04 | - | - | - | - | - | - | - | - |
+| P1-04 书库 API 与最小 UI | `complete` | P1-03 | Coordinator / 已释放 | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4` | `c92c1aa` | PASS，绑定 `c92c1aa`/第二版 revision | PASS，绑定同一次独立综合 Review | 集成态全量三门 GREEN；server 13 项、web 6 项；2 章与 105 章真实 UI 流程；OpenDesign 第二版核验 PASS | `0837567` | Node SQLite 实验性警告；真实大文本性能与重启门进入 P1-05 |
+| P1-05 真实大文本门禁 | `implementing` | P1-04 | Coordinator / `codex/p1-05` 当前租约 | - | - | - | - | - | - | 先冻结合法真实长篇输入来源与哈希，再建立可重复门禁 |
 | P2-01 持久化任务状态机 | `queued` | P1-05 | - | - | - | - | - | - | - | - |
 | P2-02 checkpoint 与恢复 | `queued` | P2-01 | - | - | - | - | - | - | - | - |
 | P2-03 章节事件合同 | `queued` | P2-02 | - | - | - | - | - | - | - | - |
@@ -83,7 +83,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | REQ-P1-01 | `verified` | 稳定书籍 ID；真实 TXT 流式原子导入、限制与幂等 | P1-02 |
 | REQ-P1-02 | `verified` | UTF-8、GBK/CP936、GB18030 编码识别 | P1-03 |
 | REQ-P1-03 | `verified` | 稳定章节 ID、原始字节偏移、字符数、SHA-256 和重复编号 | P1-03 |
-| REQ-P1-04 | `implementing` | SQLite 重启后书库/章节/切片查询与最小中文 UI | P1-01、P1-04 |
+| REQ-P1-04 | `verified` | SQLite 重启后书库/章节分页/原始字节切片查询与中文 UI；系统/浅色/深色主题与异步四态 | P1-01、P1-04 |
 | REQ-P1-05 | `pending` | 真实大文本内存、幂等、偏移和重启门禁 | P1-05 |
 | REQ-P2-01 | `pending` | 持久化 Worker、租约、重试、取消与精确定向恢复 | P2-01、P2-02、P2-04 |
 | REQ-P2-02 | `pending` | 结构化章节事件及精确原文证据 | P2-03、P2-04 |
@@ -119,6 +119,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P1-04 candidate | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:7a144d758f0cc6b41e35a84f07924fc6463e4ae1`；书库/章节分页/原始字节切片 API，中文上传与中断状态，系统/浅色/深色主题，OpenDesign 暖中性产品规范；全量三门、server 12 项、web 5 项与 cached diff GREEN；浏览器真实上传 2 章并读取原文，浅色/深色刷新持久化及恢复系统通过；OpenDesign 首轮核验发现编码字符和命中区问题，修复后第二版独立核验 PASS；manifest 7 项与全树扫描一致。 |
 | 2026-07-24 P1-04 首轮综合 Review | FAIL，绑定 Ledger `9ddb640` 与首版 revision；P1：章节 UI 固定 `limit=100` 使后续章节不可达；导入 POST 成功后列表刷新失败会误报导入失败且覆盖成功状态。P2：原文读取缺 GB18030 非零切片、短读/严格解码/句柄关闭/路径边界测试；省略书名与章节名缺完整 `title`。旧 revision 失效。 |
 | 2026-07-24 P1-04 第二版 candidate | `git-index-tree-v1:9df94e21f03ef41f33271b45317cde142cba6fa9:b0aaa519364e4dd3f92ed1a48050db7dc2a063e4`；新增 100 章一页的“加载更多”和 `X/N` 状态；导入成功与列表刷新错误分离且 POST 后立即清空中断引用；GB18030 非零切片、短读后 Windows 改名、fatal 解码、路径越界测试；省略标题补完整 `title`；全量三门、server 13 项、web 6 项 GREEN；真实 105 章从 100/105 加载至 105/105。 |
+| 2026-07-24 P1-04 完成 | 第二轮独立综合 Review PASS，绑定 Ledger `c92c1aa` 与第二版 revision；业务提交/集成提交 `0837567`；集成态全量三门 GREEN；OpenDesign 深浅/系统主题规范、UI Kit、mockup 和实际 React 工作台落地。 |
 
 ## 决策与剩余风险
 

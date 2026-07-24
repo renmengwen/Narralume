@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import type { Readable } from "node:stream";
 
 import { BookImportError, importBookText } from "./book-import.js";
+import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
 
@@ -46,10 +47,22 @@ export function buildApp(options: BuildAppOptions = {}) {
         database: connection.database,
         dataRoot,
       });
+      let indexed;
+      try {
+        indexed = await indexBookChapters({ book: result.book, database: connection.database, dataRoot });
+      } catch {
+        connection.database
+          .prepare("UPDATE books SET import_status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(result.book.id);
+        throw new BookImportError(422, "TXT 编码或章节索引失败，请检查原文文件");
+      }
       return reply.code(result.created ? 201 : 200).send({
         ok: true,
-        message: result.created ? "书籍已导入，等待章节索引" : "相同内容已存在",
+        message: result.created ? "书籍已导入并完成章节索引" : "相同内容已存在，章节索引已确认",
         ...result,
+        book: { ...result.book, encoding: indexed.encoding, import_status: "ready" },
+        encoding: indexed.encoding,
+        chapter_count: indexed.chapters.length,
       });
     } catch (error) {
       if (error instanceof BookImportError) {

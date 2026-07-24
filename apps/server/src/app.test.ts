@@ -50,9 +50,12 @@ test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
     });
 
     assert.equal(first.statusCode, 201);
-    assert.equal(first.json().message, "书籍已导入，等待章节索引");
+    assert.equal(first.json().message, "书籍已导入并完成章节索引");
+    assert.equal(first.json().chapter_count, 1);
+    assert.equal(first.json().book.encoding, "UTF-8");
+    assert.equal(first.json().book.import_status, "ready");
     assert.equal(duplicate.statusCode, 200);
-    assert.equal(duplicate.json().message, "相同内容已存在");
+    assert.equal(duplicate.json().message, "相同内容已存在，章节索引已确认");
     assert.equal(empty.statusCode, 400);
     assert.equal(empty.json().message, "TXT 文件不能为空");
   } finally {

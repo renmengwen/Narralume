@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`ff38e6d5e99eb34b1fecd36d03f21bb374d85da5`（P5-01 集成业务提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-01 Worker worktree clean，临时 `node_modules` Junction 已核验 Target 后只删除链接本身。
+- 当前 HEAD：`b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff`（P5-01 完成并启动 P5-02 的控制提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；`D:\code3\Narralume-worktrees\P5-02` 已从本控制提交建立，候选 Store 与图片 provider/Job 两条不重叠核心写线并行，`node_modules` 为临时 Junction。
 - 最近验证：2026-07-25 P5-01 集成态；全量 `typecheck/test/build` 与 diff GREEN，server 64/64、web 6/6；真实资产 gate 建立人物/两个状态/场景/道具及四组别名，重启稳定与系列级联 GREEN。
 - 当前 Task：`P5-02`
-- 唯一下一动作：从本控制提交建立 `codex/p5-02`，先并行实现 migration v10 + 候选文件/Store 与单一图片 provider + Job；收敛后再由单写者接入 API、真实模型 gate 和来源记录，不提前进入视觉段/联系表。
+- 唯一下一动作：收敛 P5-02 两条核心写线的 migration/候选文件 Store 与单一图片 provider/Job 合同，Coordinator 复核后再开放 API/真实模型 gate 单写者；不提前进入视觉段/联系表。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-02 | Coordinator | 待从本控制提交建立 `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` | migration v10、候选文件/Store、图片 provider/Job、API/tests、真实模型 gate、来源记录；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `leased` |
+| P5-02 | Coordinator（candidate-store / image-job 两个不重叠写者） | `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` / `b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff` | migration v10、候选文件/Store、图片 provider/Job、后续 API/tests、真实模型 gate、来源记录；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `implementing` |
 
 ## Phase 依赖
 
@@ -63,7 +63,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
 | P5-01 资产合同 | `complete` | P4-03 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 集成态 `typecheck/test/build`、diff GREEN；server 64/64、web 6/6；INSERT/UPDATE 层级约束、真实资产 gate、重启与级联 GREEN | 冻结 `c8bef59`；集成 `ff38e6d` | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入 P5-02 |
-| P5-02 候选图与来源 | `leased` | P5-01 | Coordinator / 写租约见上 | - | - | - | - | 只读合同与本机能力审计完成：真实生图配置可用，非敏感模型 `doubao-seedream-4-5-251128`；未执行调用、未读取或输出密钥 | - | 首版固定单图竖屏、PNG/JPEG/WebP、30 MiB；不提前做视觉段/联系表 |
+| P5-02 候选图与来源 | `implementing` | P5-01 | Coordinator / 写租约见上 | - | - | - | - | 只读合同与本机能力审计完成：真实生图配置可用，非敏感模型 `doubao-seedream-4-5-251128`；两条核心写线并行，未读取或输出密钥 | - | 首版固定单图竖屏、PNG/JPEG/WebP、30 MiB；不提前做视觉段/联系表 |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |
 | P6-01 唯一 9:16 模板 | `queued` | P5-04 | - | - | - | - | - | - | - | - |

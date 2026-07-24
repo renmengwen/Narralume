@@ -247,6 +247,37 @@ test("故事弧分集 API 保存服务端证据快照并可重启查询", async 
     assert.equal(saved.statusCode, 200);
     assert.equal(saved.json().episode.index, 1);
 
+    const faithful = await app.inject({
+      method: "POST",
+      url: `/api/series/${seriesId}/episodes/1/scripts`,
+      payload: {
+        kind: "faithful",
+        paragraphs: [{ text: "宝玉来到大观园。", sourceIndexes: [0] }],
+      },
+    });
+    assert.equal(faithful.statusCode, 201);
+    assert.equal(faithful.json().script.versionNumber, 1);
+    const repeated = await app.inject({
+      method: "POST",
+      url: `/api/series/${seriesId}/episodes/1/scripts`,
+      payload: {
+        kind: "faithful",
+        paragraphs: [{ text: "宝玉来到大观园。", sourceIndexes: [0] }],
+      },
+    });
+    assert.equal(repeated.json().script.id, faithful.json().script.id);
+    const packaged = await app.inject({
+      method: "POST",
+      url: `/api/series/${seriesId}/episodes/1/scripts`,
+      payload: {
+        kind: "packaged",
+        parentVersionId: faithful.json().script.id,
+        paragraphs: [{ text: "宝玉走进大观园，故事由此展开。", sourceIndexes: [0] }],
+      },
+    });
+    assert.equal(packaged.statusCode, 201);
+    assert.equal(packaged.json().script.parentVersionId, faithful.json().script.id);
+
     await app.close();
     app = buildApp({ dataRoot, logger: false });
     const listed = await app.inject({ method: "GET", url: `/api/books/${bookId}/series` });
@@ -257,6 +288,15 @@ test("故事弧分集 API 保存服务端证据快照并可重启查询", async 
     assert.equal(queried.json().episode.sources.length, 1);
     assert.equal(queried.json().episode.sources[0].sourceText, "宝玉");
     assert.equal(queried.json().episode.sources[0].sourceHash, createHash("sha256").update(evidence).digest("hex"));
+    const scripts = await app.inject({
+      method: "GET",
+      url: `/api/series/${seriesId}/episodes/1/scripts`,
+    });
+    assert.equal(scripts.statusCode, 200);
+    assert.equal(scripts.json().items.length, 2);
+    assert.equal(scripts.json().items[0].paragraphs[0].sources[0].sourceText, undefined);
+    assert.equal(scripts.json().items[0].paragraphs[0].sources[0].sourceHash,
+      createHash("sha256").update(evidence).digest("hex"));
 
     const invalid = await app.inject({
       method: "PUT",

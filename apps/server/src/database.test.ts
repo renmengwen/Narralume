@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 5);
+    assert.equal(migration?.version, 6);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (6)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (7)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -138,6 +138,8 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE script_version_sources");
+    current.database.exec("DROP TABLE script_versions");
     current.database.exec("DROP TABLE episode_sources");
     current.database.exec("DROP TABLE episodes");
     current.database.exec("DROP TABLE series_projects");
@@ -157,9 +159,57 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 5);
+    assert.equal(migration?.version, 6);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
+    upgraded.close();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("既有 migration v5 数据库可升级 v6 且删除分集会级联稿件版本", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v5-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE script_version_sources; DROP TABLE script_versions");
+    current.database.prepare("DELETE FROM schema_migrations WHERE version = 6").run();
+    current.database.prepare(
+      `INSERT INTO books (
+         id, title, original_file_path, original_file_hash, encoding, import_status
+       ) VALUES ('book_v5', '旧书', 'books/book_v5/source.txt', ?, 'UTF-8', 'ready')`,
+    ).run("c".repeat(64));
+    current.database.prepare(
+      `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+       VALUES ('series_v5', 'book_v5', '系列', 1, 1)`,
+    ).run();
+    current.database.prepare(
+      `INSERT INTO episodes (
+         id, series_project_id, episode_index, title, story_arc,
+         target_duration_seconds, created_at, updated_at
+       ) VALUES ('episode_v5', 'series_v5', 1, '第一集', '开端', 180, 1, 1)`,
+    ).run();
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    assert.equal(
+      upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
+      6,
+    );
+    upgraded.database.prepare(
+      `INSERT INTO script_versions (
+         id, episode_id, kind, version, content_json, content_hash, created_at
+       ) VALUES ('script_v5', 'episode_v5', 'faithful', 1, '{}', ?, 1)`,
+    ).run("d".repeat(64));
+    upgraded.database.prepare(
+      `INSERT INTO script_version_sources (
+         script_version_id, segment_index, source_index, episode_source_index,
+         chapter_id, source_event_id, source_byte_start, source_byte_end, source_hash
+       ) VALUES ('script_v5', 0, 0, 0, 'chapter', 'event', 0, 1, ?)`,
+    ).run("e".repeat(64));
+    upgraded.database.prepare("DELETE FROM episodes WHERE id = 'episode_v5'").run();
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM script_versions").get()?.count, 0);
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM script_version_sources").get()?.count, 0);
     upgraded.close();
   } finally {
     await rm(dataRoot, { recursive: true, force: true });
@@ -170,8 +220,9 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v4-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE script_version_sources; DROP TABLE script_versions");
     current.database.exec("DROP TABLE episode_sources; DROP TABLE episodes; DROP TABLE series_projects");
-    current.database.prepare("DELETE FROM schema_migrations WHERE version = 5").run();
+    current.database.prepare("DELETE FROM schema_migrations WHERE version >= 5").run();
     current.database.prepare(
       `INSERT INTO books (
          id, title, original_file_path, original_file_hash, encoding, import_status
@@ -182,7 +233,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      5,
+      6,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)

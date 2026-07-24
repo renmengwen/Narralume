@@ -148,7 +148,41 @@ const MIGRATION_5 = `
   ) STRICT;
 `;
 
-const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5];
+const MIGRATION_6 = `
+  CREATE TABLE script_versions (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('faithful', 'packaged')),
+    version INTEGER NOT NULL CHECK (version >= 1),
+    parent_version_id TEXT REFERENCES script_versions(id),
+    content_json TEXT NOT NULL CHECK (length(content_json) > 0),
+    content_hash TEXT NOT NULL CHECK (
+      length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    UNIQUE (episode_id, kind, version)
+  ) STRICT;
+
+  CREATE TABLE script_version_sources (
+    script_version_id TEXT NOT NULL REFERENCES script_versions(id) ON DELETE CASCADE,
+    segment_index INTEGER NOT NULL CHECK (segment_index >= 0),
+    source_index INTEGER NOT NULL CHECK (source_index >= 0),
+    episode_source_index INTEGER NOT NULL CHECK (episode_source_index >= 0),
+    chapter_id TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    source_byte_start INTEGER NOT NULL CHECK (source_byte_start >= 0),
+    source_byte_end INTEGER NOT NULL CHECK (source_byte_end > source_byte_start),
+    source_hash TEXT NOT NULL CHECK (
+      length(source_hash) = 64 AND source_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    PRIMARY KEY (script_version_id, segment_index, source_index)
+  ) STRICT;
+
+  CREATE INDEX script_versions_episode_order
+    ON script_versions(episode_id, kind, version);
+`;
+
+const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6];
 
 export interface NarralumeDatabase {
   database: DatabaseSync;
@@ -167,6 +201,7 @@ export function openDatabase(dataRoot?: string): NarralumeDatabase {
     database.exec(`
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

@@ -24,6 +24,13 @@ import {
 } from "./episode-store.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
+import {
+  createScriptVersion,
+  listScriptVersions,
+  ScriptVersionStoreError,
+  type ScriptVersionInput,
+  type ScriptVersionKind,
+} from "./script-version-store.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
@@ -53,6 +60,11 @@ interface ReplaceEpisodeBody {
   recap?: unknown;
   nextHook?: unknown;
   sourceEventIds?: unknown;
+}
+interface CreateScriptBody {
+  kind?: unknown;
+  parentVersionId?: unknown;
+  paragraphs?: unknown;
 }
 
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
@@ -247,6 +259,60 @@ export function buildApp(options: BuildAppOptions = {}) {
       }
     },
   );
+
+  const episodeIdForRoute = (seriesId: string, episodeIndex: string) => {
+    const index = Number(episodeIndex);
+    if (!Number.isSafeInteger(index) || index < 1) {
+      throw new ScriptVersionStoreError(400, "分集序号必须从 1 开始");
+    }
+    const row = connection.database.prepare(
+      "SELECT id FROM episodes WHERE series_project_id = ? AND episode_index = ?",
+    ).get(seriesId, index) as { id: string } | undefined;
+    if (!row) throw new ScriptVersionStoreError(404, "分集不存在");
+    return row.id;
+  };
+
+  app.post<{
+    Params: { seriesId: string; episodeIndex: string };
+    Body: CreateScriptBody;
+  }>("/api/series/:seriesId/episodes/:episodeIndex/scripts", async (request, reply) => {
+    try {
+      const episodeId = episodeIdForRoute(request.params.seriesId, request.params.episodeIndex);
+      const script = createScriptVersion(connection.database, episodeId, {
+        kind: request.body?.kind,
+        parentVersionId: request.body?.parentVersionId,
+        paragraphs: request.body?.paragraphs,
+      } as ScriptVersionInput);
+      return reply.code(201).send({ ok: true, message: "稿件版本已保存", script });
+    } catch (error) {
+      if (error instanceof ScriptVersionStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{
+    Params: { seriesId: string; episodeIndex: string };
+    Querystring: { kind?: string };
+  }>("/api/series/:seriesId/episodes/:episodeIndex/scripts", async (request, reply) => {
+    try {
+      const episodeId = episodeIdForRoute(request.params.seriesId, request.params.episodeIndex);
+      const kind = request.query.kind;
+      if (kind !== undefined && kind !== "faithful" && kind !== "packaged") {
+        throw new ScriptVersionStoreError(400, "稿件类型无效");
+      }
+      return {
+        ok: true,
+        items: listScriptVersions(connection.database, episodeId, kind as ScriptVersionKind | undefined),
+      };
+    } catch (error) {
+      if (error instanceof ScriptVersionStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
 
   app.post<{ Body: CreateJobBody }>("/api/jobs", async (request, reply) => {
     const body = request.body;

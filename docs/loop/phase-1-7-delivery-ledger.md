@@ -26,16 +26,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`b546c60b408587e7d64ff37856348b3e7876d2c1`（P5-02 核心并行租约控制提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-03 首版保持 9 个业务路径 staged、零额外 unstaged/untracked；真实 gate 数据保留在忽略目录，`node_modules` 为临时 Junction。首版 revision 因 Code Quality finding 失效，尚未开放修改。
-- 最近验证：2026-07-25 P5-03 首轮 Review；Spec PASS，Code Quality FAIL。全量 `typecheck/test/build`、diff 和真实本地 gate 仍 GREEN，server 81/81、web 6/6；Review 探针已回滚。
+- 工作区：`dev` 仅本 Ledger 待提交；P5-03 第二版 9 个业务路径全部 staged，零额外 unstaged/untracked，candidate tree 已重新冻结；真实 gate 数据保留在忽略目录，`node_modules` 为临时 Junction。
+- 最近验证：2026-07-25 P5-03 第二版 candidate；Coordinator 独立全量 `typecheck/test/build`、diff 与真实本地 gate GREEN，server 83/83、web 6/6；INSERT/UPDATE 绕过和旧损坏读取防御回归 GREEN。
 - 当前 Task：`P5-03`
-- 唯一下一动作：完成本 finding 控制提交并推送后，只开放 database.ts/database.test.ts/visual-segment-store.ts/test.ts 的最小修复：为 visual_segment_assets INSERT/UPDATE 增加同系列触发器，并在 productionReady/guard 层复核同系列，补直接 SQL 绕过回归；重验、重冻后只复审失效范围。
+- 唯一下一动作：完成本第二版冻结控制提交并推送后，只读复审 P5-03 失效的 Code Quality 同系列约束范围；首轮 Spec Review 继续有效，不重复执行。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-03 | Coordinator | `D:\code3\Narralume-worktrees\P5-03` / `codex/p5-03` / `116c9a2` | 仅首轮 finding 的 4 个核心修复路径；排除本 Ledger | migration v11、视觉段/资产关系、productionReady/guard、Worker index | SQLite schema 与 Store | `changes_requested` |
+| P5-03 | Coordinator | `D:\code3\Narralume-worktrees\P5-03` / `codex/p5-03` / `116c9a2` | 9 个第二版冻结业务路径；排除本 Ledger | migration v11、视觉段/资产关系、API、真实 gate、Worker index | SQLite schema、`app.ts`、P5-03 gate data root | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -64,7 +64,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
 | P5-01 资产合同 | `complete` | P4-03 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 集成态 `typecheck/test/build`、diff GREEN；server 64/64、web 6/6；INSERT/UPDATE 层级约束、真实资产 gate、重启与级联 GREEN | 冻结 `c8bef59`；集成 `ff38e6d` | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入 P5-02 |
 | P5-02 候选图与来源 | `complete` | P5-01 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:61fec58a9aff498dcb5a8f836f2ef0ab40a28f1f`；前两版失效 | `e2fe95f75177f6609cf465d8eabc4dbf438259c7`；前两版见事件日志 | PASS，绑定首版 Ledger/revision；继续有效 | PASS，绑定第三版 Ledger/revision；前两轮 findings 全部关闭，无新 findings | 集成态全量 `typecheck/test/build`、diff GREEN；server 74/74、web 6/6；真实模型 `doubao-seedream-4-5-251128` 生成 JPEG 1600×2848、1,038,668 bytes、SHA-256 `e6ce4d3aa60094f5aa6ee34fc680c008196e363204ed17234fd8172ca65ae471`，candidate `5fbac1d20c4e45c76edba81e9bfa2ed57684e1cf22e2e1d9b7252e013ce83cd9`；checkpoint、重启、上传、审核 GREEN | 冻结 `7911103`；集成 `1744857` | Node SQLite 实验性警告非阻断；进入 P5-03 |
-| P5-03 视觉段显式绑定 | `changes_requested` | P5-02 | Coordinator / 写租约见上 | 首版已失效：`git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:9d92d6d073dbdf7bc1cb503de119ae70267d4a14` | `a4b4d1a5668f73d3116c322121d51a41d3cd1af6` | PASS，绑定首版 Ledger/revision；无 findings | FAIL，绑定首版 Ledger/revision：SQLite INSERT/UPDATE 可绕过 episode/asset 同系列约束，读取层仍误判 productionReady=true | 全量三门/diff、server 81/81、web 6/6、真实本地 gate GREEN；只读跨系列探针确认绕过后已 ROLLBACK | - | 只补 DB 双触发器、读取/guard 防御与直接 SQL 回归；重冻后复审失效范围 |
+| P5-03 视觉段显式绑定 | `frozen_for_review` | P5-02 | Coordinator / 写租约见上 | 第二版 `git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:8adc0ee594d962215b5b6e4f33a155b398068511`；首版失效 | 本冻结控制提交；首版 `a4b4d1a5668f73d3116c322121d51a41d3cd1af6` | PASS，绑定首版 Ledger/revision；修复未改变 Spec，继续有效 | 首轮 FAIL；等待绑定第二版 Ledger/revision 的同系列失效范围复审 | 全量三门/diff、server 83/83、web 6/6、真实本地 gate GREEN；DB INSERT/UPDATE 跨系列拒绝，旧损坏关系 productionReady=false/guard 失败 | - | 第二版只复审同系列 DB/读取防御，不重复 Spec 或其他已关闭范围 |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |
 | P6-01 唯一 9:16 模板 | `queued` | P5-04 | - | - | - | - | - | - | - | - |
 | P6-02 分片与身份 | `queued` | P6-01 | - | - | - | - | - | - | - | - |
@@ -173,6 +173,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P5-03 启动 | 从 `dev` `116c9a2` 创建 `D:\code3\Narralume-worktrees\P5-03` / `codex/p5-03`。首版宽切片只做 migration v11、视觉段 Store、PUT/GET API、显式多资产/唯一候选绑定、完整时间轴生产就绪 guard 与真实重启/拒绝 gate；不新增 Job/checkpoint、模型自动分镜、无限画布、复杂轨道、历史版本表、批量 API、联系表或 P6 渲染。三条不重叠写线并行，单一核心 Writer；新增 migration 按高风险规则冻结后并行 Spec/Code Quality 双 Review，不增加第三次 Review。 |
 | 2026-07-25 P5-03 candidate | `git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:9d92d6d073dbdf7bc1cb503de119ae70267d4a14`；migration v11 新增 `visual_segments` 与 `visual_segment_assets`；cue 闭区间派生真实时间，稳定 ID、乐观 revision、简化运镜与 fade；每段显式关联多资产且恰一 approved selected candidate，关系保留但后续 reject 自动失去 productionReady；完整 guard 要求当前批准稿、时间轴、连续段序号/cue、首尾完整覆盖与最新候选审核一致。PUT/GET 中文 API 完成。真实 gate 使用 System.Speech 生成 264,688ms 时间轴、10 cue/10 段，ffmpeg 本地 PNG 900×1600、7,725 bytes，candidate `67023df9f3f5c343b41aa9c8051d12f2431f9b81bef2acce14bfac03b5482749`、SHA-256 `1bcb326779bb61beed9241187c3724c061dbd7899b5c75a848be796cb2be7bec`，完整覆盖、重启稳定、reject 后阻断。全量三门/diff GREEN，server 81/81、web 6/6；未调用外部模型。 |
 | 2026-07-25 P5-03 首轮 Review | 独立 Spec Review PASS、Code Quality Review FAIL，均绑定 Ledger `a4b4d1a5668f73d3116c322121d51a41d3cd1af6` 与首版 revision。P1：`visual_segment_assets` 只有 asset/candidate 外键，没有 INSERT/UPDATE 同系列触发器；Reviewer 在事务内把视觉段关系改指另一系列的资产/已批准候选，SQLite 接受且 `productionReady=true`，随后已 ROLLBACK。首版失效，只开放数据库双触发器、读取/guard 同系列复核与直接 SQL 绕过回归；Spec PASS 继续有效，重冻后只复审失效范围。全量三门与真实本地 gate 仍 GREEN，未调用外部模型。 |
+| 2026-07-25 P5-03 第二版 candidate | `git-index-tree-v1:116c9a2b2037d7e6c43c2e92619c4064efdf4476:8adc0ee594d962215b5b6e4f33a155b398068511`；migration v11 为 `visual_segment_assets` 增加 INSERT/UPDATE 双触发器，通过 visual segment→episode→asset 强制同系列，保留 candidate/asset 复合外键；读取层重新复核 segment/episode/asset 同系列及 candidate 归属，使旧损坏关系 `productionReady=false` 且完整 guard 失败。直接 SQL INSERT/UPDATE 跨系列均拒绝；事务内临时模拟旧损坏后读取/guard 防御通过并 ROLLBACK 恢复。Coordinator 独立全量三门/diff、server 83/83、web 6/6 与真实本地 gate GREEN；只复审同系列失效范围。 |
 
 ## 决策与剩余风险
 

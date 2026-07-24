@@ -230,7 +230,8 @@ function parseFinalManifest(text: string): FinalVideoManifest {
   const complete = manifest as FinalVideoManifest;
   if (complete.chunks.some((chunk, index) => chunk.index !== index || !Number.isSafeInteger(chunk.startMs) ||
       !Number.isSafeInteger(chunk.endMs) || chunk.startMs < 0 || chunk.endMs <= chunk.startMs || !HASH.test(chunk.renderHash) ||
-      typeof chunk.relativePath !== "string" || !HASH.test(chunk.fileHash) || !Number.isSafeInteger(chunk.bytes) || chunk.bytes < 1 ||
+      chunk.relativePath !== `episodes/${complete.episodeId}/renders/chunks/${chunk.renderHash.slice(0, 2)}/${chunk.renderHash}.mp4` ||
+      !HASH.test(chunk.fileHash) || !Number.isSafeInteger(chunk.bytes) || chunk.bytes < 1 ||
       !Number.isSafeInteger(chunk.durationMs) || chunk.durationMs < 1) || complete.finalVideo.bytes < 1 ||
       !Number.isSafeInteger(complete.finalVideo.durationMs) || complete.finalVideo.durationMs < 1 ||
       complete.finalVideo.streams?.video !== "h264:1080x1920:25:yuv420p" || complete.finalVideo.streams?.audio !== "aac") {

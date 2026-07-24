@@ -8,7 +8,7 @@ import test from "node:test";
 
 import { openDatabase } from "./database.js";
 import { FINAL_VIDEO_MANIFEST_VERSION, type FinalVideoManifest } from "./final-video.js";
-import { createProjectPackage, restoreProjectPackage } from "./project-package.js";
+import { createProjectPackage, restoreProjectPackage, type ProjectPackageManifest } from "./project-package.js";
 import { loadRenderPlanSnapshot, RENDER_CONTRACT } from "./render-chunk-job.js";
 
 const TIMELINE = "a".repeat(64);
@@ -140,6 +140,50 @@ test("恢复拒绝不安全、重复、缺失、额外和被篡改的 payload", 
       await assert.rejects(readFile(target));
     } finally { await cleanup(current); }
   });
+});
+
+test("恢复拒绝数据库、最终清单和 payload 一同伪造的非规范分片路径", async () => {
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "package");
+    await createProjectPackage(current.connection.database, current.dataRoot,
+      { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+    const manifestPath = join(packagePath, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as ProjectPackageManifest;
+    const payload = join(packagePath, "payload");
+    const chunkFile = manifest.files.find((file) => file.roles.includes("render-chunk"));
+    assert.ok(chunkFile);
+    const forgedChunkPath = `episodes/${manifest.project.episodeId}/renders/chunks/forged/chunk.mp4`;
+
+    const databasePath = join(payload, "narralume.sqlite3");
+    const database = new DatabaseSync(databasePath);
+    try { database.prepare("UPDATE render_chunks SET relative_path = ?").run(forgedChunkPath); }
+    finally { database.close(); }
+
+    const finalManifestPath = join(payload, ...manifest.project.finalManifestPath.split("/"));
+    const finalManifest = JSON.parse(await readFile(finalManifestPath, "utf8")) as FinalVideoManifest;
+    const finalChunk = finalManifest.chunks[0];
+    assert.ok(finalChunk);
+    finalChunk.relativePath = forgedChunkPath;
+    await writeFile(finalManifestPath, `${JSON.stringify(finalManifest, null, 2)}\n`);
+
+    const forgedChunkFile = join(payload, ...forgedChunkPath.split("/"));
+    await mkdir(dirname(forgedChunkFile), { recursive: true });
+    await rename(join(payload, ...chunkFile.path.split("/")), forgedChunkFile);
+    chunkFile.path = forgedChunkPath;
+    for (const file of manifest.files) {
+      const content = await readFile(join(payload, ...file.path.split("/")));
+      file.bytes = content.length;
+      file.sha256 = hash(content);
+    }
+    const { packageHash: _old, ...identity } = manifest;
+    manifest.packageHash = hash(JSON.stringify(identity));
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const target = join(current.root, "target");
+    await assert.rejects(restoreProjectPackage(packagePath, target), /最终视频清单文件身份无效/);
+    await assert.rejects(stat(target), (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT");
+  } finally { await cleanup(current); }
 });
 
 test("链接、Junction 或硬链接不能进入项目包", async (t) => {

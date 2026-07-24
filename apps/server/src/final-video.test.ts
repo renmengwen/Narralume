@@ -103,9 +103,11 @@ test("最终导出严格复验当前分片并成对生成可复用视频与版�
 
 test("复用旧 final 的异步探测期间撤回批准时不得返回 reused", async () => {
   const current = await fixture();
+  let runCalls = 0;
   const base = {
     probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
     run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      runCalls += 1;
       if (!options?.cwd) throw new Error("missing cwd");
       await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
     },
@@ -113,6 +115,7 @@ test("复用旧 final 的异步探测期间撤回批准时不得返回 reused", 
   try {
     const old = await exportFinalVideo(current.connection.database, current.dataRoot,
       { episodeId: "episode", timelineHash: TIMELINE }, base);
+    runCalls = 0;
     let withdrawn = false;
     await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
       { episodeId: "episode", timelineHash: TIMELINE }, { ...base, probe: async (path) => {
@@ -124,6 +127,7 @@ test("复用旧 final 的异步探测期间撤回批准时不得返回 reused", 
         return measured;
       } }), /不能开始.*视频生产/u);
     assert.equal(withdrawn, true);
+    assert.equal(runCalls, 0, "当前身份变化必须立即失败，不能进入 ffmpeg 重建");
   } finally {
     current.connection.close();
     await rm(current.dataRoot, { recursive: true, force: true });
@@ -132,6 +136,8 @@ test("复用旧 final 的异步探测期间撤回批准时不得返回 reused", 
 
 test("最终身份复核与同步目录切换共享数据库写事务", async () => {
   const current = await fixture();
+  const contender = openDatabase(current.dataRoot);
+  contender.database.exec("PRAGMA busy_timeout=0");
   const base = {
     probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
     run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
@@ -147,8 +153,8 @@ test("最终身份复核与同步目录切换共享数据库写事务", async ()
     const rebuilt = await exportFinalVideo(current.connection.database, current.dataRoot,
       { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRenameSync: (from, to) => {
         if (from.toString().includes(".tmp")) {
-          try { changeScriptApproval(current.connection.database, "episode", { action: "withdraw", expectedRevision: 1 }); }
-          catch (error) { withdrawBlocked = /transaction within a transaction/u.test(String(error)); }
+          try { changeScriptApproval(contender.database, "episode", { action: "withdraw", expectedRevision: 1 }); }
+          catch (error) { withdrawBlocked = /busy|locked/u.test(String(error).toLowerCase()); }
         }
         renameSync(from, to);
       } });
@@ -156,6 +162,7 @@ test("最终身份复核与同步目录切换共享数据库写事务", async ()
     assert.equal(withdrawBlocked, true);
     assert.equal(getScriptApproval(current.connection.database, "episode").status, "approved");
   } finally {
+    contender.close();
     current.connection.close();
     await rm(current.dataRoot, { recursive: true, force: true });
   }
@@ -207,6 +214,73 @@ test("崩溃残留只按完整 pair 恢复且非 ENOENT 与清理失败原样返
       }) as typeof lstat }), /stat-denied/u);
     assert.equal((await stat(target)).isDirectory(), true);
     assert.equal((await stat(backup)).isDirectory(), true);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("target 验证后被替换时不得删除唯一有效 backup", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  try {
+    const first = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    const target = dirname(first.finalPath);
+    const backup = `${target}.backup`;
+    const validatedTarget = `${target}.validated`;
+    await cp(target, backup, { recursive: true });
+    let targetStats = 0;
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishLstat: (async (path: string) => {
+        if (path === target && ++targetStats === 4) {
+          await rename(target, validatedTarget);
+          await mkdir(target);
+        }
+        return lstat(path);
+      }) as typeof lstat }), /发布目录在验证后已被替换/u);
+    assert.equal((await stat(backup)).isDirectory(), true, "有效 backup 不得被竞态删除");
+    assert.equal((await stat(validatedTarget)).isDirectory(), true);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("backup-only 验证后被替换时不得恢复未验证目录", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  try {
+    const first = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    const target = dirname(first.finalPath);
+    const backup = `${target}.backup`;
+    const validatedBackup = `${backup}.validated`;
+    await rename(target, backup);
+    let backupStats = 0;
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishLstat: (async (path: string) => {
+        if (path === backup && ++backupStats === 4) {
+          await rename(backup, validatedBackup);
+          await mkdir(backup);
+        }
+        return lstat(path);
+      }) as typeof lstat }), /发布目录在验证后已被替换/u);
+    await assert.rejects(stat(target), { code: "ENOENT" });
+    assert.equal((await stat(backup)).isDirectory(), true, "替换后的未验证 backup 不得成为 target");
+    assert.equal((await stat(validatedBackup)).isDirectory(), true);
   } finally {
     current.connection.close();
     await rm(current.dataRoot, { recursive: true, force: true });

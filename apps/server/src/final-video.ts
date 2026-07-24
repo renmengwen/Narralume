@@ -63,6 +63,11 @@ interface FinalVideoDependencies {
   publishRemoveSync: typeof rmSync;
 }
 
+interface PublishedDirectoryInspection {
+  identity: { dev: number; ino: number };
+  valid: boolean;
+}
+
 function sha256(content: string | Buffer) {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -143,29 +148,61 @@ async function exists(path: string, publishLstat: typeof lstat) {
   }
 }
 
+async function directoryIdentity(path: string, publishLstat: typeof lstat) {
+  const info = await publishLstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("最终导出发布路径必须是真实目录");
+  return { dev: info.dev, ino: info.ino };
+}
+
+function sameDirectory(
+  left: PublishedDirectoryInspection["identity"],
+  right: PublishedDirectoryInspection["identity"],
+) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function assertSameDirectory(
+  path: string,
+  identity: PublishedDirectoryInspection["identity"],
+  publishLstat: typeof lstat,
+) {
+  const current = await directoryIdentity(path, publishLstat);
+  if (!sameDirectory(current, identity)) throw new Error("最终导出发布目录在验证后已被替换");
+}
+
 async function validPublishedPair(
   dataRoot: string,
   directory: string,
   manifestBase: Omit<FinalVideoManifest, "finalVideo">,
   finalRelativePath: string,
   probe: typeof probeNineSixteenVideo,
-) {
+  publishLstat: typeof lstat,
+): Promise<PublishedDirectoryInspection | null> {
+  let before: PublishedDirectoryInspection["identity"];
+  try { before = await directoryIdentity(directory, publishLstat); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  let valid = false;
   try {
     const videoPath = join(directory, "video.mp4");
     const manifestPath = join(directory, "manifest.json");
     await assertOrdinaryDataFile(dataRoot, videoPath);
     await assertOrdinaryDataFile(dataRoot, manifestPath);
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as FinalVideoManifest;
-    if (JSON.stringify({ ...manifest, finalVideo: undefined }) !==
-        JSON.stringify({ ...manifestBase, finalVideo: undefined }) ||
-        manifest.finalVideo.relativePath !== finalRelativePath) return false;
-    const measured = await probe(videoPath);
-    return measured.bytes === manifest.finalVideo.bytes && measured.durationMs === manifest.finalVideo.durationMs &&
-      await sha256File(videoPath) === manifest.finalVideo.fileHash;
+    if (JSON.stringify({ ...manifest, finalVideo: undefined }) ===
+        JSON.stringify({ ...manifestBase, finalVideo: undefined }) &&
+        manifest.finalVideo?.relativePath === finalRelativePath) {
+      const measured = await probe(videoPath);
+      valid = measured.bytes === manifest.finalVideo.bytes && measured.durationMs === manifest.finalVideo.durationMs &&
+        await sha256File(videoPath) === manifest.finalVideo.fileHash;
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return false;
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
   }
+  const after = await directoryIdentity(directory, publishLstat);
+  if (!sameDirectory(before, after)) throw new Error("最终导出发布目录在验证期间已被替换");
+  return { identity: after, valid };
 }
 
 async function recoverPublish(
@@ -180,18 +217,29 @@ async function recoverPublish(
   publishLstat: typeof lstat,
 ) {
   if (!await exists(backup, publishLstat)) return;
-  const backupValid = await validPublishedPair(dataRoot, backup, manifestBase, finalRelativePath, probe);
+  const backupInspection = await validPublishedPair(dataRoot, backup, manifestBase, finalRelativePath, probe, publishLstat);
+  if (!backupInspection) return;
   if (!await exists(target, publishLstat)) {
-    if (!backupValid) throw new Error("最终导出备份不完整，拒绝恢复");
+    if (!backupInspection.valid) throw new Error("最终导出备份不完整，拒绝恢复");
+    if (await exists(target, publishLstat)) throw new Error("最终导出目标在恢复前已出现");
+    await assertSameDirectory(backup, backupInspection.identity, publishLstat);
     await publishRename(backup, target);
     return;
   }
-  if (await validPublishedPair(dataRoot, target, manifestBase, finalRelativePath, probe)) {
+  const targetInspection = await validPublishedPair(dataRoot, target, manifestBase, finalRelativePath, probe, publishLstat);
+  if (!targetInspection) throw new Error("最终导出目标在恢复验证期间已消失");
+  if (targetInspection.valid) {
+    await assertSameDirectory(target, targetInspection.identity, publishLstat);
+    await assertSameDirectory(backup, backupInspection.identity, publishLstat);
     await publishRemove(backup, { recursive: true });
     return;
   }
-  if (!backupValid) throw new Error("最终导出目标与备份均不完整，拒绝恢复");
+  if (!backupInspection.valid) throw new Error("最终导出目标与备份均不完整，拒绝恢复");
+  await assertSameDirectory(backup, backupInspection.identity, publishLstat);
+  await assertSameDirectory(target, targetInspection.identity, publishLstat);
   await publishRemove(target, { recursive: true });
+  if (await exists(target, publishLstat)) throw new Error("最终导出目标在恢复切换前已出现");
+  await assertSameDirectory(backup, backupInspection.identity, publishLstat);
   await publishRename(backup, target);
 }
 
@@ -281,6 +329,7 @@ export async function exportFinalVideo(
     validatedChunks.push({ row, path });
   }
 
+  let currentIdentityCheckStarted = false;
   try {
     await assertOrdinaryDataFile(dataRoot, finalPath);
     await assertOrdinaryDataFile(dataRoot, manifestPath);
@@ -293,6 +342,7 @@ export async function exportFinalVideo(
     if (Math.abs(measured.durationMs - rows.at(-1)!.end_ms) <= MAX_DURATION_DRIFT_MS &&
         await readFile(manifestPath, "utf8") === manifestText(manifest)) {
       if (input.signal?.aborted) throw new JobCancelledError();
+      currentIdentityCheckStarted = true;
       const currentSnapshot = loadRenderPlanSnapshot(database, input.episodeId, input.timelineHash);
       const currentRows = database.prepare(
         `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
@@ -308,6 +358,7 @@ export async function exportFinalVideo(
     }
   } catch (error) {
     if (input.signal?.aborted || error instanceof JobCancelledError) throw new JobCancelledError();
+    if (currentIdentityCheckStarted) throw error;
     /* 缺失、损坏或过期的同身份导出必须重建。 */
   }
 

@@ -72,6 +72,10 @@ function hash(bytes: Buffer) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function narrationCharacters(paragraphs: ReadonlyArray<{ text: string }>) {
+  return [...paragraphs.map((paragraph) => paragraph.text).join("").replace(/\s/gu, "")].length;
+}
+
 function evidence(source: Buffer, chapter: ChapterRow, phrase: string) {
   const needle = Buffer.from(phrase, "utf8");
   const chapterBytes = source.subarray(chapter.byte_start, chapter.byte_end);
@@ -250,9 +254,30 @@ try {
   const faithfulV1Body = {
     kind: "faithful",
     paragraphs: [
-      { text: "甄士隱夢中识得通灵顽石，故事由一段超尘因缘展开。", sourceIndexes: [0, 1] },
-      { text: "贾府兴衰已埋下因果与悬念，旁观者将见证其起落。", sourceIndexes: [2, 3] },
-      { text: "黛玉投奔外祖母，初入荣国府，人物命运开始交汇。", sourceIndexes: [4, 5] },
+      {
+        text: "故事先从甄士隱的梦境说起。梦中出现的通灵之物并非寻常器物，它来自一块经历漫长岁月的顽石。原文用梦幻识通灵打开叙事，也把这块顽石的来历写得明确：它本在天地之间，后来才有机会进入人世。甄士隱的所见不是孤立奇谈，而是整段故事的入口，提醒读者此后人物的相遇、离散与家族的盛衰，都和这段超尘因缘相连。", sourceIndexes: [0, 1],
+      },
+      {
+        text: "顽石的数量与来历在原文中留下了清楚标记，这让梦境并不只是模糊象征。甄士隱识得通灵，也等于替读者第一次看见故事背后的线索。首章把神异的开端放在人间生活之前，使后来发生的每一次偶遇都带有因缘色彩。忠实讲述这一段时，不能把顽石改成别的宝物，也不能省掉甄士隱梦中识得它的事实，因为这正是后续人物命运能够被串起的起点。", sourceIndexes: [0, 1],
+      },
+      {
+        text: "故事进入人间后，一次看似偶然的回望带来了真正的因果。原文直说，正因为偶然一顾，才弄出后面这段事来。这里没有把变化归结为凭空出现的巧合，而是给出了可以追溯的原因和结果：一个短暂动作触发了一连串关系。人物当时未必知道后果，读者却已经被告知，这次相遇会改变他们接下来的路，也会把个人遭际逐渐牵引到更大的家族故事中。", sourceIndexes: [2],
+      },
+      {
+        text: "与此同时，关于贾府的悬念已经被提前提出。原文没有直接宣布它将兴或将衰，而是留下欲知目下兴衰、须问旁观冷眼人的提示。这个提示把叙事视角拉远：府中人身处繁华，旁观者却可能更早看见变化。因果线和兴衰线在这里并行，一边是人物偶然一顾造成的具体事件，一边是整个家族尚未揭开的命运，两条线共同把读者带向荣国府。", sourceIndexes: [2, 3],
+      },
+      {
+        text: "第三章把目光转向黛玉。她不是随意游历，而是在现实处境中前往外祖母家，依傍外祖母以及舅氏姊妹。原文给出的去向很具体，因此改编不能把这次出发说成主动追求富贵，也不能凭空增加别的动机。对黛玉而言，这既是一次投亲，也是生活环境的彻底变化；对整个故事而言，她将从原来的生活进入贾府中心，与此前铺下的兴衰悬念发生联系。", sourceIndexes: [4],
+      },
+      {
+        text: "抵达之后，黛玉面对的不是一个抽象的大家族名称，而是可以辨认的荣国府。原文以行进中的观察确认方是荣国府了，让空间转换真正落地。门第、规矩和陌生亲族都在这道边界之后等待她。镜头如果停在府门之前，观众应当明白：甄士隱梦中出现的通灵线索、偶然一顾造成的因果、旁观者提示的家族兴衰，如今都将随着黛玉踏入荣国府而汇到同一处。", sourceIndexes: [3, 4, 5],
+      },
+      {
+        text: "把三章连在一起，可以得到一条不越过原文证据的故事弧：顽石以通灵之物的身份进入叙事，甄士隱在梦中首先识得它；人间的一次偶然回望引出后续因果；贾府的兴衰被冷眼旁观者预先设问；黛玉则因投亲来到荣国府。每一步都有原文范围作支点，没有把尚未发生的情节提前当成事实，也没有改变人物此时已经明确的行动与去向。", sourceIndexes: [0, 1, 2, 3, 4, 5],
+      },
+      {
+        text: "这一集的结尾停在黛玉进入荣国府的门槛上最为合适。前面的神异开端告诉我们，故事并非只有眼前生活；中间的因果与兴衰提示又说明，繁华之下已经存在值得追问的线索；最后，黛玉的到来把一个新的观察者送进家族内部。下一步要看的，不是凭空编造的冲突，而是她在荣国府中将遇见哪些人，又会怎样亲眼看见这个家族的日常与命运。", sourceIndexes: [0, 2, 3, 4, 5],
+      },
     ],
   } as const;
   const createScript = async (body: object) => {
@@ -265,11 +290,38 @@ try {
     kind: "packaged",
     parentVersionId: faithfulV1.id,
     paragraphs: [
-      { text: "一块顽石，如何牵动红楼众人的命运？", sourceIndexes: [0, 1] },
-      { text: "盛极之时，衰败的伏笔早已写下。", sourceIndexes: [2, 3] },
-      { text: "当黛玉走进荣国府，真正的故事才刚刚开始。", sourceIndexes: [4, 5] },
+      {
+        text: "一块顽石，为什么会和荣国府里无数人的命运连在一起？故事没有从高门大宅直接讲起，而是先让甄士隱做了一场梦。梦中，他识得通灵之物，也看见那块经历漫长岁月的顽石获得入世的机会。这个开端不是可以随意替换的奇观，它告诉我们：眼前即将展开的人间故事，背后还藏着一条更长的因缘线。", sourceIndexes: [0, 1],
+      },
+      {
+        text: "甄士隱梦幻识通灵，是读者第一次接触这条线索。顽石并非突然从荣国府中出现，它有被原文明确标记的来历。包装讲述可以加快节奏，却不能改变这个事实。于是我们先记住两件事：甄士隱在梦中看见了它，它也将从天地之间走入人世。等人物真正相遇时，这场梦就不再只是开篇的神异插曲，而会成为回看一切的起点。", sourceIndexes: [0, 1],
+      },
+      {
+        text: "真正推动人间故事的，却可能只是一个极小的动作。原文说，因为偶然一顾，便弄出这段事来。一次回望看起来轻得不能再轻，结果却把陌生人的道路接在一起。这里最重要的不是夸大巧合，而是看清已经写明的因果：人物做出了动作，后续事件由此发生。命运并不是从天而降，它常常借一个当时无人重视的瞬间悄悄转向。", sourceIndexes: [2],
+      },
+      {
+        text: "当个人因果刚刚启动，贾府的命运也被提前放在读者面前。原文留下了一句耐人寻味的提醒：若要知道目下兴衰，要去问旁观的冷眼人。府里也许仍是盛景，旁观者却可能已经看见不同的征兆。为什么要由旁观者回答？因为身在繁华中的人，往往最难察觉变化。这道悬念没有给出结论，却让我们带着问题走向荣国府。", sourceIndexes: [2, 3],
+      },
+      {
+        text: "就在这时，黛玉的人生也来到转折处。她要依傍外祖母和舅氏姊妹，离开原来的生活，前往一个熟悉于名声、陌生于日常的家族。她的动机在原文中非常清楚：这是投亲，是现实处境下的去向，不是为了追逐虚构出来的目标。对黛玉来说，前方既有亲人，也有规矩和未知；对观众来说，她将成为我们进入贾府内部的一双眼睛。", sourceIndexes: [4],
+      },
+      {
+        text: "车马继续向前，真正的空间边界终于出现。黛玉确认，眼前方是荣国府。直到这一刻，前面三条线才开始汇合：梦中的通灵顽石，为故事留下超越日常的来历；偶然一顾，引出具体的人间因果；冷眼旁观者，则让贾府的兴衰成为尚待回答的问题。如今黛玉站在府门之前，她即将走进去，也即将亲身进入这些线索交织的地方。", sourceIndexes: [0, 2, 3, 4, 5],
+      },
+      {
+        text: "所以，这一集讲的并不是几段彼此无关的旧事。它讲的是一条逐渐收紧的路径：从顽石入世，到甄士隱梦中识得通灵；从一次偶然回望，到因果真正发生；从旁观者提出兴衰之问，到黛玉投亲并抵达荣国府。每一步都能回到原文中的人物、动作、地点或提示。我们没有提前宣布贾府的结局，只知道关于它的疑问已经出现。", sourceIndexes: [0, 1, 2, 3, 4, 5],
+      },
+      {
+        text: "府门已经打开，但黛玉尚未看清门内的一切。她会先遇见谁，会怎样理解这里的亲疏与规矩，又会从哪些细节感受到旁观者所说的兴衰征兆？这些问题要留给下一段故事回答。此刻只需记住：一个从梦幻中出现的通灵线索，一次改变人物道路的偶然回望，一句关于家族命运的冷眼提醒，以及一个走进荣国府的少女，已经在同一条叙事线上相遇。", sourceIndexes: [0, 2, 3, 4, 5],
+      },
     ],
   });
+  const approvedNarrationCharacters = narrationCharacters(packagedV1.paragraphs);
+  const estimatedNarrationSeconds = approvedNarrationCharacters / 4;
+  assert(
+    estimatedNarrationSeconds >= 180 && estimatedNarrationSeconds <= 300,
+    `批准稿按每秒 4 字估算必须落在 3～5 分钟，实际 ${estimatedNarrationSeconds.toFixed(2)} 秒`,
+  );
   const faithfulV2 = await createScript({
     kind: "faithful",
     paragraphs: [
@@ -328,6 +380,13 @@ try {
   expectProductionBlocked(() => probeProduction("tts"));
   expectProductionBlocked(() => probeProduction("image"));
   assert.equal(productionSideEffects, 2, "撤回后不得继续触发生产副作用");
+  const reapprovedResponse = await app.inject({
+    method: "PUT",
+    url: approvalUrl,
+    payload: { action: "approve", expectedRevision: 2, scriptVersionId: packagedV1.id },
+  });
+  assert.equal(reapprovedResponse.statusCode, 200, `重新批准失败：${reapprovedResponse.body}`);
+  assert.equal(reapprovedResponse.json().approval.revision, 3);
 
   await app.close();
   app = buildApp({ dataRoot, logger: false });
@@ -370,11 +429,11 @@ try {
   }
   const restartedApproval = await app.inject({ method: "GET", url: approvalUrl });
   assert.equal(restartedApproval.statusCode, 200, `重启后批准状态查询失败：${restartedApproval.body}`);
-  assert.equal(restartedApproval.json().approval.status, "withdrawn");
-  assert.equal(restartedApproval.json().approval.revision, 2);
-  expectProductionBlocked(() => probeProduction("tts"));
-  expectProductionBlocked(() => probeProduction("image"));
-  assert.equal(productionSideEffects, 2, "重启后撤回状态仍必须阻断生产");
+  assert.equal(restartedApproval.json().approval.status, "approved");
+  assert.equal(restartedApproval.json().approval.revision, 3);
+  assert.equal(restartedApproval.json().approval.scriptVersionId, packagedV1.id);
+  assert.equal(probeProduction("tts").scriptVersionId, packagedV1.id);
+  assert.equal(productionSideEffects, 3, "重启后只能放行最终重新批准的包装稿");
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
@@ -392,6 +451,8 @@ try {
     approval_revision: restartedApproval.json().approval.revision,
     production_guard: true,
     production_side_effects: productionSideEffects,
+    approved_script_characters: approvedNarrationCharacters,
+    estimated_narration_seconds: estimatedNarrationSeconds,
   }, null, 2)}\n`);
 } finally {
   if (app) await app.close();

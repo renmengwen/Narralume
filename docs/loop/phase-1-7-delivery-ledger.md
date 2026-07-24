@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`39d90d0`（本冻结控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`86ce213`（P2-04 已集成；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P2-04 candidate；全量三门/diff GREEN，server 44 项、web 6 项；P2 恢复 gate 与真实 3 章任务 gate GREEN。
-- 当前 Task：`P2-04`
-- 唯一下一动作：对冻结 revision 执行一次 Phase 2 独立综合门禁 Review；该 Review 同时覆盖 P2-04 与 Phase 2，不再重复双 Review。
+- 最近验证：2026-07-24 P2-04 集成态；全量三门/diff GREEN，server 44 项、web 6 项；P2 恢复 gate 与真实 3 章任务 gate GREEN；Phase 2 综合 Review PASS。
+- 当前 Task：`P3-01`
+- 唯一下一动作：在 `codex/p3-01` 以一个宽切片实现 migration v5、故事弧/分集证据存储、4 个最小 API、相关测试与真实单集门禁；不拆更多微 Task。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2-04 | Coordinator（已停止写入，待综合 Review） | `D:\code3\Narralume-worktrees\P2-04` / `codex/p2-04` / `9d75144` | `apps/server/package.json`、`src/app.ts`、`chapter-events-job.ts`、`chapter-events-job.test.ts`、`chapter-event-store.ts`、`chapter-event-store.test.ts`、`gates/p2-real-chapter-jobs-gate.ts`；排除本 Ledger | 最小章节事件任务、3 章真实恢复、取消与重启查询 | 真实来源下载、SQLite 租约、故障注入子进程、Worker Git index | `frozen_for_review` |
+| P3-01 | Coordinator | `D:\code3\Narralume-worktrees\P3-01` / `codex/p3-01` / `86ce213` | `apps/server/package.json`、`src/database.ts`、`database.test.ts`、`episode-store.ts`、`episode-store.test.ts`、`app.ts`、`app.test.ts`、`gates/p3-real-episode-gate.ts`；排除本 Ledger | migration v5、系列/分集/证据快照、4 个 API、真实单集门禁 | SQLite migration、分集证据写锁、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -54,8 +54,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P2-01 持久化任务状态机 | `complete` | P1-05 | Coordinator / 已释放 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 集成态全量三门/diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5 | `d8dff8f` | Node SQLite 实验性警告；协作取消与外部副作用幂等进入 P2-02 |
 | P2-02 checkpoint 与恢复 | `complete` | P2-01 | Coordinator / 已释放 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973` | `cee11c6` | PASS，绑定 `cee11c6`/第三版 revision | PASS，绑定 `cee11c6`/第三版 revision | 集成态全量三门/diff GREEN；server 36 项、web 6 项；恢复 gate 最终 succeeded、attempts=2、重复结果 0 | `fbc1d65` | Node SQLite 实验性警告；受限 transaction 的复杂语句限制进入真实调用验证 |
 | P2-03 章节事件合同 | `complete` | P2-02 | Coordinator / 已释放 | `git-index-tree-v1:fbc1d652d3170a6d1c142b6c01ac8c4db955e913:03911512550f2dbe8d414412588aea3b144ea1e6` | `a1d7417` | PASS，绑定 `a1d7417`/冻结 revision | PASS，绑定 `a1d7417`/冻结 revision | 集成态全量三门/diff GREEN；server 42、web 6；P2 恢复 gate、真实 124 章门禁 GREEN | `9d75144` | 极端短证据性能不阻塞首版；未来 handler 需校验 prepared chapterId |
-| P2-04 真实章节任务门禁 | `frozen_for_review` | P2-03 | Coordinator / 已停止写入，待综合 Review | `git-index-tree-v1:9d75144a73bdb12a8a4d573c20e9f9672fd1cdf4:4b59c6d54aa8889655cfe0fe71d5c5934130482a` | 本冻结控制提交 | 待一次 Phase 2 综合 Review | 待同一次 Phase 2 综合 Review | 全量三门/diff GREEN；server 44、web 6；P2 恢复 gate GREEN；真实 3 章 gate：硬退出 91、attempts=2、processed=1/reused=2、取消 checkpoint=0、重启六类事件 6 条 | - | Review 只修首版阻断项；人工 PUT 后旧 checkpoint 可能命中记为非阻断风险 |
-| P3-01 故事弧与分集证据 | `queued` | P2-04 | - | - | - | - | - | - | - | - |
+| P2-04 真实章节任务门禁 | `complete` | P2-03 | Coordinator / 已释放 | `git-index-tree-v1:9d75144a73bdb12a8a4d573c20e9f9672fd1cdf4:4b59c6d54aa8889655cfe0fe71d5c5934130482a` | `14c31c3` | PASS，绑定 `14c31c3`/冻结 revision | PASS，绑定同一次 Phase 2 综合 Review | 集成态全量三门/diff GREEN；server 44、web 6；P2 恢复 gate GREEN；真实 3 章 gate：硬退出 91、attempts=2、processed=1/reused=2、取消 checkpoint=0、重启六类事件 6 条 | `86ce213` | 人工 PUT 后旧 checkpoint 可能命中；Node SQLite 实验性警告；Phase 2 complete |
+| P3-01 故事弧与分集证据 | `implementing` | P2-04 | Coordinator / `codex/p3-01` 写租约 | - | - | 待冻结后独立 Review | 待冻结后独立 Review | 只读方案已收敛为 migration/store/API/真实门禁单一宽切片 | - | 先实现证据快照核心，再并行接 API 与真实 gate |
 | P3-02 稿件版本 | `queued` | P3-01 | - | - | - | - | - | - | - | - |
 | P3-03 人工批准闸门 | `queued` | P3-02 | - | - | - | - | - | - | - | - |
 | P3-04 真实分集验收 | `queued` | P3-03 | - | - | - | - | - | - | - | - |
@@ -85,8 +85,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | REQ-P1-03 | `verified` | 稳定章节 ID、原始字节偏移、字符数、SHA-256 和重复编号 | P1-03 |
 | REQ-P1-04 | `verified` | SQLite 重启后书库/章节分页/原始字节切片查询与中文 UI；系统/浅色/深色主题与异步四态 | P1-01、P1-04 |
 | REQ-P1-05 | `verified` | 公版真实《红楼梦》124 章：RSS 有界、幂等、重启、全量分页、首中尾偏移与真实重复编号门禁 | P1-05 |
-| REQ-P2-01 | `pending` | 持久化 Worker、租约、重试、取消与精确定向恢复 | P2-01、P2-02、P2-04 |
-| REQ-P2-02 | `pending` | 结构化章节事件及精确原文证据 | P2-03、P2-04 |
+| REQ-P2-01 | `verified` | 持久化 Worker、租约、重试、取消与精确定向恢复；真实 3 章硬退出恢复通过 | P2-01、P2-02、P2-04 |
+| REQ-P2-02 | `verified` | 六类结构化章节事件及精确原文证据；真实任务重启查询与哈希复算通过 | P2-03、P2-04 |
 | REQ-P3-01 | `pending` | 故事弧、分集和精确来源证据 | P3-01、P3-04 |
 | REQ-P3-02 | `pending` | 忠实/包装/批准稿不可变版本和人工硬闸门 | P3-02、P3-03 |
 | REQ-P4-01 | `pending` | 真实 TTS/ffprobe 时间轴、SRT/ASS 和占位视频 | P4-01～P4-03 |
@@ -139,6 +139,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P2-03 正式双 Review | Spec PASS、Code Quality PASS，均绑定 Ledger `a1d7417` 与冻结 revision；复算 7 个 staged 路径、HEAD/tree 与工作区洁净性一致；全量三门、P2 恢复 gate、真实《红楼梦》124 章门禁独立通过；无阻断 findings。未知 payload 键、证据顺序身份与极端短证据文件打开次数记为非阻断首版风险。 |
 | 2026-07-24 P2-03 完成 | 冻结业务提交 `6c0903c`，集成 `dev` 为 `9d75144`；集成态全量三门/diff、P2 恢复 gate 与真实《红楼梦》124 章门禁 GREEN；释放写租约并按用户“首版先做出来”口径进入最小 P2-04。 |
 | 2026-07-24 P2-04 candidate | `git-index-tree-v1:9d75144a73bdb12a8a4d573c20e9f9672fd1cdf4:4b59c6d54aa8889655cfe0fe71d5c5934130482a`；默认 `chapter_events_replace` JobHandler 复用 P2-02 checkpoint 与 P2-03 事件合同；首版限制单任务 1～3 个不重复章节；prepared chapterId 防串写；真实 Gutenberg《红楼梦》3 章 6 事件门禁在第二章 checkpoint 后硬退出 91，租约到期恢复后 `succeeded/attempts=2/processed=1/reused=2`；协作取消零 checkpoint 且旧事件不变；重启后 `limit=1` 分页读完六类事件并重算证据 SHA-256。全量三门、server 44、web 6、既有 P2 恢复 gate 与新真实门禁 GREEN。 |
+| 2026-07-24 Phase 2 完成 | 一次独立综合门禁 Review PASS，绑定 Ledger `14c31c3` 与 P2-04 冻结 revision，同时覆盖 P2-04 Task 与 Phase 2，不重复双 Review；冻结业务提交 `b0f434e`，集成 `dev` 为 `86ce213`；集成态全量三门/diff、server 44、web 6、P2 checkpoint 恢复 gate 与真实章节任务 gate 全部 GREEN；释放 P2-04 写租约并以宽切片进入 P3-01。 |
 
 ## 决策与剩余风险
 

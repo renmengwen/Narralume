@@ -35,7 +35,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2-03 | Coordinator | `D:\code3\Narralume-worktrees\P2-03` / `codex/p2-03` / `fbc1d65` | `apps/server/src/database.ts`、`database.test.ts`、`chapter-event-store.ts`、`chapter-event-store.test.ts`、`app.ts`、`app.test.ts`；排除本 Ledger | 章节事件 schema、稳定身份、原文证据、整章替换与 HTTP 合同 | SQLite 写锁、原文文件切片、Worker Git index | `implementing` |
+| P2-03 | Coordinator | `D:\code3\Narralume-worktrees\P2-03` / `codex/p2-03` / `fbc1d65` | `apps/server/src/database.ts`、`database.test.ts`、`chapter-index.ts`、`chapter-index.test.ts`、`chapter-event-store.ts`、`chapter-event-store.test.ts`、`app.ts`、`app.test.ts`；排除本 Ledger | 章节事件 schema、稳定身份、原文证据、整章替换、HTTP 合同与重索引保留事件 | SQLite 写锁、原文文件切片、Worker Git index | `implementing` |
 
 ## Phase 依赖
 
@@ -53,7 +53,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P1-05 真实大文本门禁 | `complete` | P1-04 | Coordinator / 已释放 | `git-index-tree-v1:083756749e3487fad3529eb28493bafcfd8d66ca:3eb226b3dcc244b2c08318b5d4be9eee4c3f59e6` | `a7de1e2` | PASS，绑定 `a7de1e2`/第二版 revision | PASS，绑定同一次 Phase 1 阶段门禁综合 Review | 集成态全量三门与真实门禁 GREEN；124 章、RSS 增量 9,027,584 bytes；故障清理探针 GREEN | `7d23438` | Node SQLite 实验性警告；Phase 1 complete，进入 P2-01 |
 | P2-01 持久化任务状态机 | `complete` | P1-05 | Coordinator / 已释放 | `git-index-tree-v1:7d234384deee8e7ebe5f24accfc13144e44f8d7c:0c7ba6e3d055f3f8ca12d62348a1b0114952d026` | `e575591` | PASS，绑定 `e575591`/candidate revision | PASS，绑定 `e575591`/candidate revision | 集成态全量三门/diff GREEN；server 27 项、web 6 项；Quality 时序重复 5/5 | `d8dff8f` | Node SQLite 实验性警告；协作取消与外部副作用幂等进入 P2-02 |
 | P2-02 checkpoint 与恢复 | `complete` | P2-01 | Coordinator / 已释放 | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973` | `cee11c6` | PASS，绑定 `cee11c6`/第三版 revision | PASS，绑定 `cee11c6`/第三版 revision | 集成态全量三门/diff GREEN；server 36 项、web 6 项；恢复 gate 最终 succeeded、attempts=2、重复结果 0 | `fbc1d65` | Node SQLite 实验性警告；受限 transaction 的复杂语句限制进入真实调用验证 |
-| P2-03 章节事件合同 | `implementing` | P2-02 | Coordinator / `codex/p2-03` 写租约 | - | - | 待冻结后独立 Review | 待冻结后独立 Review | 只读合同审计与攻击性测试矩阵并行进行 | - | 先落地 migration/失败测试，再实现最小合同 |
+| P2-03 章节事件合同 | `implementing` | P2-02 | Coordinator / `codex/p2-03` 写租约 | - | - | 待冻结后独立 Review | 待冻结后独立 Review | 只读审计发现重复导入重建章节会级联清空事件；已扩展租约加入回归修复 | - | 保持稳定章节不重建，再完成事件合同与测试 |
 | P2-04 真实章节任务门禁 | `queued` | P2-03 | - | - | - | - | - | - | - | - |
 | P3-01 故事弧与分集证据 | `queued` | P2-04 | - | - | - | - | - | - | - | - |
 | P3-02 稿件版本 | `queued` | P3-01 | - | - | - | - | - | - | - | - |
@@ -134,6 +134,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P2-02 第三版 candidate | `git-index-tree-v1:d8dff8fcc2831c10c55654d958225fad7c2e8c6d:e162f18ddfbf033c85a6e4b6cbae5790eb285973`；受限 transaction 仅接受单条 `INSERT/UPDATE/DELETE` 领域 DML，执行任何排队 SQL 前拒绝事务控制、DDL、PRAGMA、ATTACH 与多语句；逃逸回归领域行/checkpoint 均为 0 且连接可继续使用；全量三门、server 36 项、web 6 项与恢复 gate GREEN。 |
 | 2026-07-24 P2-02 第三轮 Review | Spec PASS、Code Quality PASS，均绑定 Ledger `cee11c6` 与第三版 revision；全量三门与恢复 gate 独立复验；Quality 额外验证 10/10 事务逃逸变体拒绝、领域/checkpoint 泄漏 0、连接继续可用；无 findings。 |
 | 2026-07-24 P2-02 完成 | 冻结业务提交 `f4998a7`，集成 `dev` 为 `fbc1d65`；集成态 `typecheck/test/build`、diff check GREEN，server 36/36、web 6/6；恢复 gate 硬退出码 91、首次完成 2 个范围、恢复 1 个范围、最终 `succeeded`、`attempts=2`、重复结果 0；释放写租约并进入 P2-03。 |
+| 2026-07-24 P2-03 只读合同审计 | 发现 `indexBookChapters` 对重复导入无条件删除/重建章节；新增 `chapter_events ON DELETE CASCADE` 后会静默清空事件。P2-03 写租约扩展至章节索引及测试，要求相同稳定章节结果跳过重建并以回归测试保护。 |
 
 ## 决策与剩余风险
 

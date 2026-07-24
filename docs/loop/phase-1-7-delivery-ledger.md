@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`9563e190bcde028ff55bfdc2bd89b3206dc90e94`（P3-03 完成控制提交；本冻结控制提交后以 Git 历史定位最新 HEAD）
+- 当前 HEAD：`bbd7953a17a289ba7327591354a23f8932c697d1`（P3-04 集成提交；本控制提交后以 Git 历史定位最新 HEAD）
 - 工作区：clean。
-- 最近验证：2026-07-24 P3-04 candidate；全量三门/diff GREEN，server 56/56、web 6/6；真实《红楼梦》批准稿 1,139 字、估算 284.75 秒、逐段证据与最终批准重启 gate GREEN。
-- 当前 Task：`P3-04`
-- 唯一下一动作：对 P3-04 冻结 revision 执行一次独立 Phase 3 综合 Review，同时覆盖 Task Spec、Code Quality 与阶段真实门禁，不重复双审。
+- 最近验证：2026-07-24 P3-04/Phase 3 集成态；全量三门/diff GREEN，server 56/56、web 6/6；真实《红楼梦》批准稿 1,139 字、估算 284.75 秒、逐段证据与最终批准重启 gate GREEN。
+- 当前 Task：`P4-01`
+- 唯一下一动作：从本控制提交建立 `codex/p4-01` 工作区，先盘点本机无密钥中文 TTS/外部命令能力，再实现可取消的 provider 边界、输入身份与中文失败合同；不提前做完整时间轴。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P3-04 | Coordinator（已停止写入，待一次综合 Review） | `D:\code3\Narralume-worktrees\P3-04` / `codex/p3-04` / `9563e19` | `apps/server/src/gates/p3-real-episode-gate.ts`；排除本 Ledger | 真实 3～5 分钟分集、完整证据追溯、批准稿与重启验收 | 真实 Gutenberg 输入、Worker Git index | `frozen_for_review` |
+| P4-01 | Coordinator | `D:\code3\Narralume-worktrees\P4-01` / `codex/p4-01` / 本控制提交 | P4-01 provider/command/identity/tests；排除本 Ledger | 本地/外部命令 TTS 边界、中文错误、取消与批准稿输入身份 | TTS 子进程、系统音频命令、Worker Git index | `leased` |
 
 ## Phase 依赖
 
@@ -58,8 +58,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P3-01 故事弧与分集证据 | `complete` | P2-04 | Coordinator / 已释放 | `git-index-tree-v1:86ce213515c4b2d598651a5feb88200cd22f4672:ba09275959aca1349712f0dce86670355ba38144` | `6341496` | PASS，绑定 `6341496`/冻结 revision | PASS，绑定 `6341496`/冻结 revision | 集成态全量三门/diff GREEN；server 49、web 6；真实 gate：3 章、6 来源事件、240 秒单集、6 证据快照、重启查询与重复 PUT 幂等 | `b83f774` | Node SQLite 实验性警告；进入 P3-02 |
 | P3-02 稿件版本 | `complete` | P3-01 | Coordinator / 已释放 | `git-index-tree-v1:b83f77410b93aa6f1d0fe44c6ef13e767b40685d:aeaee1d97291f3b716fd8ff5b00a350125d0c7f5` | `8670066` | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | PASS，绑定 `8670066396f55211a939245877595bc8bb33d2ca`/第二版 revision | 集成态全量三门/diff GREEN；server 54/54、web 6/6；双连接相同内容同 ID/v1 且库内仅 1 版本；真实三版本、幂等 POST、重启查询 gate GREEN | 冻结 `b0259dd`；集成 `eecdde2` | Node SQLite 实验性警告；首轮并发幂等 finding 已关闭；进入 P3-03 |
 | P3-03 人工批准闸门 | `complete` | P3-02 | Coordinator / 已释放 | `git-index-tree-v1:01b34531a84cf7150e407be20736f6784f143baa:7b078e0190daf74f63ee03b096e285be8cf20a48` | `0b41f55` | PASS，绑定 `0b41f559741418b99eb24ca5df42596f564f6269`/冻结 revision | PASS，绑定 `0b41f559741418b99eb24ca5df42596f564f6269`/冻结 revision | 集成态全量三门/diff GREEN；server 56/56、web 6/6；批准放行同一包装稿，撤回与重启后 TTS/图片硬阻断 | 冻结 `94703a1`；集成 `7e46d88` | Node SQLite 实验性警告；进入 P3-04 |
-| P3-04 真实分集验收 | `frozen_for_review` | P3-03 | Coordinator / 已停止写入，待一次综合 Review | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8` | 本冻结控制提交 | 待同一次独立综合 Review | 待同一次独立综合 Review | 全量三门/diff GREEN；server 56/56、web 6/6；真实批准稿 1,139 字，按每秒 4 字估算 284.75 秒；8 段逐段来源、批准/撤回/重新批准、重启后精确稿件放行均 GREEN | - | 综合 Review 同时作为 Phase 3 阶段门禁；不重复双审，不用估算时长替代 Phase 4 真实 TTS 时长 |
-| P4-01 TTS provider 边界 | `queued` | P3-04 | - | - | - | - | - | - | - | 真实 provider 若需密钥时再触发用户阻塞 |
+| P3-04 真实分集验收 | `complete` | P3-03 | Coordinator / 已释放 | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8` | `8414457` | PASS，绑定 `84144575adb0e6e24862d47dc0c220c48e3c45cb`/冻结 revision，同一次 Phase 3 综合 Review | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 56/56、web 6/6；真实批准稿 1,139 字/284.75 秒估算、8 段证据、最终 approved revision 3、重启精确放行 | 冻结 `516cce9`；集成 `bbd7953` | 估算非真实音频时长；Phase 3 complete，进入 P4-01 |
+| P4-01 TTS provider 边界 | `leased` | P3-04 | Coordinator / 写租约见上 | - | - | - | - | - | - | 优先本机无密钥能力；确需外部密钥时才触发用户阻塞，不把 provider 实现扩成多平台框架 |
 | P4-02 真实音频时间轴 | `queued` | P4-01 | - | - | - | - | - | - | - | - |
 | P4-03 占位视频 | `queued` | P4-02 | - | - | - | - | - | - | - | - |
 | P5-01 资产合同 | `queued` | P4-03 | - | - | - | - | - | - | - | - |
@@ -87,7 +87,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | REQ-P1-05 | `verified` | 公版真实《红楼梦》124 章：RSS 有界、幂等、重启、全量分页、首中尾偏移与真实重复编号门禁 | P1-05 |
 | REQ-P2-01 | `verified` | 持久化 Worker、租约、重试、取消与精确定向恢复；真实 3 章硬退出恢复通过 | P2-01、P2-02、P2-04 |
 | REQ-P2-02 | `verified` | 六类结构化章节事件及精确原文证据；真实任务重启查询与哈希复算通过 | P2-03、P2-04 |
-| REQ-P3-01 | `pending` | 故事弧、分集和精确来源证据 | P3-01、P3-04 |
+| REQ-P3-01 | `verified` | 真实 240 秒分集；3 章 6 事件/证据快照；1,139 字最终批准包装稿的 8 段来源、哈希、父链与重启查询均通过 | P3-01、P3-04 |
 | REQ-P3-02 | `verified` | 忠实/包装稿不可变追加；批准/撤回事件不可覆盖，乐观 revision；未批准及撤回后 TTS/图片硬阻断 | P3-02、P3-03 |
 | REQ-P4-01 | `pending` | 真实 TTS/ffprobe 时间轴、SRT/ASS 和占位视频 | P4-01～P4-03 |
 | REQ-P5-01 | `pending` | 主/状态资产、别名、候选、来源、显式视觉段关系和联系表 | P5-01～P5-04 |
@@ -150,6 +150,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P3-03 candidate | `git-index-tree-v1:01b34531a84cf7150e407be20736f6784f143baa:7b078e0190daf74f63ee03b096e285be8cf20a48`；migration v7 只新增追加式批准事件表；同分集包装稿可批准/撤回，`expectedRevision` 在 `BEGIN IMMEDIATE` 写锁内比较；统一生产 guard 返回批准稿 ID/hash/revision，未批准或撤回时以 409 阻断语音与图片生产。全量三门、server 56、web 6、真实批准/撤回/重启硬门 gate GREEN。 |
 | 2026-07-24 P3-03 完成 | 独立 Spec Review 与 Code Quality Review 均 PASS，绑定 Ledger `0b41f559741418b99eb24ca5df42596f564f6269` 和冻结 revision，无阻断 findings；冻结业务提交 `94703a1`，集成 `dev` 为 `7e46d8836a01901a547f1f55d1c8adfc5007a1dc`；集成态全量三门、server 56/56、web 6/6、真实批准/撤回/重启硬门 gate GREEN；释放 P3-03 并进入 P3-04。 |
 | 2026-07-24 P3-04 candidate | `git-index-tree-v1:9563e190bcde028ff55bfdc2bd89b3206dc90e94:0f281fa651c85e8f1a5d084c5497e8dc799c26d8`；只修改真实 P3 gate，将 faithful/packaged 稿扩展为 8 段完整叙事，最终批准包装稿 1,139 字，按每秒 4 字保守估算 284.75 秒；每段引用 6 份真实事件证据之一，批准/撤回/重新批准后重启仍只放行最终包装稿。全量三门、server 56、web 6、真实 gate GREEN；估算只用于 Phase 3 文本量级，Phase 4 仍以真实 TTS/ffprobe 为准。 |
+| 2026-07-24 P3-04 / Phase 3 完成 | 单次独立综合 Review PASS，绑定 Ledger `84144575adb0e6e24862d47dc0c220c48e3c45cb` 与冻结 revision，同时覆盖 Spec、Code Quality、P3-04 和 Phase 3 阶段门禁，无阻断 findings；冻结业务提交 `516cce9`，集成 `dev` 为 `bbd7953a17a289ba7327591354a23f8932c697d1`；集成态全量三门、server 56/56、web 6/6、真实 P3 gate GREEN；Phase 3 complete，进入 P4-01。 |
 
 ## 决策与剩余风险
 

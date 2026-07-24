@@ -23,17 +23,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`428af35a9e015a2f39431f12ab7709074fc5f5cb`
+- 当前 HEAD：`e6452d35788543cadd5908da60061e851a3a7dc7`
 - 工作区：clean。
 - 最近验证：2026-07-24，Node `v22.22.3`、FFmpeg/FFprobe `8.1.1`；`npm run typecheck`、`npm test`、`npm run build` 通过。
 - 当前 Task：`P1-01`
-- 唯一下一动作：读取 P1-01 将修改的服务器配置/生命周期文件，先写 SQLite 迁移与重启查询的失败测试，再实现最小数据根和数据库基线。
+- 唯一下一动作：对 P1-01 冻结 candidate 执行独立 Spec Review 与 Code Quality Review；Reviewer 必须复算同一 revision。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1-01 | Coordinator | `D:\code3\Narralume` / `dev` / `428af35` | `apps/server/src/config.ts`、`apps/server/src/database.ts`、`apps/server/src/database.test.ts`、必要的 server lifecycle 调用方 | 数据根、SQLite schema v1、数据库生命周期 | 测试临时目录、Git index、`dev` | `implementing` |
+| P1-01 | Coordinator | `D:\code3\Narralume-worktrees\P1-01` / `codex/p1-01` / `e6452d3` | `apps/server/src/config.ts`、`apps/server/src/database.ts`、`apps/server/src/database.test.ts` | 数据根、SQLite schema v1、数据库生命周期 | 测试临时目录、Worker Git index | `frozen_for_review`（停止写入） |
 
 ## Phase 依赖
 
@@ -44,7 +44,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
-| P1-01 数据根与 SQLite 基线 | `implementing` | CTRL-01 | Coordinator / 当前租约 | - | - | - | - | - | - | 先写失败测试 |
+| P1-01 数据根与 SQLite 基线 | `frozen_for_review` | CTRL-01 | Coordinator / `codex/p1-01` 冻结租约 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:bff87773d05e84a8456b299f8cb5b99bdffbb5c4` | 本控制提交 | - | - | 缺模块 RED；全量 `typecheck/test/build` GREEN；SQLite 重启查询 GREEN | - | 等待双 Review；changed paths 为新增 config/database/database.test |
 | P1-02 TXT 流式导入 | `queued` | P1-01 | - | - | - | - | - | - | - | - |
 | P1-03 编码与章节索引 | `queued` | P1-02 | - | - | - | - | - | - | - | - |
 | P1-04 书库 API 与最小 UI | `queued` | P1-03 | - | - | - | - | - | - | - | - |
@@ -81,7 +81,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | REQ-P1-01 | `pending` | 稳定书籍 ID；真实 TXT 流式原子导入、限制与幂等 | P1-02 |
 | REQ-P1-02 | `pending` | UTF-8、GBK/CP936、GB18030 编码识别 | P1-03 |
 | REQ-P1-03 | `pending` | 稳定章节 ID、原始字节偏移、字符数、SHA-256 和重复编号 | P1-03 |
-| REQ-P1-04 | `pending` | SQLite 重启后书库/章节/切片查询与最小中文 UI | P1-01、P1-04 |
+| REQ-P1-04 | `implementing` | SQLite 重启后书库/章节/切片查询与最小中文 UI | P1-01、P1-04 |
 | REQ-P1-05 | `pending` | 真实大文本内存、幂等、偏移和重启门禁 | P1-05 |
 | REQ-P2-01 | `pending` | 持久化 Worker、租约、重试、取消与精确定向恢复 | P2-01、P2-02、P2-04 |
 | REQ-P2-02 | `pending` | 结构化章节事件及精确原文证据 | P2-03、P2-04 |
@@ -100,6 +100,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- |
 | 2026-07-24 Phase 0 基线 | `main/dev@e75b1c3`；`npm run typecheck`、`npm test`、`npm run build` 均通过；Node `v22.22.3`；FFmpeg/FFprobe `8.1.1` |
 | 2026-07-24 CTRL-01 | 业务提交 `428af35`；candidate `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000`；独立 Spec Review PASS；独立 Code Quality Review PASS；两者均复算 commit tree 且工作区 clean |
+| 2026-07-24 P1-01 candidate | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:bff87773d05e84a8456b299f8cb5b99bdffbb5c4`；新增 `config.ts`、`database.ts`、`database.test.ts`；缺模块测试 RED 后，全量 `npm run typecheck`、`npm test`、`npm run build` GREEN；Node 内置 SQLite 实验性警告保留 |
 
 ## 决策与剩余风险
 

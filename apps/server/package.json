@@ -11,6 +11,7 @@
     "gate:phase1-large-text": "tsx src/gates/phase1-large-text-gate.ts",
     "gate:p2-checkpoint-recovery": "tsx src/gates/p2-checkpoint-recovery-gate.ts",
     "gate:p2-real-chapter-jobs": "tsx src/gates/p2-real-chapter-jobs-gate.ts",
+    "gate:p3-real-episode": "tsx src/gates/p3-real-episode-gate.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

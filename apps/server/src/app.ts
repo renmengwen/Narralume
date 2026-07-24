@@ -14,6 +14,14 @@ import { CHAPTER_EVENTS_JOB_TYPE, createChapterEventsJobHandler } from "./chapte
 import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
+import {
+  createSeriesProject,
+  EpisodeStoreError,
+  getEpisode,
+  listSeriesProjects,
+  replaceEpisode,
+  type EpisodeInput,
+} from "./episode-store.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
 
@@ -35,6 +43,16 @@ interface CreateJobBody {
 
 interface ReplaceChapterEventsBody {
   events?: unknown;
+}
+
+interface CreateSeriesBody { title?: unknown }
+interface ReplaceEpisodeBody {
+  title?: unknown;
+  storyArc?: unknown;
+  targetDurationSeconds?: unknown;
+  recap?: unknown;
+  nextHook?: unknown;
+  sourceEventIds?: unknown;
 }
 
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
@@ -156,6 +174,79 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get("/api/books", async () => ({ ok: true, items: listBooks(connection.database) }));
+
+  app.post<{ Params: { bookId: string }; Body: CreateSeriesBody }>(
+    "/api/books/:bookId/series",
+    async (request, reply) => {
+      try {
+        const series = createSeriesProject(connection.database, {
+          bookId: request.params.bookId,
+          title: request.body?.title as string,
+        });
+        return reply.code(201).send({ ok: true, message: "系列项目已创建", series });
+      } catch (error) {
+        if (error instanceof EpisodeStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { bookId: string } }>("/api/books/:bookId/series", async (request, reply) => {
+    try {
+      return { ok: true, items: listSeriesProjects(connection.database, request.params.bookId) };
+    } catch (error) {
+      if (error instanceof EpisodeStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.put<{
+    Params: { seriesId: string; episodeIndex: string };
+    Body: ReplaceEpisodeBody;
+  }>("/api/series/:seriesId/episodes/:episodeIndex", async (request, reply) => {
+    try {
+      const body = request.body;
+      const episode = replaceEpisode(connection.database, request.params.seriesId, {
+        index: Number(request.params.episodeIndex),
+        title: body?.title,
+        storyArc: body?.storyArc,
+        targetDurationSeconds: body?.targetDurationSeconds,
+        recap: body?.recap,
+        nextHook: body?.nextHook,
+        sourceEventIds: body?.sourceEventIds,
+      } as EpisodeInput);
+      return { ok: true, message: "分集故事弧与原文证据已保存", episode };
+    } catch (error) {
+      if (error instanceof EpisodeStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { seriesId: string; episodeIndex: string } }>(
+    "/api/series/:seriesId/episodes/:episodeIndex",
+    async (request, reply) => {
+      try {
+        const episode = await getEpisode(
+          connection.database,
+          dataRoot,
+          request.params.seriesId,
+          Number(request.params.episodeIndex),
+        );
+        return { ok: true, episode };
+      } catch (error) {
+        if (error instanceof EpisodeStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
 
   app.post<{ Body: CreateJobBody }>("/api/jobs", async (request, reply) => {
     const body = request.body;

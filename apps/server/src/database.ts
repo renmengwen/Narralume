@@ -108,7 +108,47 @@ const MIGRATION_4 = `
     ON chapter_events(chapter_id, event_index);
 `;
 
-const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4];
+const MIGRATION_5 = `
+  CREATE TABLE series_projects (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    title TEXT NOT NULL CHECK (length(title) > 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+  ) STRICT;
+
+  CREATE INDEX series_projects_book_order
+    ON series_projects(book_id, created_at, id);
+
+  CREATE TABLE episodes (
+    id TEXT PRIMARY KEY,
+    series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+    episode_index INTEGER NOT NULL CHECK (episode_index >= 1),
+    title TEXT NOT NULL CHECK (length(title) > 0),
+    story_arc TEXT NOT NULL CHECK (length(story_arc) > 0),
+    target_duration_seconds INTEGER NOT NULL CHECK (target_duration_seconds BETWEEN 180 AND 300),
+    recap TEXT,
+    next_hook TEXT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+    UNIQUE (series_project_id, episode_index)
+  ) STRICT;
+
+  CREATE TABLE episode_sources (
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    source_index INTEGER NOT NULL CHECK (source_index >= 0),
+    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    source_event_id TEXT NOT NULL,
+    source_byte_start INTEGER NOT NULL CHECK (source_byte_start >= 0),
+    source_byte_end INTEGER NOT NULL CHECK (source_byte_end > source_byte_start),
+    source_hash TEXT NOT NULL CHECK (
+      length(source_hash) = 64 AND source_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    PRIMARY KEY (episode_id, source_index)
+  ) STRICT;
+`;
+
+const MIGRATIONS = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5];
 
 export interface NarralumeDatabase {
   database: DatabaseSync;

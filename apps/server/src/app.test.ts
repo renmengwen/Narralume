@@ -196,6 +196,86 @@ test("章节事件 HTTP 合同重算证据且重复导入不清空事件", async
   }
 });
 
+test("故事弧分集 API 保存服务端证据快照并可重启查询", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-episode-"));
+  let app = buildApp({ dataRoot, logger: false });
+  const payload = Buffer.from("第一章\n宝玉来到大观园。", "utf8");
+  try {
+    const imported = await app.inject({
+      method: "POST",
+      url: "/api/books/import",
+      headers: { "content-type": "text/plain" },
+      payload,
+    });
+    const bookId = imported.json().book.id as string;
+    const chapters = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const evidence = Buffer.from("宝玉", "utf8");
+    const byteStart = payload.indexOf(evidence);
+    const events = await app.inject({
+      method: "PUT",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events`,
+      payload: {
+        events: [{
+          type: "character",
+          payload: { name: "宝玉" },
+          sources: [{ byteStart, byteEnd: byteStart + evidence.length }],
+        }],
+      },
+    });
+    const sourceEventId = events.json().items[0].id as string;
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/books/${bookId}/series`,
+      payload: { title: "红楼梦短视频" },
+    });
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.json().message, "系列项目已创建");
+    const seriesId = created.json().series.id as string;
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/series/${seriesId}/episodes/1`,
+      payload: {
+        title: "宝玉初见",
+        storyArc: "人物进入核心空间",
+        targetDurationSeconds: 240,
+        recap: "故事由此开始",
+        nextHook: "大观园里还会发生什么？",
+        sourceEventIds: [sourceEventId],
+      },
+    });
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.json().episode.index, 1);
+
+    await app.close();
+    app = buildApp({ dataRoot, logger: false });
+    const listed = await app.inject({ method: "GET", url: `/api/books/${bookId}/series` });
+    const queried = await app.inject({ method: "GET", url: `/api/series/${seriesId}/episodes/1` });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.json().items.length, 1);
+    assert.equal(queried.statusCode, 200);
+    assert.equal(queried.json().episode.sources.length, 1);
+    assert.equal(queried.json().episode.sources[0].sourceText, "宝玉");
+    assert.equal(queried.json().episode.sources[0].sourceHash, createHash("sha256").update(evidence).digest("hex"));
+
+    const invalid = await app.inject({
+      method: "PUT",
+      url: `/api/series/${seriesId}/episodes/0`,
+      payload: {
+        title: "非法分集",
+        storyArc: "非法",
+        targetDurationSeconds: 240,
+        sourceEventIds: [sourceEventId],
+      },
+    });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.json().message, "分集序号必须从 1 开始");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("非法 Worker 配置失败时关闭 SQLite", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-invalid-worker-"));
   try {

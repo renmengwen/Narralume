@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 4);
+    assert.equal(migration?.version, 5);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (5)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (6)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -134,10 +134,13 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
   }
 });
 
-test("既有 migration v2 数据库可原地升级 checkpoint 与章节事件表", async () => {
+test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与分集表", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE episode_sources");
+    current.database.exec("DROP TABLE episodes");
+    current.database.exec("DROP TABLE series_projects");
     current.database.exec("DROP TABLE chapter_event_sources");
     current.database.exec("DROP TABLE chapter_events");
     current.database.exec("DROP TABLE job_checkpoints");
@@ -154,9 +157,58 @@ test("既有 migration v2 数据库可原地升级 checkpoint 与章节事件表
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 4);
+    assert.equal(migration?.version, 5);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
+    upgraded.close();
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集数据", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v4-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE episode_sources; DROP TABLE episodes; DROP TABLE series_projects");
+    current.database.prepare("DELETE FROM schema_migrations WHERE version = 5").run();
+    current.database.prepare(
+      `INSERT INTO books (
+         id, title, original_file_path, original_file_hash, encoding, import_status
+       ) VALUES ('book_v4', '旧书', 'books/book_v4/source.txt', ?, 'UTF-8', 'ready')`,
+    ).run("b".repeat(64));
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    assert.equal(
+      upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
+      5,
+    );
+    upgraded.database.prepare(
+      `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+       VALUES ('series_v4', 'book_v4', '系列', 1, 1)`,
+    ).run();
+    upgraded.database.prepare(
+      `INSERT INTO chapters (
+         id, book_id, chapter_index, title, byte_start, byte_end, char_count, content_hash
+       ) VALUES ('chapter_v4', 'book_v4', 0, '第一章', 0, 1, 1, 'hash')`,
+    ).run();
+    upgraded.database.prepare(
+      `INSERT INTO episodes (
+         id, series_project_id, episode_index, title, story_arc,
+         target_duration_seconds, created_at, updated_at
+       ) VALUES ('episode_v4', 'series_v4', 1, '第一集', '开端', 180, 1, 1)`,
+    ).run();
+    upgraded.database.prepare(
+      `INSERT INTO episode_sources (
+         episode_id, source_index, chapter_id, source_event_id,
+         source_byte_start, source_byte_end, source_hash
+       ) VALUES ('episode_v4', 0, 'chapter_v4', 'event_snapshot', 0, 1, ?)`,
+    ).run("a".repeat(64));
+    upgraded.database.prepare("DELETE FROM books WHERE id = 'book_v4'").run();
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM series_projects").get()?.count, 0);
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM episodes").get()?.count, 0);
+    assert.equal(upgraded.database.prepare("SELECT COUNT(*) AS count FROM episode_sources").get()?.count, 0);
     upgraded.close();
   } finally {
     await rm(dataRoot, { recursive: true, force: true });

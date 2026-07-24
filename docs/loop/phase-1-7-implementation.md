@@ -6,9 +6,9 @@
 
 每个 Task 都执行：确认分支/工作区 → 读取真实调用链 → 写最小失败测试 → 最小实现 → 相关测试 → `typecheck/test/build` → 真实工作流验收 → 冻结 candidate revision/tree → Coordinator 冻结控制提交 → 按风险执行 Review → 修复后重新冻结复审 → 中文业务提交 → Coordinator 中文完成控制提交 → 推送 `origin/dev`。
 
-Review 按新增风险分级：新增数据库迁移、文件耐久写入、编码核心、恢复原语、TTS/FFmpeg 或备份恢复核心使用独立 Spec Review + Code Quality Review；复用已经充分验证的核心、只做编排/接线/真实门禁的 Task 使用一次独立综合 Review；普通 API/UI 可综合 Review，纯文案、样式和明显一行修复允许 Coordinator 自审。每个 Phase 结束保留一次独立阶段门禁 Review；Phase 最后一个 Task 的综合 Review 若已覆盖全阶段真实工作流，可同时作为阶段门禁，不重复审查。无论 Review 数量如何，Reviewer 都绑定同一冻结 revision；任何 candidate 变化都使旧 Verdict 失效。
+Review 按实际新增风险分级：只有新造数据库/耐久写入/恢复/TTS/FFmpeg/备份核心时才分别执行 Spec Review 与 Code Quality Review；大量复用已验证核心、主要完成迁移接线、编排和真实门禁的 Task 只做一次独立综合 Review，同时覆盖规格与质量；普通 API/UI 可综合 Review，纯文案、样式和明显一行修复允许 Coordinator 自审。每个 Phase 结束保留一次独立阶段门禁 Review；Phase 最后一个 Task 的综合 Review若已覆盖全阶段真实工作流，可同时作为阶段门禁，不重复审查。所有适用 Reviewer 都绑定同一冻结 revision；任何 candidate 变化都使旧 Verdict 失效。
 
-业务 Task 在独立、初始 clean 的 Worker worktree 冻结，且写租约始终排除 Delivery Ledger。冻结采用 `git-index-tree-v1:<base_commit>:<tree_hash>`：将允许路径完整加入 index，要求无租约外改动、无未暂存或未跟踪文件，并记录 `git diff --cached --name-status` 与 `git write-tree`。Coordinator 在 `dev` 只修改 Ledger，先把 revision、changed paths、owner 和状态写成冻结控制提交。两名 Reviewer 从该控制提交读取权威 revision，在 Worker worktree 复算 HEAD、changed paths 和 `git write-tree`，Verdict 必须带 `reviewed_ledger_commit` 与 `reviewed_revision`。任何代码、index 或 Ledger 冻结记录变化都会使旧 Review 失效。业务提交完成后，Coordinator 再以独立完成控制提交登记业务 SHA、验证与 Review 结论；控制提交自己的 SHA 由 Git 历史定位，不写入自身。
+业务 Task 在独立、初始 clean 的 Worker worktree 冻结，且写租约始终排除 Delivery Ledger。冻结采用 `git-index-tree-v1:<base_commit>:<tree_hash>`：将允许路径完整加入 index，要求无租约外改动、无未暂存或未跟踪文件，并记录 `git diff --cached --name-status` 与 `git write-tree`。Coordinator 在 `dev` 只修改 Ledger，先把 revision、changed paths、owner 和状态写成冻结控制提交。适用的 Reviewer 从该控制提交读取权威 revision，在 Worker worktree 复算 HEAD、changed paths 和 `git write-tree`，Verdict 必须带 `reviewed_ledger_commit` 与 `reviewed_revision`。任何代码、index 或 Ledger 冻结记录变化都会使旧 Review 失效。业务提交完成后，Coordinator 再以独立完成控制提交登记业务 SHA、验证与 Review 结论；控制提交自己的 SHA 由 Git 历史定位，不写入自身。
 
 `CTRL-01` 是唯一 bootstrap 例外：Ledger 尚不存在，先以用户指定提交信息提交完整控制面，把该提交及其 tree 作为 `git-commit-tree-v1:<commit>:<tree>` 的不可变 candidate；独立 Reviewer 直接复算该 commit tree。通过后由下一条 Ledger 控制提交登记 candidate、Verdict 和完成状态。此例外只用于首次创建 Ledger，后续 Task 一律使用上述非自引用协议。
 

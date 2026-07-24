@@ -288,3 +288,29 @@ test("事件与证据通过检查点受限事务原子提交且相同输入幂�
     await rm(context.dataRoot, { recursive: true, force: true });
   }
 });
+
+test("受限事务拒绝把准备好的事件写入另一章节", async () => {
+  const context = await fixture("narralume-events-chapter-guard-");
+  try {
+    const prepared = await prepareChapterEvents(
+      context.connection.database,
+      context.dataRoot,
+      "book_events",
+      "chapter_events",
+      [{ type: "character", payload: { name: "宝玉" }, sources: [source(context.bytes, "宝玉")] }],
+    );
+    let operations = 0;
+    assert.throws(
+      () => queueChapterEventReplacement(
+        { run() { operations += 1; } },
+        "chapter_other",
+        prepared,
+      ),
+      /章节事件与目标章节不一致/,
+    );
+    assert.equal(operations, 0);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});

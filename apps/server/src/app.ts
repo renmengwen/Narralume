@@ -10,6 +10,7 @@ import {
   replaceChapterEvents,
   type ChapterEventInput,
 } from "./chapter-event-store.js";
+import { CHAPTER_EVENTS_JOB_TYPE, createChapterEventsJobHandler } from "./chapter-events-job.js";
 import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
@@ -83,7 +84,10 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
   const dataRoot = resolveDataRoot(options.dataRoot);
   const connection = openDatabase(dataRoot);
-  const jobHandlers = options.jobHandlers ?? {};
+  const jobHandlers = {
+    [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
+    ...(options.jobHandlers ?? {}),
+  };
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
   let worker: JobWorker;
   try {

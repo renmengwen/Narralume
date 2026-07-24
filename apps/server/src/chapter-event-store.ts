@@ -277,6 +277,9 @@ export async function prepareChapterEvents(
 export function queueChapterEventReplacement(
   transaction: CheckpointTransaction, chapterId: string, events: readonly PreparedChapterEvent[], now = Date.now(),
 ) {
+  if (events.some((event) => event.chapterId !== chapterId)) {
+    throw new Error("章节事件与目标章节不一致");
+  }
   transaction.run("DELETE FROM chapter_events WHERE chapter_id = ?", chapterId);
   for (const event of events) {
     transaction.run(

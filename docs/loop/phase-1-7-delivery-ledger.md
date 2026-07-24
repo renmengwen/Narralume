@@ -26,16 +26,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`
 - 当前 HEAD：`b546c60b408587e7d64ff37856348b3e7876d2c1`（P5-02 核心并行租约控制提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-02 的 13 个业务/来源路径已全部 stage，零额外 unstaged/untracked，candidate tree 已冻结；真实生成候选图保留在 Worker 忽略目录，`node_modules` 为临时 Junction。
-- 最近验证：2026-07-25 P5-02 Worker 实现态；全量 `typecheck/test/build` 与 diff GREEN，server 71/71、web 6/6；真实 Seedream 单次生成、ffprobe、checkpoint、重启、上传与审核历史 gate GREEN。
+- 工作区：`dev` 仅本 Ledger 待提交；P5-02 首版 candidate 保持 13 个业务/来源路径 staged，零额外 unstaged/untracked；真实生成候选图保留在 Worker 忽略目录，`node_modules` 为临时 Junction。首版 revision 因 Code Quality findings 失效，尚未开放修改。
+- 最近验证：2026-07-25 P5-02 首轮 Review；Spec PASS，Code Quality FAIL。全量 `typecheck/test/build` 与 diff 仍 GREEN，server 71/71、web 6/6；真实图片 hash/ffprobe 复核一致，未重复调用真实模型。
 - 当前 Task：`P5-02`
-- 唯一下一动作：并行执行冻结 candidate 上的独立 Spec Review 与 Code Quality Review；两者均只读且绑定同一 Ledger/revision，不增加第三次重复 Review。
+- 唯一下一动作：完成本 finding 控制提交并推送后，只开放 P5-02 的最小修复：把 DNS 校验结果绑定到实际 socket、对 provider JSON/base64 响应执行读取前有界限制，并以 requestHash 建立并发安全复用且返回数据库真实候选；重验、重冻后只复审失效的 Code Quality 范围。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-02 | Coordinator | `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` / `b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff` | 13 个冻结业务/来源路径；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `frozen_for_review` |
+| P5-02 | Coordinator | `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` / `b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff` | 仅首轮 findings 的最小修复路径；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `changes_requested` |
 
 ## Phase 依赖
 
@@ -63,7 +63,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
 | P5-01 资产合同 | `complete` | P4-03 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 集成态 `typecheck/test/build`、diff GREEN；server 64/64、web 6/6；INSERT/UPDATE 层级约束、真实资产 gate、重启与级联 GREEN | 冻结 `c8bef59`；集成 `ff38e6d` | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入 P5-02 |
-| P5-02 候选图与来源 | `frozen_for_review` | P5-01 | Coordinator / 写租约见上 | `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:6c72398f1a2aaf5de497fcf141ecf3b1952bf75c` | 本冻结控制提交 | - | - | 全量 `typecheck/test/build`、cached diff GREEN；server 71/71、web 6/6；真实模型 `doubao-seedream-4-5-251128` 生成 JPEG 1600×2848、1,319,970 bytes、SHA-256 `b745423625492ea3f0038aaa4d37f9dff9fe48fc4dde9cde880ad9d08980bbff`，candidate `cf16857ad1cb1a5b45ec4cb43bb05e34b04a29741851601902ab03b1d63edab1`；checkpoint、重启、上传、两条审核历史 GREEN；敏感 diff 命中 0 | - | P5-02 是新增网络/文件/DB/checkpoint 高风险核心，冻结态并行双 Review；不加第三次 Review |
+| P5-02 候选图与来源 | `changes_requested` | P5-01 | Coordinator / 写租约见上 | 首版已失效：`git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:6c72398f1a2aaf5de497fcf141ecf3b1952bf75c` | `deb7f346562363c2925372a0a29a4c68d2955692` | PASS，绑定首版 Ledger/revision；无 findings | FAIL，绑定首版 Ledger/revision：DNS rebinding TOCTOU、provider JSON/base64 无界读取、相同 requestHash 未并发安全复用/冲突时返回派生状态可能失真 | 全量 `typecheck/test/build`、cached diff GREEN；server 71/71、web 6/6；真实图片 hash/ffprobe 与保留证据一致，未重复调用真实模型 | - | 只修三项 Code Quality findings；重验、重冻后复审失效范围，不重复 Spec Review |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |
 | P6-01 唯一 9:16 模板 | `queued` | P5-04 | - | - | - | - | - | - | - | - |
@@ -164,6 +164,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P4-02 完成 | 第三版一次独立综合复审 PASS，绑定 Ledger `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e` 与冻结 revision，两项原子性 findings 均关闭且无新 findings。冻结业务提交 `b47fb73`，集成 `dev` 为 `4fa622b`；集成态全量三门/diff、server 60/60、web 6/6、真实 20,506ms 音频时间轴门禁 GREEN；释放 P4-02 并进入 P4-03。 |
 | 2026-07-25 P4-03 / Phase 4 完成 | 一次独立综合 Review PASS，绑定 Ledger `105fee0cbfc8366e50c44455dfa322f5237227e3` 与 revision `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635`，同时覆盖 Task 与 Phase 4，无 findings。冻结业务提交 `0fb7faf`，集成 `dev` 为 `eaa6c32`；集成态全量三门/diff、server 61/61、web 6/6 和三个 Phase 4 gate GREEN；最终 MP4 位于 `D:\code3\Narralume\data\gates\p4-placeholder\episodes\p4_episode\video\4b9cba5e248fa8d6b51b5f0830817c1e3ddd9350f20c427c83cc59b349e27ef9.mp4`，220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用。 |
 | 2026-07-25 P5-01 完成 | 第三版一次独立综合复审 PASS，绑定 Ledger `9698cb37cf8760ccfc31620f5fa7b5908249974b` 与 revision `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978`；前两轮同一数据库层级 finding（INSERT/UPDATE 绕过状态套状态）均关闭。冻结业务提交 `c8bef59`，集成 `dev` 为 `ff38e6d`；集成态全量三门/diff、server 64/64、web 6/6 和真实资产 gate GREEN，三类资产、两个状态资产、四组别名、重启稳定与系列级联通过。 |
+| 2026-07-25 P5-02 首轮 Review | 独立 Spec Review PASS、Code Quality Review FAIL，均绑定 Ledger `deb7f346562363c2925372a0a29a4c68d2955692` 与首版 revision `git-index-tree-v1:b0ebaea9c60c6f89b8cafef7d9038fc1a3a832ff:6c72398f1a2aaf5de497fcf141ecf3b1952bf75c`。三个 Code Quality findings：P1 DNS 公网检查与实际 `fetch` 连接二次解析，存在 DNS rebinding/TOCTOU SSRF；P1 provider `response.json()` 在 base64 大小限制前无界读取；P2 相同 requestHash 仍会重复付费调用并可能登记多个结果，冲突分支返回的审核派生状态可能与数据库不一致。首版 revision 失效；只开放三项最小修复，重验重冻后只复审 Code Quality 失效范围。Review 独立三门仍 GREEN，真实图片 SHA-256/bytes/ffprobe 与保留证据一致，未重复调用真实模型。 |
 
 ## 决策与剩余风险
 

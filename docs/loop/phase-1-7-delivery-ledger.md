@@ -25,17 +25,17 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`9698cb37cf8760ccfc31620f5fa7b5908249974b`（P5-01 第三版冻结控制提交；本控制提交后以 Git 历史定位最新 HEAD）
-- 工作区：`dev` 仅本 Ledger 待提交；P5-01 第三版已由独立 Reviewer 只读复验 PASS，8 个 staged 路径、零 extra 与 candidate tree 均未变化。
-- 最近验证：2026-07-25 P5-01 Worker 实现态；全量 `typecheck/test/build` 与 diff GREEN，server 64/64、web 6/6；真实资产 gate 建立人物/两个状态/场景/道具及四组别名，重启稳定与系列级联 GREEN。
-- 当前 Task：`P5-01`
-- 唯一下一动作：核验并只删除 P5-01 `node_modules` Junction 本身，中文提交冻结 candidate，cherry-pick 到 `dev` 后重跑全量三门与真实资产 gate。
+- 当前 HEAD：`ff38e6d5e99eb34b1fecd36d03f21bb374d85da5`（P5-01 集成业务提交；本控制提交后以 Git 历史定位最新 HEAD）
+- 工作区：`dev` 仅本 Ledger 待提交；P5-01 Worker worktree clean，临时 `node_modules` Junction 已核验 Target 后只删除链接本身。
+- 最近验证：2026-07-25 P5-01 集成态；全量 `typecheck/test/build` 与 diff GREEN，server 64/64、web 6/6；真实资产 gate 建立人物/两个状态/场景/道具及四组别名，重启稳定与系列级联 GREEN。
+- 当前 Task：`P5-02`
+- 唯一下一动作：从本控制提交建立 `codex/p5-02`，先并行实现 migration v10 + 候选文件/Store 与单一图片 provider + Job；收敛后再由单写者接入 API、真实模型 gate 和来源记录，不提前进入视觉段/联系表。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P5-01 | Coordinator | `D:\code3\Narralume-worktrees\P5-01` / `codex/p5-01` / `eb4ac1020bbff394859a0df12d7284537747f682` | 8 个冻结业务路径；排除本 Ledger | 主资产、状态资产、系列级别名、重启恢复 | SQLite schema、`app.ts`、Worker Git index | `verified` |
+| P5-02 | Coordinator | 待从本控制提交建立 `D:\code3\Narralume-worktrees\P5-02` / `codex/p5-02` | migration v10、候选文件/Store、图片 provider/Job、API/tests、真实模型 gate、来源记录；排除本 Ledger | 内容寻址图片、外部模型调用、候选与审核事件、Worker index | SQLite schema、候选文件目录、`app.ts`、真实 gate | `leased` |
 
 ## Phase 依赖
 
@@ -62,8 +62,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P4-01 TTS provider 边界 | `complete` | P3-04 | Coordinator / 已释放 | `git-index-tree-v1:08fa14e6dbc60d42f0d415b686c6368a71a5865c:00b8486e9d17fc04df622e954464100fcb0ef850` | `bb6b72c` | PASS，绑定 `bb6b72c065e52367ce722e6f60c7139bb65efb01`/第二版 revision | PASS，绑定同一 Ledger/revision | 集成态全量三门/diff GREEN；server 57/57、web 6/6；UTF-8 code units、已持有临时 WAV 后取消零泄漏、真实中文 WAV 221,542 bytes/5.022585 秒 | 冻结 `240e133`；集成 `284cfbb` | Windows System.Speech 单 provider；进入 P4-02 |
 | P4-02 真实音频时间轴 | `complete` | P4-01 | Coordinator / 已释放 | `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99` | `1b912c0` | PASS，绑定 `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e`/第三版 revision | PASS，绑定同一次综合 Review | 集成态全量三门/diff GREEN；server 60/60、web 6/6；真实 20,506ms、2 段/2 cue、SRT/ASS、重启复用；checkpoint 失败与批准撤回均零登记 | 冻结 `b47fb73`；集成 `4fa622b` | Windows 单 provider；3～5 分钟视频验收进入 P4-03 |
 | P4-03 占位视频 | `complete` | P4-02 | Coordinator / 已释放 | `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635` | `105fee0cbfc8366e50c44455dfa322f5237227e3` | PASS，绑定冻结 Ledger/revision；同一次综合 Review 覆盖 Phase 4 | PASS，绑定同一次综合 Review；无 findings | 集成态 `typecheck/test/build`、diff GREEN；server 61/61、web 6/6；三个 Phase 4 gate GREEN；真实 MP4 220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用 | 冻结 `0fb7faf`；集成 `eaa6c32` | Node SQLite 实验性警告与 Windows 单 provider 非阻断；Phase 4 complete，进入 P5-01 |
-| P5-01 资产合同 | `verified` | P4-03 | Coordinator / 写租约见上 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 独立 `typecheck/test/build`、cached diff GREEN；server 64/64、web 6/6；INSERT/UPDATE state→state、已有子状态 master 四类身份变更均数据库级拒绝；正常 description 更新、无子状态 master→state、真实 gate、重启与级联 GREEN | - | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入业务提交与集成 |
-| P5-02 候选图与来源 | `queued` | P5-01 | - | - | - | - | - | - | - | - |
+| P5-01 资产合同 | `complete` | P4-03 | Coordinator / 已释放 | 第三版 `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978` | `9698cb37cf8760ccfc31620f5fa7b5908249974b`；前两版已失效 | PASS，绑定第三版 Ledger/revision；前两轮层级 finding 关闭 | PASS，同一次综合复审；无新 findings | 集成态 `typecheck/test/build`、diff GREEN；server 64/64、web 6/6；INSERT/UPDATE 层级约束、真实资产 gate、重启与级联 GREEN | 冻结 `c8bef59`；集成 `ff38e6d` | Node SQLite 实验性警告、多连接专项未单列均非阻断；进入 P5-02 |
+| P5-02 候选图与来源 | `leased` | P5-01 | Coordinator / 写租约见上 | - | - | - | - | 只读合同与本机能力审计完成：真实生图配置可用，非敏感模型 `doubao-seedream-4-5-251128`；未执行调用、未读取或输出密钥 | - | 首版固定单图竖屏、PNG/JPEG/WebP、30 MiB；不提前做视觉段/联系表 |
 | P5-03 视觉段显式绑定 | `queued` | P5-02 | - | - | - | - | - | - | - | - |
 | P5-04 联系表与真实审核 | `queued` | P5-03 | - | - | - | - | - | - | - | 真实候选若需用户审美选择时阻塞 |
 | P6-01 唯一 9:16 模板 | `queued` | P5-04 | - | - | - | - | - | - | - | - |
@@ -163,6 +163,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-24 P4-02 第三版 candidate | 把最终批准 identity/revision 复核移入 `commitCheckpoint` writer 开头，使租约/取消、批准状态、audio/cue DML 与 checkpoint 共享同一写事务；新增 commit 边界前撤回回归，audio/cue/checkpoint 均零新增。revision `git-index-tree-v1:09825013d318b163347fa5b133e6238da587d34a:145f46172035ea78e9462e52d445f9ee3da17d99`；全量三门/diff、server 60/60、web 6/6、真实门禁 GREEN。 |
 | 2026-07-25 P4-02 完成 | 第三版一次独立综合复审 PASS，绑定 Ledger `1b912c051fc46245b6ab2a6eeb5e84ae8b49c72e` 与冻结 revision，两项原子性 findings 均关闭且无新 findings。冻结业务提交 `b47fb73`，集成 `dev` 为 `4fa622b`；集成态全量三门/diff、server 60/60、web 6/6、真实 20,506ms 音频时间轴门禁 GREEN；释放 P4-02 并进入 P4-03。 |
 | 2026-07-25 P4-03 / Phase 4 完成 | 一次独立综合 Review PASS，绑定 Ledger `105fee0cbfc8366e50c44455dfa322f5237227e3` 与 revision `git-index-tree-v1:dd453136a131948fdb6660377c4da3dee4835137:89716b2527c3bdc04d30e289fa9d69be46ee6635`，同时覆盖 Task 与 Phase 4，无 findings。冻结业务提交 `0fb7faf`，集成 `dev` 为 `eaa6c32`；集成态全量三门/diff、server 61/61、web 6/6 和三个 Phase 4 gate GREEN；最终 MP4 位于 `D:\code3\Narralume\data\gates\p4-placeholder\episodes\p4_episode\video\4b9cba5e248fa8d6b51b5f0830817c1e3ddd9350f20c427c83cc59b349e27ef9.mp4`，220,960ms、3,102,618 bytes、1080×1920@25、H.264+AAC、SHA-256 `4ee48037bd54a827ff33f40d07eb8066e5267107f989c3f5561f5105b8e17f4d`、重启复用。 |
+| 2026-07-25 P5-01 完成 | 第三版一次独立综合复审 PASS，绑定 Ledger `9698cb37cf8760ccfc31620f5fa7b5908249974b` 与 revision `git-index-tree-v1:eb4ac1020bbff394859a0df12d7284537747f682:8bdc1ac52100e2d68b7f5c065d118c7f6920e978`；前两轮同一数据库层级 finding（INSERT/UPDATE 绕过状态套状态）均关闭。冻结业务提交 `c8bef59`，集成 `dev` 为 `ff38e6d`；集成态全量三门/diff、server 64/64、web 6/6 和真实资产 gate GREEN，三类资产、两个状态资产、四组别名、重启稳定与系列级联通过。 |
 
 ## 决策与剩余风险
 

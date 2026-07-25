@@ -9,6 +9,7 @@ import {
   seriesWorkspacePath,
   type ThemePreference,
 } from "./client-logic";
+import { ProductionWorkspace } from "./ProductionWorkspace";
 
 interface Book {
   id: string;
@@ -205,43 +206,12 @@ export function App() {
     setStatus("已返回书库");
   }
 
-  if (activeSeries) return (
-    <main className="workspace-shell">
-      <div className="workspace-frame">
-        <header className="topbar">
-          <div className="brand-block">
-            <p className="eyebrow">NARRALUME / 叙影</p>
-            <div className="title-row">
-              <h1>{activeSeries.title}</h1>
-              <span className="phase-tag">SERIES</span>
-            </div>
-            <p className="subtitle">从章节证据开始，依次完成改编、资产、音频、视觉和成片。</p>
-          </div>
-          <div className="toolbar">
-            <button className="button-secondary" type="button" onClick={leaveSeriesWorkspace}>返回书库</button>
-          </div>
-        </header>
-        <div className="status-strip" role="status" aria-live="polite">
-          <span className={busy ? "status-dot is-active" : "status-dot"} aria-hidden="true" />
-          <span>{status}</span>
-        </div>
-        <section className="series-workspace" aria-labelledby="workflow-heading">
-          <div className="series-intro">
-            <p className="eyebrow">当前下一步</p>
-            <h2 id="workflow-heading">选择章节并生成结构化事件</h2>
-            <p>系列项目已就绪。后续工作区将在这里接通章节事件、故事弧、稿件审核、资产、音频、视觉与渲染。</p>
-          </div>
-          <ol className="stage-list" aria-label="系列生产阶段">
-            {["章节事件", "故事弧与分集", "忠实稿与包装稿", "资产与候选图", "TTS 与字幕", "视觉段与渲染", "审核与导出"].map((stage, index) => (
-              <li key={stage} className={index === 0 ? "is-current" : ""}>
-                <span>{String(index + 1).padStart(2, "0")}</span>{stage}
-              </li>
-            ))}
-          </ol>
-        </section>
-      </div>
-    </main>
-  );
+  if (activeSeries) return <ProductionWorkspace
+    bookId={activeSeries.bookId}
+    series={activeSeries}
+    initialStatus={status}
+    onLeave={leaveSeriesWorkspace}
+  />;
 
   return (
     <main className="workspace-shell">

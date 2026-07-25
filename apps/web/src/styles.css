@@ -99,14 +99,6 @@ button:focus-visible, label:has(input:focus-visible) { outline: 2px solid var(--
 .empty-state { margin: 28px 10px; color: var(--fg-tertiary); font-size: 13px; }
 .evidence-panel { background: color-mix(in srgb, var(--bg-surface) 86%, var(--bg-canvas)); }
 .evidence-text { max-height: calc(100vh - 274px); margin: 0; padding: 24px clamp(20px, 4vw, 44px); overflow: auto; white-space: pre-wrap; color: var(--fg-secondary); font: 15px/1.9 Georgia, "Songti SC", SimSun, serif; }
-.series-workspace { display: grid; grid-template-columns: minmax(320px, 1.2fr) minmax(280px, .8fr); gap: 48px; padding: clamp(32px, 6vw, 84px); }
-.series-intro h2 { max-width: 620px; margin: 0; font-size: clamp(28px, 4vw, 48px); line-height: 1.12; letter-spacing: -.035em; }
-.series-intro > p:last-child { max-width: 640px; margin: 24px 0 0; color: var(--fg-secondary); font-size: 15px; line-height: 1.8; }
-.stage-list { margin: 0; padding: 0; border-top: 1px solid var(--border-subtle); list-style: none; }
-.stage-list li { min-height: 56px; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border-subtle); color: var(--fg-tertiary); font-size: 14px; }
-.stage-list li span { color: var(--fg-tertiary); font: 10px "Cascadia Code", Consolas, monospace; }
-.stage-list li.is-current { color: var(--fg-primary); font-weight: 650; }
-.stage-list li.is-current span { color: var(--accent); }
 
 @media (max-width: 900px) {
   .workspace-shell { padding: 0; }
@@ -114,7 +106,6 @@ button:focus-visible, label:has(input:focus-visible) { outline: 2px solid var(--
   .topbar { align-items: flex-start; flex-direction: column; padding: 22px 18px; }
   .toolbar { width: 100%; justify-content: flex-start; }
   .workspace-grid { grid-template-columns: 1fr; }
-  .series-workspace { grid-template-columns: 1fr; gap: 36px; padding: 32px 20px; }
   .panel { border-right: 0; border-bottom: 1px solid var(--border-subtle); }
   .scroll-region, .evidence-text { max-height: 42vh; }
   .status-strip { padding: 0 18px; }

@@ -26,11 +26,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`41c6e33`（PC-01 业务提交；产品闭环总账控制提交待本次独立登记）。
+- 当前 HEAD：`980721d`（PC-01 已登记；PC-02 参考来源已按冻结优先级纠正并登记）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：既有工程基线 typecheck/test/build、P7 技术 E2E、项目包/恢复与媒体合同均 GREEN；用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
-- 当前 Task：`PC-02` implementing；优先复用 Narralume 现有 API 与参考项目中已验证的前端流程逻辑，接通固定阶段创作工作区。
-- 下一动作：只读盘点参考项目的阶段导航、任务状态、恢复与审核交互，先登记来源仓库/commit/源文件/改造说明，再按 Narralume 现有合同做最小接线；不形成运行时依赖。
+- 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
+- 下一动作：以 DramaClaw 的阶段注册表/任务恢复为第一前端参考、Toonflow 的按需取证/改编工作区为第二参考，按 Narralume 现有合同做最小接线；通用控件优先官方 `shadcn/ui`，不形成参考项目运行时依赖。
 
 ## 2026-07-25 产品闭环复开
 
@@ -67,7 +67,7 @@ PC-01 完成证据：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@41c6e33` | 待来源盘点后登记最小前端/API 接线路径；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
+| PC-02 | Coordinator | `dev@980721d` | `apps/web/src/**`、`apps/web/test/**`；必要的最小 API 查询接线另行登记；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
@@ -265,7 +265,7 @@ PC-01 完成证据：
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。
 - 2026-07-25：用户授权后续生图、多模态和配音模型真实测试只读 `D:\code3\MuseDock` 中已有的本机配置与调用合同并直接执行，不因此普通配置问题暂停提问；MuseDock 仍不得成为 Narralume 运行时依赖，密钥/账号不得进入代码、提交、Ledger 或输出。
-- 2026-07-25：用户明确要求前端也优先复用参考项目逻辑、避免重复造轮子。PC-02 起先只读比较参考实现，抽取前登记来源仓库、commit、源文件和改造说明；只迁移通用交互/编排方法，Narralume 保持独立运行时与自身产品合同。
+- 2026-07-25：用户明确要求前端也优先复用参考项目逻辑、避免重复造轮子，并指出必须服从文档冻结优先级。PC-02 顺序固定为 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock`；第一版仅登记 MuseDock 的来源记录已由 `980721d` 纠正，尚未据此抽取业务代码。抽取前登记来源仓库、commit、源文件和改造说明；只迁移通用交互/编排方法，Narralume 保持独立运行时与自身产品合同。
 - 2026-07-25：用户离线、休息或暂时不回复时，Coordinator 不等待确认，按当前 Ledger 恢复入口持续执行到 Phase 1-7 根目标真实完成；仅在缺少必须的外部授权、产品方向重大决策、不可逆或高风险外部操作、用户主观审美选择，或充分排查仍无法解除的真实阻塞时暂停提问。
 - Node 22 内置 `node:sqlite` 当前可用但仍输出实验性警告；首版不因此新增 ORM。
 - 项目包恢复的 no-replace 合同当前为 Windows-only；普通文件 symlink 负向测试因账户权限 `EPERM` SKIP，但 Junction 与硬链接拒绝真实 PASS。

@@ -14,6 +14,7 @@ import {
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
   type GenerateEpisodeScript,
 } from "./episode-script-generation-job.js";
+import { createOpenAiEpisodeScriptGenerator } from "./episode-script-provider.js";
 import { getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
 import { getScriptApproval, requireApprovedScriptForProduction } from "./script-approval-store.js";
@@ -78,6 +79,33 @@ const request = {
   narrationOccupancy: 0.8,
   calibration: { identity: "provisional" as const },
 };
+
+test("Responses 三阶段请求不发送不兼容的 json_object format", async () => {
+  const outputs = [
+    { beats: [{ intent: "进入墓道", sourceIndexes: [0] }] },
+    { text: "忠实稿" },
+    { paragraphs: [{ text: "包装稿", sourceIndexes: [0] }] },
+  ];
+  let calls = 0;
+  const generate = createOpenAiEpisodeScriptGenerator(config, (async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { input: string; text?: unknown };
+    assert.match(body.input, /JSON/u);
+    assert.equal(body.text, undefined);
+    return new Response(JSON.stringify({ output_text: JSON.stringify(outputs[calls++]!) }), {
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch);
+  const signal = new AbortController().signal;
+  await generate({
+    stage: "skeleton", episode: { id: "episode", storyArc: "进入墓道", recap: null, nextHook: null, targetDurationSeconds: 120 },
+    characterBudget: 400, calibration: { identity: "provisional" }, sources: [], signal,
+  });
+  await generate({ stage: "faithful", beat: { intent: "进入墓道", sourceIndexes: [0] }, characterBudget: 200,
+    sources: [{ sourceIndex: 0, sourceText: "原文" }], signal });
+  await generate({ stage: "packaged", targetDurationSeconds: 120, characterBudget: 400,
+    paragraphs: [{ text: "忠实稿", sourceIndexes: [0] }], signal });
+  assert.equal(calls, 3);
+});
 
 async function run(
   context: Awaited<ReturnType<typeof fixture>>,

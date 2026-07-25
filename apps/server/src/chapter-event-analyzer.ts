@@ -228,7 +228,6 @@ export function createOpenAiResponsesChapterAnalyzer(
         body: JSON.stringify({
           model: config.model,
           input: [{ role: "user", content: [{ type: "input_text", text: prompt(atoms) }] }],
-          text: { format: { type: "json_object" } },
         }),
         signal,
         redirect: "error",

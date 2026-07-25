@@ -21,7 +21,6 @@ export function createOpenAiEpisodeScriptGenerator(
       body: JSON.stringify({
         model: config.model,
         input: `${instructions}\n${JSON.stringify(safeInput)}`,
-        text: { format: { type: "json_object" } },
       }),
     });
     if (!response.ok) {

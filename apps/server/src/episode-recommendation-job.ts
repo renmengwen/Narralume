@@ -179,7 +179,7 @@ export function createOpenAiEpisodeRecommender(config: { baseUrl: string; apiKey
     const response = await fetchImpl(endpoint, {
       method: "POST", signal, redirect: "error",
       headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: config.model, input, text: { format: { type: "json_object" } } }),
+      body: JSON.stringify({ model: config.model, input }),
     });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`选材推荐模型请求失败（HTTP ${response.status}）`); }
     try { return JSON.parse(responseText(await limitedJson(response))) as Awaited<ReturnType<RecommendEpisodeSources>>; }

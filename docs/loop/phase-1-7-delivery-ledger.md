@@ -30,11 +30,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`114c03d`（PC-02C 首版 Review findings 已登记；第二版业务 candidate 已冻结在 index）。
+- 当前 HEAD：`1f8261b`（PC-02C 第二版 Review findings 已登记；第三版业务 candidate 已冻结在 index）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`docs/research/2026-07-24-north-tomb-video-project-summary.md`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：第三轮 PC-02B 根 `npm run typecheck`、`npm test`、`npm run build`、cached/unstaged `git diff --check` 串行 GREEN；server 181 项中 180 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 39/39 PASS，Vite 58 modules。真实 v12 包 `166d37c...` 恢复到 `data/gates/pc02b-v12-package-restore-badf433-v3`：源包不变，目标 schema `1..13`，21 张业务表逐表 count/hash 相同，integrity ok、FK=0，3 个稿件版本、批准 r3、2 chunks 的 duration/身份完整。隔离真实浏览器 Gate：既有 succeeded Job 两事件取消一项后明确保存，URL `job` 清除，冷刷新只恢复 1 条持久证据且旧推荐不回灌；首集不传 `startChapterId` 的 Job payload 为 `requestedStartChapterId=null`、解析首章一致、result `needs_analysis`，带 `job` 无 `chapter` 冷刷新恢复；两条 console error/warning 均 0。默认分支使用注入的非网络 recommender 仅放行路由并证明 handler 未调用模型，不冒充外部模型成功；既有真实 provider 推荐成功证据继续有效。
-- 当前 Task：`PC-02C` changes_requested；第二版复审确认首轮两个 P1、provider 分离与 route 切换已关闭，但发现卸载 commit 到 passive cleanup 之间仍可写回旧页面，第二版 revision 失效。
-- 下一动作：同一 Worker 只在 Script hook 共享生命周期边界做 layout cleanup 同步失效，并补真实挂载→延迟 POST→unmount→resolve 回归；重跑 web/根门禁及受影响 UI Gate 后生成第三版 candidate。
+- 最近验证：PC-02C 第三版根 `npm run typecheck`、`npm test`、`npm run build` 与最终 10 文件 `git diff --check` 串行 GREEN；server 201 项中 200 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 46/46 PASS，Vite 58 modules。新增真实 React 19 `createRoot` 挂载→POST pending→`root.unmount()` commit→passive cleanup 前 resolve 回归，Job/status/busy/error 零旧写回。默认产品 UI 在《盗墓笔记》545 章数据中从 Script 切 Assets 再返回，faithful/package 各 2 份、批准 withdrawn r4 与生成入口恢复，console 0 error/0 warning；精确微窗口由上述 React 回归覆盖，未用浏览器 sleep 冒充。
+- 当前 Task：`PC-02C` frozen_for_review；第三版 revision `git-index-tree-v1:1f8261ba193b3caf94bb2b8de893439564f55408:b370e11f706301b957bf9bb49dd63d300ce1e09a`，恰好 10 个 staged 业务路径，用户本地启动配置 0 staged，Writer 已释放。
+- 下一动作：由既有独立 Reviewer 对第三版做最小综合复审，只核对 layout cleanup 同步卸载失效、旧 cleanup 不误清新 route、真实卸载回归与 10/10 candidate blob；已关闭的两个 P1、provider 分离和 route 切换只做未退化确认。
 
 ## 2026-07-25 产品闭环复开
 
@@ -54,7 +54,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 第三版根门禁、v12 恢复、隔离真实 UI Gate与同一 candidate 双 Review全部 PASS；业务 `ece2ac3` |
-| PC-02C 跨章骨架与长稿 | `changes_requested` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 第二版只剩卸载 commit 与 passive cleanup 之间异步写回 P2；最小根修后重验重冻 |
+| PC-02C 跨章骨架与长稿 | `frozen_for_review` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 第三版已以 layout cleanup 同步失效卸载身份并补真实 React 回归；等待最小综合复审 |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
@@ -306,6 +306,7 @@ PC-02 当前 checkpoint：
 | 2026-07-26 PC-02C 首版综合 Review | FAIL，绑定冻结 Ledger `b8cd4fc5e88ed7db35a56aae6a036c2fb6f7037f` 与首版 revision，8/8 candidate blob 一致，Review 前后 HEAD/index/status 不变。P1：faithful 在 packaged 生成/校验前先落库，后续失败、取消、漂移或写失败会留下部分稿，重试的非确定文本还会产生孤立版本；必须全部生成校验后在短事务中原子创建/复用一组 faithful/package。P1：Skeleton 实际消费的 event type/canonical payload 未冻结进 payload/requestHash，同 event ID 摘要修改会静默改变请求；必须冻结摘要身份、handler 使用冻结值并在执行/落库门拒绝漂移。P2：Script hook 在 render 阶段改 route/currentJob refs，延迟 POST 可把旧 Job 写入新路由；改为 commit 阶段 identity 与 expectedRoute 异步写回。P2：458 行模块混合领域 Job 与 OpenAI adapter；只做 provider 模块最小分离，不造框架。16/16 server、36/36 web 测试虽 GREEN，但未覆盖 findings；旧 candidate 失效。 |
 | 2026-07-26 PC-02C 第二版 candidate | `git-index-tree-v1:114c03d225f7a6b41d4677e7402315103f82d42c:70dedb655fba9994ea73252c48f903d8c5f8dff4`，恰好 10 个 staged 业务路径、保护路径 0 staged。`episode-scripts-generate-v2` 冻结 eventType/canonical payload 并进入 requestHash，执行与原子提交边界拒绝漂移；全部模型调用/校验完成后，Script Version Store 在一个短 `BEGIN IMMEDIATE` 事务中同步复核当前 Episode/source/event summary 并原子创建/复用 faithful+packaged，第二次写失败整体 rollback；OpenAI Responses adapter 独立为最小 provider 模块。前端 route/currentJob 只在 layout commit 更新，异步 POST/status/busy 绑定 expectedRoute；StrictMode 未提交 render、延迟 POST 切路由与卸载均有回归。定向 server24/24、web38/38；根 typecheck/test/build/diff GREEN，server 200 PASS/1 Windows symlink 权限 SKIP、web45/45、Vite58 modules。隔离 Gate：成功 `job_episode_scripts_3a98c05e…` 冻结 canonical summary；取消 `388818e…` 与失败 `8fa0d0fd…` 即时/冷刷新终态 GREEN，稿件始终 4 条（2 faithful/2 packaged）、批准 withdrawn r4、console 0；默认产品 3101/5174 与 545 章《盗墓笔记》已恢复。 |
 | 2026-07-26 PC-02C 第二版综合复审 | FAIL，绑定 Ledger `6d4a517c56c426b1257b195a39417ff984110d1c` 与第二版 revision，10/10 blob 一致、Review 前后 HEAD/index/status 不变。首轮两个 P1、provider 最小分离、render 阶段 identity 与切路由均确认关闭；唯一 P2：实际 unmount commit 到 passive `useEffect` cleanup 之间，延迟 POST continuation 仍可看到 mounted=true/旧 route 并写回 Job/status/busy。现有测试只手工传 mounted=false，未真实挂载/卸载 hook。只开放 layout-effect cleanup 同步失效 route/mounted 与真实 mount→POST pending→unmount→resolve 回归；第二版失效。 |
+| 2026-07-26 PC-02C 第三版 candidate | `git-index-tree-v1:1f8261ba193b3caf94bb2b8de893439564f55408:b370e11f706301b957bf9bb49dd63d300ce1e09a`，恰好 10 个 staged 业务路径、保护路径 0 staged，Writer 已释放。`routeRef/jobRef/mountedRef` 由同一 `useLayoutEffect` 在 commit 更新；layout cleanup 只在当前 route identity 匹配时同步清空 route/Job 并置 mounted=false，旧 cleanup 不误清新 route。真实 React 19 `createRoot` 回归覆盖挂载→POST pending→unmount commit→passive cleanup 前 resolve，Job/status/busy/error 零旧写回。根 typecheck/test/build/diff GREEN，server 200 PASS/1权限SKIP、web46/46、Vite58 modules；默认产品 Script→Assets→Script UI 恢复 GREEN，console 0 error/0 warning。第二版 Review 自动失效，进入第三版最小综合复审。 |
 
 ## 决策与剩余风险
 

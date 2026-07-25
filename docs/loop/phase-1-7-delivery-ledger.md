@@ -28,11 +28,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`f46b9ba`（PC-02 已接通章节事件、故事弧分集、稿件批准与系列资产生产缺口/原图上传首版）。
+- 当前 HEAD：`842ad7e`（PC-02 已接通章节、分集、稿件批准、资产缺口、Prompt 派生与审核备注首版）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：`f46b9ba` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 146 项中 145 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 23/23 PASS，Vite 52 modules；server health 与 web 均 HTTP 200。真实资产验收完成系列三态 `1/1/1`、PNG 上传与持久回读、批准后无刷新更新、跨资产隔离、伪装 GIF 400、错误 Content-Type 415、console 0 error/0 warning。自动章节分析的 provider 内容门禁残余继续保留。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
+- 最近验证：`842ad7e` 集成态 `npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 146 项中 145 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 24/24 PASS，Vite 52 modules。Prompt/审核 Task 的独立验收 Agent 连续因平台 `biscuit_baker_service_me_circuit_open` 503 未能启动，按首版硬约束不作为代码阻塞；Worker 根门禁与 Coordinator 窄边界核对通过，后续真实资产工作流复验继续覆盖。自动章节分析的 provider 内容门禁残余继续保留。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
 - 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：由单写 Worker 接通 prompt 历史恢复/派生来源与审核 note；随后接通 TTS 时间轴查询/试听 UI、字幕短句、视觉段/联系表、分片与最终视频。自动章节分析的 provider 内容门禁作为外部残余风险保留，不篡改或跳过原文，也不阻塞已有人工证据入口与后续产品闭环。复用型首版不以严格独立 Review 阻塞。
+- 下一动作：由单写 Worker 增加最小 TTS timeline/audio 只读查询并接通 AudioStage、Job、URL timeline hash、逐段试听；随后进入字幕短句、视觉段/联系表、分片与最终视频。自动章节分析的 provider 内容门禁作为外部残余风险保留，不篡改或跳过原文，也不阻塞已有人工证据入口与后续产品闭环。复用型首版不以严格独立 Review 阻塞。
 
 ## 2026-07-25 产品闭环复开
 
@@ -73,21 +73,23 @@ PC-02 当前 checkpoint：
 - 自动章节分析提交：`6168da1`（`章节：接通自动分析持久任务`）。复用现有 Job、checkpoint、章节事件 Store、API、轮询/取消与 URL 恢复；服务端生成稳定 evidence atoms，模型只返回六类事件 payload 与 evidence IDs，绝对字节、编码边界、章节 hash 和证据 SHA-256 仍由现有 Store 复核；空结果/失败不清空人工事件。未新增路由、迁移、依赖、结果表或第二套任务系统。
 - 稿件与批准提交：`98d1ff0`（`前端：接通稿件版本与人工批准`）。复用现有 Script Version/Approval API；支持 episode-first hydrate/404 空态、faithful/package 不可变版本、忠实父链冻结来源、sourceIndex 原文映射、approve/withdraw `expectedRevision`、409 刷新且不自动重放、写后回读、防连点和 stale route 保护；不新增后端、迁移或依赖。
 - 资产缺口与上传提交：`f46b9ba`（`前端：接通资产缺口与原图上传`）。复用现有 assets/candidates/upload/Job API；按当前系列已建资产派生无候选/待批准/已批准三态，明确不冒充自动识别全部资产；支持 PNG/JPEG/WebP 二进制上传、POST 后 GET 回读、成功 Job 按结果 assetId 定向刷新、候选 Map/request epoch 隔离和同步 mutation 门闩；不新增后端或依赖。
+- Prompt 派生与审核提交：`842ad7e`（`资产：接通提示词派生与审核备注`）。生成候选继续作为不可变 Prompt 版本，通过 `requestHash → job_image_*` 回读冻结完整 prompt；可选父候选进入 v2 hash/Job/source，服务端校验同资产，无父来源保持 v1 Job 身份兼容；新增已有 review event store 的只读 GET，note/approve/reject 使用最新 revision，409 刷新但不重放。未新增 migration、表、依赖或第二套 Prompt 存储。
 - 已接通：七阶段注册与依赖/Job 类型映射，`book/series/stage/chapter/episode/asset/job` URL 恢复，非法阶段回退，Job hydrate-first/3 秒轮询/终态停止/卸载清理/取消/进度换算，章节列表、原文证据与结构化事件同屏，系列真实主资产/状态资产/别名、候选列表与图片、候选批准/淘汰、生图 Job、prompt 分段组装及候选切换竞态保护。
 - 模块化：`ProductionWorkspace.tsx` 仅保留领域状态组合、URL 恢复和阶段编排；章节、资产、候选、Prompt Builder、Job 轮询已进入独立组件/hook/纯函数。Tailwind/组件化纠偏完成，后端模块化与公共函数边界已由 `d796d34` 固化进 `AGENTS.md`。
-- 验证：`npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 146 项中 145 PASS/1 symlink 权限 SKIP/0 FAIL，web 23/23 PASS；server health 与 web HTTP 200；Vite 52 modules。
+- 验证：`npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 146 项中 145 PASS/1 symlink 权限 SKIP/0 FAIL，web 24/24 PASS；Vite 52 modules。
 - 浏览器验收：在真实《盗墓笔记》545 章书籍与 `盗墓笔记视觉说书` 系列中，选择第一章后创建地点事件 `长沙镖子岭`；GB18030 精确证据 `7149..7169` 读回为 `50年前，长沙镖子岭。`，Job `job_6a27dd89-bc6b-429b-9524-9fe030e79d32` succeeded；完整 URL 冷启动恢复表单与证据，console 0 error/0 warning。
 - Episode 浏览器验收：第 1 集从 GET 404 空态保存 `第一集：血尸疑冢`、240 秒故事弧与 `长沙镖子岭` 事件；API/UI 回读同一章节、`7149..7169`、原文和 SHA-256；重复保存 sourceCount 仍为 1；整页刷新恢复；切 Episode 2 显示独立空态，再回 1 完整恢复；console 0 error/0 warning。
 - 自动分析验收：未配置时 POST `/api/jobs` 返回 409 并保留人工入口；失败后旧 `长沙镖子岭` 事件、`7149..7169`、原文与 SHA-256 不变，人工 Job `job_110da930-2d97-43d9-877d-d2c278b910f1` succeeded，带 Job URL 刷新恢复 100%。真实模型完整章 gate 被当前 provider 对原第 17 atom 的 HTTP 400 内容门禁阻断；另一 provider HTTP 402，不记录敏感配置、不写事件、不把部分结果冒充成功。
 - 稿件与批准验收：真实 episode 1 创建 faithful v1 `script_c02bc1a…` 并重复提交保持 1 条，创建 packaged v1 `script_29b9c25…` 且父链精确指向 faithful v1；批准 revision 1、撤回 revision 2，第二标签使用旧 revision 返回 409 且不重放，人工重新批准为 revision 3；完整页面刷新与真实 `npm run restart` 后恢复两份 v1 和 approved revision 3；两个标签 console 0 error/0 warning。
 - 资产验收：真实系列建立无候选/待批准/已批准三类资产，三态从 `0/0/0` 恢复为 `1/1/1`；真实 PNG `900×1600`、7,725 bytes 上传并持久回读，批准后 UI 即时更新，切资产无候选污染；伪装 GIF 400、错误 Content-Type 415 且无脏记录，console 0 error/0 warning。浏览器自动文件选择与本轮新生图未重跑，上传请求/类型拒绝和 succeeded Job 定向刷新由 23 项 web 测试直接覆盖。
-- 尚未接通：prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
+- Prompt/审核验证：父候选存在/同资产校验、lineage 进入 hash/source、v1 无 lineage 兼容、同 prompt+lineage 幂等、review history GET、note 不改变 approved、完整 raw prompt 回读/旧格式不丢文本、409 刷新不重放均有直接 server/web 测试；真实浏览器验收待 Agent 平台 503 恢复后随资产全流程补跑，不冒充已通过。
+- 尚未接通：视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@f46b9ba` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
+| PC-02 | Coordinator | `dev@842ad7e` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

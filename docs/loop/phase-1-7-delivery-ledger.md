@@ -33,8 +33,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 - 当前 HEAD：`332a223`（PC-02B 跨章选材写租约与唯一最小时长 migration v13 已由控制提交授权；冻结业务 candidate 尚未提交）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：PC-02B 根 `npm run typecheck`、`npm test`、`npm run build` 与目标 `git diff --check` 串行 GREEN；server 160 项中 159 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 31/31 PASS，Vite 58 modules。真实 v12 用户库一致快照升级 v13 后 21 张业务表逐表 count/hash 不变，7 个 Episode 子表外键仍指向 `episodes`，`foreign_key_check=0`，二次 open/restart 稳定；同值保存幂等，240→1200 秒后批准 r4 withdraw 并阻断 TTS。真实浏览器在 3101/5174 保存并重启恢复 1200 秒；真实 OpenAI Responses 推荐连续 2 章/2 事件，确认前 Episode 不变，确认后 GET 回读两条真实 byte range/sourceText/SHA-256；快速双确认与再次确认保持 `updatedAt=1784995293111`、sourceCount=2、approvalCount=4。缺分析明确显示“不能当作无剧情”，单章分析长时间运行后可取消并恢复；人工事件 `21439..21463` 精确回读“这好像是张古墓的地图啊！”。
-- 当前 Task：`PC-02B` frozen_for_review；业务 candidate 为 `git-index-tree-v1:332a2233fc7372e1b938f7407920cd37b0ccca34:e63314201614b00de59a411a93926383e92d132b`，Writer 已释放且业务 index 保持冻结。
-- 下一动作：在同一冻结 candidate 和本 Ledger 冻结控制提交上分别执行独立 Spec Review 与 Code Quality Review；如有 finding，旧 candidate 立即失效并解除冻结修复；双 PASS 后登记 verdict、提交中文业务提交、登记完成证据、push `origin/dev`，随后立即进入 PC-02C。
+- 当前 Task：`PC-02B` implementing；首版 candidate `git-index-tree-v1:332a2233fc7372e1b938f7407920cd37b0ccca34:e63314201614b00de59a411a93926383e92d132b` 已因双 Review findings 失效并解除冻结，只开放旧 v12 项目包恢复兼容与同 identity hydrate 竞态修复。
+- 下一动作：单写修复 Worker 让新包继续要求 v13、合法 v12/v13 v1 包可在私有 staging 内安全恢复并由既有迁移升级，补真实 v12 包回归；协调 Episode/policy 与 succeeded recommendation Job hydrate 的两个返回顺序并补确定性测试。随后重跑相关测试、根门禁、真实恢复/浏览器验收，生成新 candidate 并重做受影响双 Review。
 
 ## 2026-07-25 产品闭环复开
 
@@ -53,7 +53,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- |
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
-| PC-02B 可配置时长与跨章自动选材 | `frozen_for_review` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | Candidate `332a223:e633142`；迁移/根门禁/真实 2 章推荐与重启恢复已通过，等待双 Review |
+| PC-02B 可配置时长与跨章自动选材 | `implementing` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 首版 candidate `332a223:e633142` 双 Review FAIL；只修 v12 包兼容与 hydrate 竞态 |
 | PC-02C 跨章骨架与长稿 | `queued` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 不新增第二套稿件存储；目标时长和真实 TTS 语速驱动字数预算；批准后才能进入媒体生产 |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
@@ -101,7 +101,7 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B | PC-02B 单写 Worker / 已释放 | `git-index-tree-v1:332a2233fc7372e1b938f7407920cd37b0ccca34:e63314201614b00de59a411a93926383e92d132b` | 无写路径；Reviewer 只读冻结 index、工作树与验证证据 | Coordinator | 本地 3101/5174、现有数据根；业务 index 冻结 | `frozen_for_review` |
+| PC-02B | PC-02B 修复单写 Worker | `dev@97db7be`，首版 candidate 已失效 | `apps/server/src/project-package.ts`、对应最小测试；`apps/web/src/production/episode/**`、`apps/web/test/**`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、项目包真实恢复数据根；同批路径单写 | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
@@ -113,7 +113,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B 可配置时长与跨章自动选材 | `frozen_for_review` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | `git-index-tree-v1:332a2233fc7372e1b938f7407920cd37b0ccca34:e63314201614b00de59a411a93926383e92d132b` | 本次冻结控制提交（由 Git 历史定位） | 待独立 Review | 待独立 Review | 定向 server 66 项 65 PASS/1权限SKIP；web 24/24；根三门/diff GREEN；真实 v12→v13、重启、1200 秒、2 章推荐/确认/幂等/withdraw/取消均 PASS | - | 旧 v12 项目包当前可能因严格 schema 13 被判不兼容，交双 Review 判断；自动补章 provider 长时间运行后人工取消，真实推荐本身已成功 |
+| PC-02B 可配置时长与跨章自动选材 | `implementing` | PC-02 既有 Episode/Job/批准合同 | PC-02B 修复单写 Worker | 首版 `git-index-tree-v1:332a2233fc7372e1b938f7407920cd37b0ccca34:e63314201614b00de59a411a93926383e92d132b` 已失效 | `97db7bec0014e102936a5b6ac2d43be9b2502c69` | FAIL：P1 v1/schema v12 旧包被当前 13-only 校验无条件拒绝 | FAIL：同 P1；另 P2 succeeded Job 先返回后被 Episode/policy hydrate 覆盖推荐 eventIds/status | 首版定向/根门禁/迁移/真实 2 章推荐证据继续有效；修复后需重验受影响范围 | - | 只开放 P1：创建仍严格 v13、恢复兼容可信连续 v12/v13 并在私有 staging 迁移/重验；P2：协调同 identity 两类 hydrate 与双顺序测试 |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |

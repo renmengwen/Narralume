@@ -16,6 +16,7 @@ import { ChapterEventsStage } from "./production/ChapterEventsStage";
 import { EpisodeStage } from "./production/episode/EpisodeStage";
 import { ProductionHeader } from "./production/ProductionHeader";
 import { ProductionStatus } from "./production/ProductionStatus";
+import { ScriptStage } from "./production/scripts/ScriptStage";
 import { StageNavigation } from "./production/StageNavigation";
 import type { Chapter, ChapterEvent, JobRecord, SeriesProject } from "./production/types";
 import { useJobPolling } from "./production/use-job-polling";
@@ -133,7 +134,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
       <ProductionHeader series={series} onLeave={onLeave} />
       <StageNavigation stage={stage} onChange={selectStage} />
       <ProductionStatus status={status} busy={busy} job={currentJob} onCancel={() => void cancelJob()} />
-      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage seriesId={series.id} episodeIndex={episodeIndex} chapter={selectedChapterRecord} events={events} chapterCount={chapters.length} chapterTotal={chapterTotal} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} setBusy={setBusy} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : <StagePlaceholder stage={stage} />}
+      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage seriesId={series.id} episodeIndex={episodeIndex} chapter={selectedChapterRecord} events={events} chapterCount={chapters.length} chapterTotal={chapterTotal} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} setBusy={setBusy} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : <StagePlaceholder stage={stage} />}
     </div>
   </main>;
 }

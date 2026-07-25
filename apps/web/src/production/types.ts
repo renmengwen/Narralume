@@ -40,6 +40,31 @@ export interface Episode {
   updatedAt: number;
   sources: EpisodeSourceSnapshot[];
 }
+export type ScriptVersionKind = "faithful" | "packaged";
+export interface ScriptVersionSource {
+  episodeSourceIndex: number;
+  chapterId: string;
+  sourceEventId: string;
+  byteStart: number;
+  byteEnd: number;
+  sourceHash: string;
+}
+export interface ScriptVersion {
+  id: string;
+  episodeId: string;
+  kind: ScriptVersionKind;
+  versionNumber: number;
+  parentVersionId: string | null;
+  contentHash: string;
+  paragraphs: Array<{ text: string; sources: ScriptVersionSource[] }>;
+}
+export interface ScriptApproval {
+  episodeId: string;
+  status: "unapproved" | "approved" | "withdrawn";
+  revision: number;
+  scriptVersionId: string | null;
+  changedAt: number | null;
+}
 export interface JobRecord {
   id: string;
   type: string;

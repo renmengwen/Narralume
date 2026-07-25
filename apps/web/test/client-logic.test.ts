@@ -20,6 +20,7 @@ import {
 } from "../src/production-logic.ts";
 import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
 import { episodeDraft, episodePutPayload } from "../src/production/episode/episode-editor.ts";
+import { allowedSourceIndexes, approvalPutPayload, scriptDraft, scriptPostPayload } from "../src/production/scripts/script-editor.ts";
 
 test("保存的主题优先于系统偏好", () => {
   assert.equal(resolveTheme("light", true), "light");
@@ -178,6 +179,49 @@ test("分集编辑拒绝空字段、越界时长和空证据", () => {
   assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 179 }), /180 至 300/);
   assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 301 }), /180 至 300/);
   assert.throws(() => episodePutPayload({ ...valid, sourceEventIds: [] }), /至少选择一个/);
+});
+
+test("忠实稿裁剪正文、来源去重并拒绝空段落或空来源", () => {
+  const paragraphs = [{ key: "p1", text: "  吴邪走进墓道。  ", sourceIndexes: [0, 0, 1] }];
+  assert.deepEqual(scriptPostPayload("faithful", paragraphs), {
+    kind: "faithful", paragraphs: [{ text: "吴邪走进墓道。", sourceIndexes: [0, 1] }],
+  });
+  assert.throws(() => scriptPostPayload("faithful", [{ ...paragraphs[0], text: " " }]), /填写正文/);
+  assert.throws(() => scriptPostPayload("faithful", [{ ...paragraphs[0], sourceIndexes: [] }]), /至少选择一个来源/);
+});
+
+test("包装稿只允许忠实父稿冻结的来源", () => {
+  const parent = {
+    id: "faithful_1", episodeId: "episode_1", kind: "faithful" as const, versionNumber: 1,
+    parentVersionId: null, contentHash: "hash", paragraphs: [{ text: "忠实稿", sources: [
+      { episodeSourceIndex: 2, chapterId: "chapter_1", sourceEventId: "event_2", byteStart: 1, byteEnd: 2, sourceHash: "hash_2" },
+      { episodeSourceIndex: 2, chapterId: "chapter_1", sourceEventId: "event_2", byteStart: 1, byteEnd: 2, sourceHash: "hash_2" },
+    ] }],
+  };
+  assert.deepEqual(allowedSourceIndexes("packaged", [0, 1, 2], parent), [2]);
+  assert.deepEqual(scriptPostPayload("packaged", [{ key: "p", text: "包装稿", sourceIndexes: [2] }], parent), {
+    kind: "packaged", parentVersionId: "faithful_1", paragraphs: [{ text: "包装稿", sourceIndexes: [2] }],
+  });
+  assert.throws(() => scriptPostPayload("packaged", [{ key: "p", text: "越界", sourceIndexes: [1] }], parent), /冻结的来源/);
+  assert.throws(() => scriptPostPayload("packaged", [{ key: "p", text: "无父稿", sourceIndexes: [1] }]), /必须选择/);
+});
+
+test("服务端稿件版本恢复草稿时按来源序号去重", () => {
+  const version = {
+    id: "script_1", episodeId: "episode_1", kind: "faithful" as const, versionNumber: 1,
+    parentVersionId: null, contentHash: "hash", paragraphs: [{ text: "正文", sources: [
+      { episodeSourceIndex: 0, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 0, byteEnd: 3, sourceHash: "hash_1" },
+      { episodeSourceIndex: 0, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 0, byteEnd: 3, sourceHash: "hash_1" },
+    ] }],
+  };
+  assert.deepEqual(scriptDraft(version).map(({ text, sourceIndexes }) => ({ text, sourceIndexes })), [{ text: "正文", sourceIndexes: [0] }]);
+});
+
+test("批准与撤回 payload 始终携带当前 revision", () => {
+  const approval = { episodeId: "episode_1", status: "unapproved" as const, revision: 3, scriptVersionId: null, changedAt: null };
+  assert.deepEqual(approvalPutPayload("approve", approval, "packaged_1"), { action: "approve", expectedRevision: 3, scriptVersionId: "packaged_1" });
+  assert.deepEqual(approvalPutPayload("withdraw", { ...approval, status: "approved", scriptVersionId: "packaged_1" }), { action: "withdraw", expectedRevision: 3 });
+  assert.throws(() => approvalPutPayload("approve", approval), /请选择/);
 });
 
 test("非 2xx JSON 响应保留服务端中文错误", async () => {

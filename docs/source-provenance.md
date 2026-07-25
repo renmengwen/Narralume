@@ -33,3 +33,13 @@
 | 2026-07-25 | reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | 无适用章节 analyzer | 无 | 第三优先已核对，没有适配 Narralume 六类事件和字节证据合同的实现。 |
 | 2026-07-25 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | `propExtractionService.js`、`backgroundExtractionService.js`、`storyGenerationService.js`、`taskService.js` | `apps/server/src/chapter-event-analyzer.ts`、`apps/web/src/production/ChapterEventsStage.tsx` | 第四优先参考 JSON 归一化和中文状态；不复制弱恢复或独立任务体系。 |
 | 2026-07-25 | port | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `server/services/ai/aiTextModel.js`、`server/services/ai/aiModelConfig.js`、`server/services/creative/generatedImagePlanner.js` | `apps/server/src/chapter-event-analyzer.ts` | 第五优先只移植已验证的 OpenAI Responses 最小文本合同、严格 JSON、超时和脱敏边界；Narralume 独立实现，真实 gate 只读本机配置到内存，不复制密钥或建立运行时依赖。 |
+
+## PC-02 稿件与批准前端接线参考来源
+
+| 日期 | 类型 | 来源仓库 | 来源提交 | 来源文件/能力 | Narralume 文件 | 修改说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-25 | reference-only | `dramaclaw/dramaclaw` | `2864e72b3a717adbacfe09ded7b3ac6de2c2e28f` | `script_writing`、`literal_script_writing`、task runner、episode source editor、scripts query | `apps/web/src/production/scripts/` | 仅参考忠实稿/包装稿分层、来源编辑和任务状态交互；稿件版本与批准完全复用 Narralume 现有 API。 |
+| 2026-07-25 | reference-only | `HBAI-Ltd/Toonflow-app` | `bc61ec7a1b5df31293b286981a5f4ad4635464ee` | script GET/UPDATE/ADD、plan data | `apps/web/src/production/scripts/` | 仅参考稿件读取、编辑和追加版本交互；不复制可变覆盖存储。 |
+| 2026-07-25 | reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | `ScriptProcessor`、structured editor 设计 | `apps/web/src/production/scripts/ScriptStage.tsx` | 仅参考结构化分段编辑器；不引入其处理器或状态体系。 |
+| 2026-07-25 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | `storyGeneration`、`useStoryGeneration`、`CanvasScriptPanel`、`useCanvasScript` | `apps/web/src/production/scripts/` | 仅参考中文编辑状态和画布交互；不复制生成或影子存储。 |
+| 2026-07-25 | reference-only / minimal-port | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `NarrationPanel`、`HtmlVideoDraftPanel`、`htmlVideoDraftService` | `apps/web/src/production/scripts/` | 极小移植人工稿件编辑与明确保存交互；核心合同仍为 Narralume 不可变版本和 revision 批准。 |

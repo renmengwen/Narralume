@@ -30,11 +30,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`a2fbd2f`（PC-02B 首轮 Review findings 与真实旧包恢复缺口均已登记；第二版业务 candidate 已冻结待双 Review）。
+- 当前 HEAD：`91c8e8a`（PC-02B 第二版冻结控制提交；该 candidate 已因双 Review findings 失效并解除冻结）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：第二版 PC-02B 根 `npm run typecheck`、`npm test`、`npm run build`、unstaged/cached `git diff --check` 串行 GREEN；server 169 项中 168 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 36/36 PASS，Vite 58 modules。真实 v12 包 `166d37c...` 恢复到 `data/gates/pc02b-v12-package-restore-a2fbd2f`：源包不变，目标 schema `1..13`，21 张业务表逐表 count/hash 相同，integrity ok、FK=0，批准 r3、2 chunks 与 final 清单完整。真实浏览器冷打开并刷新 succeeded Job URL 后两章/两事件仍勾选，1200 秒与 60/3600/30 策略、两条证据和缺分析提示恢复，console error/warning 0；首版真实推荐/确认/幂等/取消与 v12 用户库迁移证据继续有效。
-- 当前 Task：`PC-02B` frozen_for_review；第二版 candidate `git-index-tree-v1:a2fbd2fd9b67b13315b4c7a8aa250afefbb4d30b:1fe0624f754033b5fe1a196be935a9a3808c9438` 已冻结，Writer 停止。
-- 下一动作：在同一 Ledger commit 与第二版 candidate 上分别执行独立 Spec Review、Code Quality Review，至少复核 v12 历史封存语义/v13 当前性、私有 staging 迁移与重验、hydrate controller 双顺序/identity stale 修复；双 PASS 后登记 verdict、提交业务、完成 Ledger、push origin/dev 并立即进入 PC-02C。
+- 当前 Task：`PC-02B` implementing；第二版 candidate `git-index-tree-v1:a2fbd2fd9b67b13315b4c7a8aa250afefbb4d30b:1fe0624f754033b5fe1a196be935a9a3808c9438` 双 Review FAIL，旧 candidate/证据树不得提交，只开放已合并 findings。
+- 下一动作：单写 Worker 最小修复六点：v12 封存稿件/父链/source snapshot/批准确定性身份；chunk `duration_ms`；隐式起点 Job identity；历史跳章同值 PUT；保存推荐子集后消费旧 Job；identity transition 移到 React commit 阶段并补实际生命周期测试。随后重验、生成第三版 candidate 并重做双 Review。
 
 ## 2026-07-25 产品闭环复开
 
@@ -113,7 +113,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B 可配置时长与跨章自动选材 | `frozen_for_review` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已停止 | 第二版 `git-index-tree-v1:a2fbd2fd9b67b13315b4c7a8aa250afefbb4d30b:1fe0624f754033b5fe1a196be935a9a3808c9438`；首版已失效 | 待本次冻结控制提交 | 待第二版独立复审 | 待第二版独立复审 | 根门禁 GREEN：server 168 PASS/1 权限 SKIP、web 36/36、Vite 58；真实 v12 包升级 v13 后 21 表 hash/count 相同、integrity/FK GREEN；真实 succeeded Job 冷刷新两章/两事件保持 | - | Writer 冻结；双 Review 只绑定本 Ledger commit/第二版 candidate，旧 verdict 不继承 |
+| PC-02B 可配置时长与跨章自动选材 | `implementing` | PC-02 既有 Episode/Job/批准合同 | PC-02B findings 单写 Worker | 第二版 `git-index-tree-v1:a2fbd2fd9b67b13315b4c7a8aa250afefbb4d30b:1fe0624f754033b5fe1a196be935a9a3808c9438` 已失效 | `91c8e8a4413b4363e833e3043edd6520b1df1327` | FAIL：P1 漏 chunk duration；P1 隐式起点 Job 被丢弃；P2 历史跳章同值 PUT 绕过连续检查 | FAIL：P1 封存稿件/source/批准身份不足；P1 同 duration；P2 保存子集后旧 Job 回灌；P2 render 阶段 ref transition | 第二版根门禁与真实旧包/浏览器显式起点证据继续有效，修复后重验受影响范围 | - | 只开放合并后的 6 项 finding；修复后必须生成第三版 candidate，旧 verdict 不继承 |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |

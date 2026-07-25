@@ -5,6 +5,7 @@
 ## 根目标与固定边界
 
 - Goal ID：`NARRALUME-P1-P7`
+- 根目标状态：`complete`
 - 根目标：持续完成 Narralume Phase 1-7，直到真实 3～5 分钟 9:16 样片和可在空数据目录恢复的项目包验收完成。
 - 仓库：`D:\code3\Narralume`
 - 不可变基线：`main@e75b1c33140f92703cce07c89673ec06b8393f92`
@@ -25,18 +26,18 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`35aa60b`（三项最终审查 finding 全部修复并集成；本 Ledger 冻结控制提交待生成）
-- 工作区：`dev` 仅本 Ledger 待提交；Final/Package 修复 worktree 均已冻结并完成失效 finding 最小双复审。
+- 当前 HEAD：`35aa60b`（最终产品提交；最终总账控制提交由 Git 历史定位）
+- 工作区：`dev` 仅本 Ledger 最终收口待提交；所有写租约已释放。
 - 最近验证：2026-07-25 最终集成态 typecheck/test/build/diff GREEN，server 142 项 141 PASS/1 symlink权限 SKIP、web 6/6；P7真实样片 Gate 123,298ms GREEN；项目包/恢复 Gate 6,113ms GREEN；源与恢复视频独立严格 probe/full decode GREEN。
-- 当前 Task：`P7-04` frozen_for_review；修复范围最小双复审均 PASS。
-- 唯一下一动作：在最终产品 revision `35aa60b:338b556` 与本冻结 Ledger 上做完成性未退化确认和三项 finding 集成态关闭确认；PASS 后收口 Requirement/Task/根目标。
+- 当前 Task：`P7-04` complete；Phase 1-7 根目标 complete。
+- 唯一下一动作：推送最终总账控制提交后保持 `dev`，等待用户明确授权再合并 `main`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P7-04/Final | Final Confirm Reviewers（只读） | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 最终产品 revision、验证产物与 Ledger 只读 | Finding A/C 集成态关闭确认 | P7 sample/package/restore roots / Git history | `frozen_for_review` |
-| P7-04/Package | Final Confirm Reviewers（只读） | `911d045:49024f2`，已集成 `a784d43` | 同上 | Finding B 集成态关闭确认 | 同上 | `frozen_for_review` |
+| P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
+| P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
 ## Phase 依赖
 
@@ -74,7 +75,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P7-01 真实样片 E2E | `complete` | P6-04 | Coordinator / 已释放 | `git-commit-tree-v1:7f2731621e99be96cab496d52570e383606d2af8:a8e4363fefb605630f6a867ee96a794a950b1366`（父 Core `65a16b6`） | Gate `d74947852c5e1e8c78c1b09d5e55d6b8b28124b9`；Core `38c4960…` | Core Spec PASS；Gate 综合 PASS | Core Quality PASS；Gate 同一次综合 PASS | 真实 Gate/产物/DB独立复验，严格媒体合同/full decode/restart reuse；集成态全量三门 GREEN | Core `4fb94fe`、Gate `91ab194`（冻结提交 `65a16b6`/`7f27316`） | 固定本机真实验收路径/排他数据根仅属 Gate；P7 自身已自包含 |
 | P7-02 可恢复项目包 | `complete` | P7-01 | Coordinator / 已释放 | Core `git-commit-tree-v1:d0ece56ae2d4a63448a6d5c3a6139bf5cda291a4:5027c53cae2cba02c80517bbca5fd1d4cc1c7b8a`；真实 Gate `2a6ef67…:5c324d3…` | Core `d672d2e…`；Gate `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` | Core最小复审 PASS；真实包综合 PASS | Core最小复审 PASS；真实包同一次综合 PASS | 最终包 `4ee61c2ecdbafc50fd7f31da8cf0abfc4db5a62f09e912c522359cc60b3b2f2b`，v1，17 files/53,929,675 bytes，逐项hash/bytes/自包含/SQLite GREEN | 核心 `c451bca`/`0277738`；Gate集成 `a09be8b`（冻结`2a6ef67`） | Windows-only no-replace 首版合同；跨平台恢复未来按真实需求增加 |
 | P7-03 空目录恢复演练 | `complete` | P7-02 | Coordinator / 已释放 | `git-commit-tree-v1:2a6ef67b99656049ec2dc4d577579906b15c0d1f:5c324d3bfe567761c8a91a90c8dbc6d3ffbf4805` | `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` | 综合 PASS | 同一次综合 PASS | 最终恢复根查询6证据/3章事件/packaged rev3/8音频cue视觉/approved图/2 chunks；删final后正式重导出同hash/bytes，严格合同/full decode/restart reuse；4类负向拒绝 | `a09be8b`（冻结`2a6ef67`） | 固定 Gate 根并发排他依赖 Ledger；产品恢复核心本身有 no-replace 合同 |
-| P7-04 最终验收 | `frozen_for_review` | P7-03 | Final Confirm Reviewers只读；Ledger仅Coordinator | `git-commit-tree-v1:35aa60bb316704b6a0c7c727af59fe650e36cd89:338b55664f8c51c068ec84845551ba80071552d6`；历史失效 candidates 保留日志 | 本冻结 Ledger 提交后由 Git 历史定位 | 首轮完成性 PASS；Package Spec PASS；Final 第四版 Spec PASS；待集成未退化确认 | Package Quality PASS；Final 第四版 Quality PASS；待三 findings 集成关闭确认 | 全量三门/diff GREEN；server142项141PASS/1权限SKIP、web6/6；sample Gate 123,298ms；package/recovery Gate 6,113ms；双视频严格probe/full decode | Package `a784d43`；Final `b20bf5f`/`82a0f91`/`3e9ae86`/`35aa60b` | 新包 `166d37c…`，17 files/53,929,675 bytes；样片/恢复视频仍 SHA `82b6e294…`、18,536,549 bytes、287,236ms。quarantine 硬退出残留可安全保留并由 chunks 重建，人工清理属非阻断风险。 |
+| P7-04 最终验收 | `complete` | P7-03 | Coordinator / 已释放 | `git-commit-tree-v1:35aa60bb316704b6a0c7c727af59fe650e36cd89:338b55664f8c51c068ec84845551ba80071552d6`；历史失效 candidates 保留日志 | `4e22ecff9db208bb8670f589e480ae24f779dc87` | 最终完成性未退化确认 PASS，绑定冻结 Ledger/product，无 missing/contradiction | 三 findings 集成关闭确认 PASS；Package/Final candidates 与产品 blobs 零差异 | 全量三门/diff GREEN；server142项141PASS/1权限SKIP、web6/6；sample Gate 123,298ms；package/recovery Gate 6,113ms；双视频严格probe/full decode | Package `a784d43`；Final `b20bf5f`/`82a0f91`/`3e9ae86`/`35aa60b` | 新包 `166d37c…`，17 files/53,929,675 bytes；样片/恢复视频仍 SHA `82b6e294…`、18,536,549 bytes、287,236ms。quarantine 硬退出残留可安全保留并由 chunks 重建，人工清理属非阻断风险。 |
 
 ## Requirement 唯一状态
 
@@ -92,10 +93,10 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | REQ-P3-02 | `verified` | 忠实/包装稿不可变追加；批准/撤回事件不可覆盖，乐观 revision；未批准及撤回后 TTS/图片硬阻断 | P3-02、P3-03 |
 | REQ-P4-01 | `verified` | 真实 System.Speech TTS/ffprobe 时间轴、SRT/ASS、220,960ms 的 1080×1920 H.264+AAC 占位视频、内容寻址复用与重启验证 | P4-01～P4-03 |
 | REQ-P5-01 | `verified` | 主/状态资产、别名、真实 Seedream 与上传候选、追加式审核、显式视觉段关系、确定性联系表与失效阻断均有集成态真实证据 | P5-01～P5-04 |
-| REQ-P6-01 | `pending` | 唯一 9:16 模板、微动淡化、ASS、分片恢复、concat 与探测验证 | P6-01～P6-04 |
+| REQ-P6-01 | `satisfied` | 唯一 9:16 模板、微动淡化、ASS、分片恢复、concat、严格探测与真实恢复门禁均通过 | P6-01～P6-04 |
 | REQ-P7-01 | `satisfied` | 真实 3～5 分钟样片 | P7-01 |
 | REQ-P7-02 | `satisfied` | 带 manifest/hash 的项目包可在空数据目录恢复并重新导出 | P7-02、P7-03 |
-| REQ-P7-03 | `pending` | 成本/耗时/失败率/人工耗时、全量验证和独立双 Review | P7-04 |
+| REQ-P7-03 | `satisfied` | 成本/耗时/失败率/人工耗时口径已记录；全量验证、真实双 Gate、最终完成性与恢复安全确认均 PASS | P7-04 |
 
 ## 验证与 Review 证据索引
 
@@ -226,11 +227,14 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P7-04 Final 首版修复最小双复审 | FAIL，绑定 `6f3fb72da0c75a84c2efa9aba1fa12026b96b587:61de6a8491fc1517b68ab5928399aa716023a5ed`。Finding A 的复用重读及 `BEGIN IMMEDIATE` + 同步目录切换线性化主体 PASS；Finding C 仍未绑定异步验证前后的 target/backup 目录 dev/ino，存在验证后路径替换并删除唯一有效 backup 的竞态；复用身份变化错误也被宽 catch 吞后进入昂贵重建。旧 candidate 失效，只开放这两项及对应确定性回归。 |
 | 2026-07-25 P7-04 Final 第二至四版最小复审 | 第二版 `12d0e12:9c6dfcc` 因最终字符串路径操作入口仍可替换而 Quality FAIL；第三版 `5fcc298:afc5da1` 以随机 quarantine 原子捕获、隔离重验、同步提交关闭竞态，但 cleanup failure 回归证据缺口使 Quality FAIL；第四版 `ff7baa8:f7d509e` 增加仅作用 backupQuarantine 的同步 cleanup seam，确定性覆盖删除前 EACCES 与部分删除+回滚竞争，Spec + Quality 均 PASS。所有旧 candidate 失效，只继承第四版结论。 |
 | 2026-07-25 P7-04 修复集成与最终 Gate | Package `a784d43`；Final `b20bf5f`、`82a0f91`、`3e9ae86`、`35aa60b`。最终产品 `35aa60bb316704b6a0c7c727af59fe650e36cd89:338b55664f8c51c068ec84845551ba80071552d6`。全量 typecheck/test/build/diff GREEN，server142项141PASS/1文件symlink权限SKIP、web6/6；真实样片 Gate 123,298ms，项目包/恢复 Gate 6,113ms。新包 `D:\code3\Narralume\data\gates\p7-project-package\166d37c417d1b62b29235b67a4d060226b871e87db848b7123be59e988a0ff6e`，17 files/53,929,675 bytes；恢复根不变。源样片与恢复重导出均 SHA `82b6e294…`、18,536,549 bytes、287,236ms，独立1080×1920@25/H.264/yuv420p/tv/AAC probe及full decode PASS；总Gate墙钟129,411ms。 |
+| 2026-07-25 P7-04 最终确认与根目标完成 | 完成性未退化确认 PASS、三 findings 集成关闭确认 PASS，均绑定 Ledger `4e22ecff9db208bb8670f589e480ae24f779dc87` 与产品 `35aa60b:338b556`。Package/Final 已审 candidates 与产品四个业务文件 blobs 零差异；新包独立复算17/17 bytes+SHA/packageHash，无extra/missing；源与恢复视频复算同 SHA/bytes/媒体合同。`REQ-P6-01`、`REQ-P7-03` satisfied，P7-04 complete，根目标 complete；`main@e75b1c3` 未合并。 |
 
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。
 - 2026-07-25：用户授权后续生图、多模态和配音模型真实测试只读 `D:\code3\MuseDock` 中已有的本机配置与调用合同并直接执行，不因此普通配置问题暂停提问；MuseDock 仍不得成为 Narralume 运行时依赖，密钥/账号不得进入代码、提交、Ledger 或输出。
 - 2026-07-25：用户离线、休息或暂时不回复时，Coordinator 不等待确认，按当前 Ledger 恢复入口持续执行到 Phase 1-7 根目标真实完成；仅在缺少必须的外部授权、产品方向重大决策、不可逆或高风险外部操作、用户主观审美选择，或充分排查仍无法解除的真实阻塞时暂停提问。
-- Node 22 内置 `node:sqlite` 在当前运行时可用性与警告状态由 P1-01 的可执行测试确认；若不满足再评估已安装能力，不预先新增 ORM。
-- 仓库当前没有真实输入、TTS provider 凭据或候选图片。前者优先从用户已放入工作区且合法可用的素材发现；确需用户提供或作主观选择时，按停止条件记录真实 blocker。
+- Node 22 内置 `node:sqlite` 当前可用但仍输出实验性警告；首版不因此新增 ORM。
+- 项目包恢复的 no-replace 合同当前为 Windows-only；普通文件 symlink 负向测试因账户权限 `EPERM` SKIP，但 Junction 与硬链接拒绝真实 PASS。
+- 固定 P7 Gate 数据根依靠 Ledger 单写者排他，没有另加跨进程脚本锁；Windows 超长产物路径应使用 `\\?\` 前缀或 Node/FFprobe/FFmpeg，普通 PowerShell 可能产生不存在的假阴性。
+- 若进程恰在随机 quarantine 异步重验阶段硬退出，后续可从 chunks 安全重建 final，但旧 quarantine 可能保留为需人工清理的孤儿目录；不会作为成功 target 使用。

@@ -25,18 +25,18 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`a784d43`（Package canonical path 修复已集成；本 Ledger 待 checkpoint）
-- 工作区：`dev` 仅本 Ledger 待提交；Package 修复 worktree 已冻结并双复审 PASS，Final 第二版修复仍在隔离 worktree。
-- 最近验证：2026-07-25 最终集成态 typecheck/test/build/diff GREEN，server 134 项 133 PASS/1 symlink权限 SKIP、web 6/6；P7真实样片 Gate 128,163ms GREEN；项目包/恢复 Gate 5,648ms GREEN；两个视频严格 probe/full decode GREEN。
-- 当前 Task：`P7-04` changes requested；完成性证据 PASS，代码质量/恢复安全 FAIL。
-- 唯一下一动作：只修复 Final 首版最小复审发现的目录身份替换竞态与复用身份变化错误透传；重新冻结并最小双复审。
+- 当前 HEAD：`35aa60b`（三项最终审查 finding 全部修复并集成；本 Ledger 冻结控制提交待生成）
+- 工作区：`dev` 仅本 Ledger 待提交；Final/Package 修复 worktree 均已冻结并完成失效 finding 最小双复审。
+- 最近验证：2026-07-25 最终集成态 typecheck/test/build/diff GREEN，server 142 项 141 PASS/1 symlink权限 SKIP、web 6/6；P7真实样片 Gate 123,298ms GREEN；项目包/恢复 Gate 6,113ms GREEN；源与恢复视频独立严格 probe/full decode GREEN。
+- 当前 Task：`P7-04` frozen_for_review；修复范围最小双复审均 PASS。
+- 唯一下一动作：在最终产品 revision `35aa60b:338b556` 与本冻结 Ledger 上做完成性未退化确认和三项 finding 集成态关闭确认；PASS 后收口 Requirement/Task/根目标。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P7-04/Final | Final Fix Writer | `D:\code3\Narralume-worktrees\P7-04-final` / `codex/p7-04-final` / `a09be8b` | `apps/server/src/final-video.ts`、`apps/server/src/final-video.test.ts` | 第二版：目录 dev/ino 身份绑定、复用身份变化立即拒绝 | final export test roots | `implementing` |
-| P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | chunk canonical path恢复合同与同步篡改负向 | 无 | `verified` |
+| P7-04/Final | Final Confirm Reviewers（只读） | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 最终产品 revision、验证产物与 Ledger 只读 | Finding A/C 集成态关闭确认 | P7 sample/package/restore roots / Git history | `frozen_for_review` |
+| P7-04/Package | Final Confirm Reviewers（只读） | `911d045:49024f2`，已集成 `a784d43` | 同上 | Finding B 集成态关闭确认 | 同上 | `frozen_for_review` |
 
 ## Phase 依赖
 
@@ -74,7 +74,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | P7-01 真实样片 E2E | `complete` | P6-04 | Coordinator / 已释放 | `git-commit-tree-v1:7f2731621e99be96cab496d52570e383606d2af8:a8e4363fefb605630f6a867ee96a794a950b1366`（父 Core `65a16b6`） | Gate `d74947852c5e1e8c78c1b09d5e55d6b8b28124b9`；Core `38c4960…` | Core Spec PASS；Gate 综合 PASS | Core Quality PASS；Gate 同一次综合 PASS | 真实 Gate/产物/DB独立复验，严格媒体合同/full decode/restart reuse；集成态全量三门 GREEN | Core `4fb94fe`、Gate `91ab194`（冻结提交 `65a16b6`/`7f27316`） | 固定本机真实验收路径/排他数据根仅属 Gate；P7 自身已自包含 |
 | P7-02 可恢复项目包 | `complete` | P7-01 | Coordinator / 已释放 | Core `git-commit-tree-v1:d0ece56ae2d4a63448a6d5c3a6139bf5cda291a4:5027c53cae2cba02c80517bbca5fd1d4cc1c7b8a`；真实 Gate `2a6ef67…:5c324d3…` | Core `d672d2e…`；Gate `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` | Core最小复审 PASS；真实包综合 PASS | Core最小复审 PASS；真实包同一次综合 PASS | 最终包 `4ee61c2ecdbafc50fd7f31da8cf0abfc4db5a62f09e912c522359cc60b3b2f2b`，v1，17 files/53,929,675 bytes，逐项hash/bytes/自包含/SQLite GREEN | 核心 `c451bca`/`0277738`；Gate集成 `a09be8b`（冻结`2a6ef67`） | Windows-only no-replace 首版合同；跨平台恢复未来按真实需求增加 |
 | P7-03 空目录恢复演练 | `complete` | P7-02 | Coordinator / 已释放 | `git-commit-tree-v1:2a6ef67b99656049ec2dc4d577579906b15c0d1f:5c324d3bfe567761c8a91a90c8dbc6d3ffbf4805` | `e78ab129c34a6bba7ce8a8a8854c1db3c4528a3` | 综合 PASS | 同一次综合 PASS | 最终恢复根查询6证据/3章事件/packaged rev3/8音频cue视觉/approved图/2 chunks；删final后正式重导出同hash/bytes，严格合同/full decode/restart reuse；4类负向拒绝 | `a09be8b`（冻结`2a6ef67`） | 固定 Gate 根并发排他依赖 Ledger；产品恢复核心本身有 no-replace 合同 |
-| P7-04 最终验收 | `changes_requested` | P7-03 | Final Fix Writer；Ledger 仅 Coordinator | 首版失效 `a09be8b:54f499d`；Package PASS `911d045:49024f2`；Final 首版修复失效 `6f3fb72:61de6a8` | 首轮最终审查 `86b9711c`；修复 checkpoint 待生成 | 完成性/规格证据首轮 PASS；Package Spec最小复审 PASS；Final Finding A PASS、Finding C仍FAIL | 首轮质量 FAIL；Package Quality最小复审 PASS；Final首版修复最小复审 FAIL | Package server 135项134 PASS/1权限SKIP、typecheck/build/diff GREEN；Final首版 server 137项136 PASS/1权限SKIP、typecheck/build/diff GREEN | Package集成 `a784d43`；Final待第二版 | Package canonical path finding 已关闭。Final 剩余：异步 pair 验证未绑定目录dev/ino，且复用身份变化被宽catch吞后做无意义重建。 |
+| P7-04 最终验收 | `frozen_for_review` | P7-03 | Final Confirm Reviewers只读；Ledger仅Coordinator | `git-commit-tree-v1:35aa60bb316704b6a0c7c727af59fe650e36cd89:338b55664f8c51c068ec84845551ba80071552d6`；历史失效 candidates 保留日志 | 本冻结 Ledger 提交后由 Git 历史定位 | 首轮完成性 PASS；Package Spec PASS；Final 第四版 Spec PASS；待集成未退化确认 | Package Quality PASS；Final 第四版 Quality PASS；待三 findings 集成关闭确认 | 全量三门/diff GREEN；server142项141PASS/1权限SKIP、web6/6；sample Gate 123,298ms；package/recovery Gate 6,113ms；双视频严格probe/full decode | Package `a784d43`；Final `b20bf5f`/`82a0f91`/`3e9ae86`/`35aa60b` | 新包 `166d37c…`，17 files/53,929,675 bytes；样片/恢复视频仍 SHA `82b6e294…`、18,536,549 bytes、287,236ms。quarantine 硬退出残留可安全保留并由 chunks 重建，人工清理属非阻断风险。 |
 
 ## Requirement 唯一状态
 
@@ -224,6 +224,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | 2026-07-25 P7-04 最终双审 | 完成性/规格证据 PASS，代码质量/恢复安全 FAIL，均绑定冻结 Ledger `86b9711c2f27e0d35989a3b52ab4c5d77059eaeb` 与产品 revision `a09be8b:54f499d`。首版 final candidate 失效但既有样片/包/Gate 证据保留。只开放三项 finding：P1 final 复用与重建缺少不可插入 DB 写的 current identity 线性化点；P2 项目包未强制 chunk canonical path；P2 final crash residue 将非 ENOENT 当不存在且 target+backup 未验证完整身份。分别由 Final/Package 两条不重叠写租约修复并做对应最小复审，不机械重审已通过范围。 |
 | 2026-07-25 P7-04 Package 修复与最小双复审 | PASS，冻结 `911d045f692e3c2199e6d92352474d30f5304f83:49024f202a6fb6d8d98124360ba53fee69d7a90b`，集成 `a784d43`。final manifest 每个 chunk 由 episodeId/renderHash 复算 canonical path；负向包同步伪造 DB、final manifest、移动 payload 并重签全部 bytes/SHA/packageHash，恢复仍在发布 target 前拒绝。Spec + Quality 最小复审均 PASS，无 findings；server 135项134 PASS/1 symlink权限SKIP、typecheck/build/diff GREEN。 |
 | 2026-07-25 P7-04 Final 首版修复最小双复审 | FAIL，绑定 `6f3fb72da0c75a84c2efa9aba1fa12026b96b587:61de6a8491fc1517b68ab5928399aa716023a5ed`。Finding A 的复用重读及 `BEGIN IMMEDIATE` + 同步目录切换线性化主体 PASS；Finding C 仍未绑定异步验证前后的 target/backup 目录 dev/ino，存在验证后路径替换并删除唯一有效 backup 的竞态；复用身份变化错误也被宽 catch 吞后进入昂贵重建。旧 candidate 失效，只开放这两项及对应确定性回归。 |
+| 2026-07-25 P7-04 Final 第二至四版最小复审 | 第二版 `12d0e12:9c6dfcc` 因最终字符串路径操作入口仍可替换而 Quality FAIL；第三版 `5fcc298:afc5da1` 以随机 quarantine 原子捕获、隔离重验、同步提交关闭竞态，但 cleanup failure 回归证据缺口使 Quality FAIL；第四版 `ff7baa8:f7d509e` 增加仅作用 backupQuarantine 的同步 cleanup seam，确定性覆盖删除前 EACCES 与部分删除+回滚竞争，Spec + Quality 均 PASS。所有旧 candidate 失效，只继承第四版结论。 |
+| 2026-07-25 P7-04 修复集成与最终 Gate | Package `a784d43`；Final `b20bf5f`、`82a0f91`、`3e9ae86`、`35aa60b`。最终产品 `35aa60bb316704b6a0c7c727af59fe650e36cd89:338b55664f8c51c068ec84845551ba80071552d6`。全量 typecheck/test/build/diff GREEN，server142项141PASS/1文件symlink权限SKIP、web6/6；真实样片 Gate 123,298ms，项目包/恢复 Gate 6,113ms。新包 `D:\code3\Narralume\data\gates\p7-project-package\166d37c417d1b62b29235b67a4d060226b871e87db848b7123be59e988a0ff6e`，17 files/53,929,675 bytes；恢复根不变。源样片与恢复重导出均 SHA `82b6e294…`、18,536,549 bytes、287,236ms，独立1080×1920@25/H.264/yuv420p/tv/AAC probe及full decode PASS；总Gate墙钟129,411ms。 |
 
 ## 决策与剩余风险
 

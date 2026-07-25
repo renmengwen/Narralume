@@ -30,11 +30,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`ece2ac3`（PC-02B 第三版业务提交；等待完成登记与 push）。
-- 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
+- 当前 HEAD：`2c27051`（PC-02B 已完成并推送；PC-02C 五仓来源已独立登记）。
+- 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`docs/research/2026-07-24-north-tomb-video-project-summary.md`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：第三轮 PC-02B 根 `npm run typecheck`、`npm test`、`npm run build`、cached/unstaged `git diff --check` 串行 GREEN；server 181 项中 180 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 39/39 PASS，Vite 58 modules。真实 v12 包 `166d37c...` 恢复到 `data/gates/pc02b-v12-package-restore-badf433-v3`：源包不变，目标 schema `1..13`，21 张业务表逐表 count/hash 相同，integrity ok、FK=0，3 个稿件版本、批准 r3、2 chunks 的 duration/身份完整。隔离真实浏览器 Gate：既有 succeeded Job 两事件取消一项后明确保存，URL `job` 清除，冷刷新只恢复 1 条持久证据且旧推荐不回灌；首集不传 `startChapterId` 的 Job payload 为 `requestedStartChapterId=null`、解析首章一致、result `needs_analysis`，带 `job` 无 `chapter` 冷刷新恢复；两条 console error/warning 均 0。默认分支使用注入的非网络 recommender 仅放行路由并证明 handler 未调用模型，不冒充外部模型成功；既有真实 provider 推荐成功证据继续有效。
-- 当前 Task：`PC-02C` queued；PC-02B 已通过根门禁、真实恢复/UI Gate、同一 candidate 双 Review并提交业务 `ece2ac301e07fd7373336e88a1a188109a1aee72`。
-- 下一动作：提交本次完成登记并 push `origin/dev`；随后按冻结顺序只读研究 PC-02C 跨章骨架/长稿成熟实现，登记来源与最小写租约后进入 implementing。
+- 当前 Task：`PC-02C` implementing；PC-02B 已通过根门禁、真实恢复/UI Gate、同一 candidate 双 Review，业务 `ece2ac301e07fd7373336e88a1a188109a1aee72` 与完成登记 `cc294e705fd0637badb56a430c71e45ab435c34d` 已推送 `origin/dev`。
+- 下一动作：单写 Worker 复用现有持久 Job/provider、`episode_sources`、Script Version Store 与 Approval Store，实现跨章 beat 骨架和 faithful/package 长稿；不新增表、依赖、第二套存储或通用 Agent 框架。
 
 ## 2026-07-25 产品闭环复开
 
@@ -54,7 +54,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 第三版根门禁、v12 恢复、隔离真实 UI Gate与同一 candidate 双 Review全部 PASS；业务 `ece2ac3` |
-| PC-02C 跨章骨架与长稿 | `queued` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 不新增第二套稿件存储；目标时长和真实 TTS 语速驱动字数预算；批准后才能进入媒体生产 |
+| PC-02C 跨章骨架与长稿 | `implementing` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 不新增第二套稿件存储；目标时长和真实 TTS 语速驱动字数预算；批准后才能进入媒体生产 |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
@@ -101,7 +101,8 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3` | 冻结 candidate 只读；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `frozen_for_review` |
+| PC-02C | `pc02b_worker` | 共享工作区 `dev@2c27051` | `apps/server/src/episode-script-generation-job.ts`、对应最小测试、`apps/server/src/app.ts`/`app.test.ts`、`apps/web/src/production/scripts/**`、`apps/web/src/production/types.ts`、`apps/web/src/ProductionWorkspace.tsx`、`apps/web/test/**`；确需复用时才可最小修改 `script-version-store.ts` 及其测试；排除本 Ledger、来源文档与全部用户本地改动 | Coordinator | 单写业务路径；不启动共享真实数据 Gate | `implementing` |
+| PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3`；业务 `ece2ac3`，完成登记 `cc294e7` | 无 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `complete` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
@@ -113,6 +114,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PC-02C 跨章骨架与长稿 | `implementing` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | `pc02b_worker` / 单写租约 | 待 Worker 释放后冻结 | 待冻结 | 复用既有核心，candidate 后执行一次独立综合 Review | 同一次综合 Review | 待定向测试、根门禁、真实 API/UI 创建/取消/恢复、来源父链及未批准阻断 Gate | 待提交 | 五仓来源已登记于 `2c27051`；骨架只消费结构化事件摘要，faithful 按 beat 取相关原文，packaged 引用 faithful 冻结来源；校准身份与时长预算冻结在 Job payload，不自动批准 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a` | `c38d990ca0d782d680684f9fa3c498d825b2e351` | PASS：chunk duration、隐式原始/解析起点、历史跳章同值 PUT 均关闭；95 项 94 PASS/1权限SKIP | PASS：封存稿件/父链/source/批准身份、推荐消费、React commit identity 均关闭；project-package 47 PASS/1 SKIP、web32/32 | 根三门/diff GREEN，server 180 PASS/1权限SKIP、web39/39；v12 21表恢复完整；默认空起点 `requestedStartChapterId=null`/needs_analysis 冷恢复与推荐子集消费冷恢复均 GREEN，console 0 | `ece2ac301e07fd7373336e88a1a188109a1aee72` | 外部 provider 重启映射受执行策略限制；默认 identity Gate 使用非网络注入且未调用模型，不影响既有真实推荐成功证据；进入 PC-02C |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
@@ -298,6 +300,7 @@ PC-02 当前 checkpoint：
 | 2026-07-26 PC-02B 第三版 candidate | 第二轮合并的 6 项 finding 已完成最小根修并释放 Writer。第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a`，22 个业务路径，用户本地启动配置 0 暂存。根 typecheck/test/build/diff GREEN，server 181 项中 180 PASS/1权限SKIP、web39/39；v12 包 21 表 count/hash、integrity/FK、稿件父链/source snapshot/批准身份/chunk duration 恢复 GREEN。隔离 UI Gate 中默认空起点 payload `requestedStartChapterId=null`、resolved/result 首章一致且 needs_analysis 冷刷新恢复；既有 succeeded Job 两事件取消一项保存后 URL 清 job，刷新只恢复 1 条持久证据；console 0。外部 provider 映射被本机执行策略拦截，默认分支以非网络注入只放行路由，handler 未调用模型，不冒充外部模型成功。 |
 | 2026-07-26 PC-02B 第三版双 Review | Spec PASS + Code Quality PASS，均绑定冻结 Ledger `c38d990ca0d782d680684f9fa3c498d825b2e351` 与第三版 revision。两位 Reviewer 均复算 22/22 staged 业务 blob 与 candidate 一致、0 mismatch，审查前后 HEAD/index/status 不变。Spec 关闭 chunk duration、隐式起点 identity、历史跳章同值 PUT；Quality 关闭 v12 sealed 稿件/父链/source/批准身份、推荐子集消费和 React commit identity。定向 Spec 95 项 94 PASS/1权限SKIP；Quality project-package 47 PASS/1 SKIP、web32/32，无 P0-P2 finding。 |
 | 2026-07-26 PC-02B 完成 | 中文业务提交 `ece2ac301e07fd7373336e88a1a188109a1aee72`，恰好 22 个已审业务路径；提交后工作区只剩用户本地启动配置 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，未清理、未暂存、未混入。PC-02B complete，进入 PC-02C 冻结参考研究与最小写租约。 |
+| 2026-07-26 PC-02C 来源登记与写租约 | PC-02B 完成登记 `cc294e7` 已推送 `origin/dev`；按 DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock 完成只读研究，并以 `2c27051` 独立登记 `reference-only / method-port / budget-method-port`，无直接 copy。分配 `pc02b_worker` 单写最小闭包：一个领域 Job、现有稿件版本/批准门和最小前端生成入口；明确排除新表、新依赖、第二套存储、通用 Agent 框架、多章全文 Prompt、自动批准及全部用户本地改动。 |
 
 ## 决策与剩余风险
 

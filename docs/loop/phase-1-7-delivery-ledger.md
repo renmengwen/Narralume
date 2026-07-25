@@ -28,11 +28,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`a00318d`（PC-02 已接通章节事件人工编辑、故事弧与分集证据首版）。
+- 当前 HEAD：`6168da1`（PC-02 已接通人工/自动章节事件与故事弧分集首版；真实自动分析受当前 provider 内容门禁限制）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：`a00318d` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 142 项中 141 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 14/14 PASS，Vite 47 modules；server health 与 web 均 HTTP 200。真实浏览器从 Episode 1 空态保存 240 秒故事弧，持久证据 `7149..7169` 与 SHA-256 回读、重复保存幂等、刷新恢复、Episode 2 空态再回 1、console 0 error/0 warning 全部通过。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
+- 最近验证：`6168da1` 集成态 `npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 146 项中 145 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 15/15 PASS，Vite 47 modules；server health 与 web 均 HTTP 200。真实 UI 验收确认未配置 409、中文失败、旧人工事件不清空、人工 Job/URL 刷新恢复和 console 0 error/0 warning。真实《盗墓笔记》第一章冻结 37 atoms/3110 字符；当前 active provider 首批成功并通过 `prepareChapterEvents`，但原第 17 atom 单独触发 HTTP 400 内容门禁，替代 provider HTTP 402，因此不得宣称完整自动分析真实 gate 已通过。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
 - 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：由单写 Worker 按已完成的五级参考调查实施自动章节分析最小 provider + Job 闭包；随后依次接通稿件/批准、资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频。复用型首版不以严格独立 Review 阻塞，执行 Worker 最小测试、Coordinator 窄边界核对与真实工作流验收；不与人工事件入口混淆，不形成参考项目运行时依赖。
+- 下一动作：由单写 Worker 复用现有 Script Version/Approval API 接通忠实稿、包装稿、人工批准与撤回首版；随后依次接通资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频。自动章节分析的 provider 内容门禁作为外部残余风险保留，不篡改或跳过原文，也不阻塞已有人工证据入口与后续产品闭环。复用型首版不以严格独立 Review 阻塞。
 
 ## 2026-07-25 产品闭环复开
 
@@ -70,18 +70,20 @@ PC-02 当前 checkpoint：
 - Web checkpoint：`05f9f23`（`前端：组件化接通章节与资产工作区`）；candidate index tree：`3d017ef328c35cdcaf8ed0070e6f37d350a9c053`。
 - 章节事件人工编辑提交：`4a9d776`（`前端：接通章节事件人工编辑任务`）。复用现有 `chapter_events_replace`、Job 轮询/取消与服务端证据校验；六类事件、绝对字节证据、多页完整读取、空列表清除、终态 Job 身份和切章竞态均进入同一前端闭包，不新增后端路由、表或依赖，也不冒充自动 LLM 分析。
 - 故事弧与分集提交：`a00318d`（`前端：接通故事弧与分集证据`）。复用现有 Episode GET/PUT 与章节事件证据快照；支持 URL 序号恢复、404 空态、180～300 秒故事弧、可选 recap/nextHook、证据选择、保存后 GET 回读、刷新恢复和重复保存幂等，不新增后端路由、表或依赖。
+- 自动章节分析提交：`6168da1`（`章节：接通自动分析持久任务`）。复用现有 Job、checkpoint、章节事件 Store、API、轮询/取消与 URL 恢复；服务端生成稳定 evidence atoms，模型只返回六类事件 payload 与 evidence IDs，绝对字节、编码边界、章节 hash 和证据 SHA-256 仍由现有 Store 复核；空结果/失败不清空人工事件。未新增路由、迁移、依赖、结果表或第二套任务系统。
 - 已接通：七阶段注册与依赖/Job 类型映射，`book/series/stage/chapter/episode/asset/job` URL 恢复，非法阶段回退，Job hydrate-first/3 秒轮询/终态停止/卸载清理/取消/进度换算，章节列表、原文证据与结构化事件同屏，系列真实主资产/状态资产/别名、候选列表与图片、候选批准/淘汰、生图 Job、prompt 分段组装及候选切换竞态保护。
 - 模块化：`ProductionWorkspace.tsx` 仅保留领域状态组合、URL 恢复和阶段编排；章节、资产、候选、Prompt Builder、Job 轮询已进入独立组件/hook/纯函数。Tailwind/组件化纠偏完成，后端模块化与公共函数边界已由 `d796d34` 固化进 `AGENTS.md`。
-- 验证：`npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` 串行 GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP/0 FAIL，web 14/14 PASS；server health 与 web HTTP 200；Vite 47 modules。
+- 验证：`npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 146 项中 145 PASS/1 symlink 权限 SKIP/0 FAIL，web 15/15 PASS；server health 与 web HTTP 200；Vite 47 modules。
 - 浏览器验收：在真实《盗墓笔记》545 章书籍与 `盗墓笔记视觉说书` 系列中，选择第一章后创建地点事件 `长沙镖子岭`；GB18030 精确证据 `7149..7169` 读回为 `50年前，长沙镖子岭。`，Job `job_6a27dd89-bc6b-429b-9524-9fe030e79d32` succeeded；完整 URL 冷启动恢复表单与证据，console 0 error/0 warning。
 - Episode 浏览器验收：第 1 集从 GET 404 空态保存 `第一集：血尸疑冢`、240 秒故事弧与 `长沙镖子岭` 事件；API/UI 回读同一章节、`7149..7169`、原文和 SHA-256；重复保存 sourceCount 仍为 1；整页刷新恢复；切 Episode 2 显示独立空态，再回 1 完整恢复；console 0 error/0 warning。
-- 尚未接通：自动章节分析、忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
+- 自动分析验收：未配置时 POST `/api/jobs` 返回 409 并保留人工入口；失败后旧 `长沙镖子岭` 事件、`7149..7169`、原文与 SHA-256 不变，人工 Job `job_110da930-2d97-43d9-877d-d2c278b910f1` succeeded，带 Job URL 刷新恢复 100%。真实模型完整章 gate 被当前 provider 对原第 17 atom 的 HTTP 400 内容门禁阻断；另一 provider HTTP 402，不记录敏感配置、不写事件、不把部分结果冒充成功。
+- 尚未接通：忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@a00318d` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
+| PC-02 | Coordinator | `dev@6168da1` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

@@ -3,7 +3,7 @@ export const PRODUCTION_STAGES = [
   { id: "episode", label: "故事弧与分集", dependsOn: ["events"], jobTypes: [] },
   { id: "scripts", label: "忠实稿与包装稿", dependsOn: ["episode"], jobTypes: [] },
   { id: "assets", label: "资产与候选图", dependsOn: ["scripts"], jobTypes: ["image_candidate_generate"] },
-  { id: "audio", label: "TTS 与字幕", dependsOn: ["scripts"], jobTypes: ["tts_timeline"] },
+  { id: "audio", label: "TTS 与字幕", dependsOn: ["scripts"], jobTypes: ["tts_calibration", "tts_timeline"] },
   { id: "visual", label: "视觉段与渲染", dependsOn: ["assets", "audio"], jobTypes: ["render_chunks"] },
   { id: "export", label: "审核与导出", dependsOn: ["visual"], jobTypes: ["final_video"] },
 ] as const;

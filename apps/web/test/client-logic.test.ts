@@ -5,6 +5,10 @@ import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 import {
+  completedTtsCalibrationMode,
+  ttsTimelinePayload,
+} from "../src/production/audio/audio-editor.ts";
+import {
   chapterPagePath,
   resolveTheme,
   resolveThemePreference,
@@ -42,6 +46,7 @@ import {
   canStartEpisodeScriptGeneration,
   completedEpisodeScriptVersions,
   episodeScriptJobMatchesIdentity,
+  episodeScriptCalibration,
   resolveEpisodeScriptWorkspaceStatus,
   scriptDraft,
   scriptPostPayload,
@@ -454,6 +459,43 @@ test("长稿生成入口在忙碌、活跃 Job 或缺少 Episode 时防止重复
   assert.equal(canStartEpisodeScriptGeneration(true, false, "episode_1"), false);
   assert.equal(canStartEpisodeScriptGeneration(false, true, "episode_1"), false);
   assert.equal(canStartEpisodeScriptGeneration(false, false), false);
+});
+
+test("已选实测短样同时驱动长稿预算与完整 TTS 默认配置", () => {
+  const selection = {
+    mode: "select" as const,
+    episodeId: "episode_1",
+    scriptVersionId: "script_1",
+    contentHash: "a".repeat(64),
+    approvalRevision: 3,
+    generateJobId: "job_generate",
+    sampleId: "tts_sample_1",
+    voice: "说书音色",
+    rate: 2,
+    charactersPerSecond: 5.125,
+  };
+  assert.deepEqual(episodeScriptCalibration(selection), {
+    voice: "说书音色", rate: 2, charactersPerSecond: 5.125,
+    calibration: { identity: "measured", sampleId: "tts_sample_1" },
+  });
+  assert.deepEqual(episodeScriptCalibration(), { calibration: { identity: "provisional" } });
+  assert.deepEqual(ttsTimelinePayload("episode_1", "临时音色", 0, selection), {
+    episodeId: "episode_1", voice: "说书音色", rate: 2,
+  });
+  assert.deepEqual(ttsTimelinePayload("episode_1", " 临时音色 ", 0), {
+    episodeId: "episode_1", voice: "临时音色", rate: 0,
+  });
+});
+
+test("短样终态只归属当前 Episode，旧分集结果不得触发恢复", () => {
+  const job = {
+    id: "job_cal", type: "tts_calibration", status: "succeeded" as const, progress: 1,
+    attempts: 1, maxAttempts: 1, cancelRequested: false, errorMessage: null,
+    result: { mode: "generate", episodeId: "episode_1" },
+  };
+  assert.equal(completedTtsCalibrationMode(job, "episode_1"), "generate");
+  assert.equal(completedTtsCalibrationMode(job, "episode_2"), undefined);
+  assert.equal(completedTtsCalibrationMode({ ...job, status: "failed" }, "episode_1"), undefined);
 });
 
 test("长稿 cancelled/failed 终态无论基础 hydrate 返回顺序都不会被覆盖", () => {

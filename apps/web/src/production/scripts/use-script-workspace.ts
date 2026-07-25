@@ -1,12 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { responseJson } from "../../client-logic";
-import type { Episode, JobRecord, ScriptApproval, ScriptVersion, ScriptVersionKind } from "../types";
+import type {
+  Episode, JobRecord, ScriptApproval, ScriptVersion, ScriptVersionKind, TtsCalibrationSelection,
+} from "../types";
 import {
   approvalPutPayload,
   canStartEpisodeScriptGeneration,
   completedEpisodeScriptVersions,
   emptyScriptParagraph,
+  episodeScriptCalibration,
   scriptDraft,
   scriptPostPayload,
   resolveEpisodeScriptWorkspaceStatus,
@@ -17,6 +20,7 @@ interface WorkspaceSnapshot {
   episode: Episode;
   scripts: ScriptVersion[];
   approval: ScriptApproval;
+  calibration?: TtsCalibrationSelection;
 }
 
 export function useCommittedScriptWorkspaceRefs(
@@ -72,6 +76,7 @@ export function useScriptWorkspace({
   const [rate, setRate] = useState(0);
   const [charactersPerSecond, setCharactersPerSecond] = useState(4.5);
   const [narrationOccupancy, setNarrationOccupancy] = useState(0.8);
+  const [calibration, setCalibration] = useState<TtsCalibrationSelection>();
   const writing = useRef(false);
   const consumedJobId = useRef("");
   const currentJobRef = useRef(currentJob);
@@ -91,13 +96,25 @@ export function useScriptWorkspace({
       responseJson<{ approval: ScriptApproval }>(await fetch(`${baseUrl}/approval`)),
     ]);
     if (!mounted.current || currentRoute.current !== expectedRoute) return undefined;
-    return { episode: restoredEpisode, scripts: scriptsBody.items, approval: approvalBody.approval };
+    const measured = approvalBody.approval.status === "approved"
+      ? (await responseJson<{ calibration: { selection?: TtsCalibrationSelection } }>(await fetch(
+        `/api/episodes/${encodeURIComponent(restoredEpisode.id)}/tts-calibration`,
+      ))).calibration.selection
+      : undefined;
+    if (!mounted.current || currentRoute.current !== expectedRoute) return undefined;
+    return { episode: restoredEpisode, scripts: scriptsBody.items, approval: approvalBody.approval, calibration: measured };
   }
 
   function applySnapshot(snapshot: WorkspaceSnapshot | undefined, draftKind = kind) {
     setEpisode(snapshot?.episode);
     setScripts(snapshot?.scripts ?? []);
     setApproval(snapshot?.approval);
+    setCalibration(snapshot?.calibration);
+    if (snapshot?.calibration) {
+      setVoice(snapshot.calibration.voice);
+      setRate(snapshot.calibration.rate);
+      setCharactersPerSecond(snapshot.calibration.charactersPerSecond);
+    }
     if (!snapshot) {
       setParagraphs([emptyScriptParagraph()]);
       setParentVersionId("");
@@ -118,6 +135,7 @@ export function useScriptWorkspace({
     const expectedRoute = routeKey;
     setEpisode(undefined); setScripts([]); setApproval(undefined);
     setKind("faithful"); setParentVersionId(""); setParagraphs([emptyScriptParagraph()]); setSelectedPackagedId("");
+    setCalibration(undefined); setVoice("Microsoft Huihui Desktop"); setRate(0); setCharactersPerSecond(4.5);
     setBusy(true); setStatus(`正在恢复第 ${episodeIndex} 集稿件与批准状态…`);
     void readWorkspace(expectedRoute).then((snapshot) => {
       if (!mounted.current || currentRoute.current !== expectedRoute) return;
@@ -205,7 +223,7 @@ export function useScriptWorkspace({
             rate,
             charactersPerSecond,
             narrationOccupancy,
-            calibration: { identity: "provisional" },
+            ...episodeScriptCalibration(calibration),
           },
         }),
       }));
@@ -274,7 +292,7 @@ export function useScriptWorkspace({
 
   return {
     episode, scripts, approval, kind, parentVersionId, paragraphs, selectedPackagedId,
-    voice, rate, charactersPerSecond, narrationOccupancy,
+    voice, rate, charactersPerSecond, narrationOccupancy, calibration,
     setVoice, setRate, setCharactersPerSecond, setNarrationOccupancy,
     setParentVersionId: chooseParent, setSelectedPackagedId, changeKind, loadVersion, updateParagraph,
     addParagraph: () => setParagraphs((current) => [...current, emptyScriptParagraph()]),

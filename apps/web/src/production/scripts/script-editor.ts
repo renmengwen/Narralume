@@ -1,4 +1,4 @@
-import type { JobRecord, ScriptApproval, ScriptVersion, ScriptVersionKind } from "../types";
+import type { JobRecord, ScriptApproval, ScriptVersion, ScriptVersionKind, TtsCalibrationSelection } from "../types";
 
 export interface ScriptParagraphDraft { key: string; text: string; sourceIndexes: number[] }
 
@@ -78,6 +78,13 @@ export function completedEpisodeScriptVersions(
 
 export function canStartEpisodeScriptGeneration(busy: boolean, jobActive: boolean, episodeId?: string) {
   return Boolean(episodeId) && !busy && !jobActive;
+}
+
+export function episodeScriptCalibration(selection?: TtsCalibrationSelection) {
+  return selection
+    ? { voice: selection.voice, rate: selection.rate, charactersPerSecond: selection.charactersPerSecond,
+      calibration: { identity: "measured" as const, sampleId: selection.sampleId } }
+    : { calibration: { identity: "provisional" as const } };
 }
 
 export function resolveEpisodeScriptWorkspaceStatus(

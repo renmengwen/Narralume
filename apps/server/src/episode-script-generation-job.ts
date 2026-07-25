@@ -6,6 +6,7 @@ import { getEpisode } from "./episode-store.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { createScriptVersionPair } from "./script-version-store.js";
+import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
 
@@ -127,6 +128,17 @@ function validateRequest(input: EpisodeScriptGenerationRequest) {
       ...(input.calibration.sampleId?.trim() ? { sampleId: input.calibration.sampleId.trim() } : {}),
     },
   };
+}
+
+function assertCalibration(database: DatabaseSync, episodeId: string, request: EpisodeScriptGenerationRequest) {
+  if (request.calibration.identity === "measured") {
+    requireMeasuredTtsCalibration(database, episodeId, {
+      sampleId: request.calibration.sampleId,
+      voice: request.voice,
+      rate: request.rate,
+      charactersPerSecond: request.charactersPerSecond,
+    });
+  }
 }
 
 function sourceIdentity(source: {
@@ -377,6 +389,7 @@ export async function enqueueEpisodeScriptGenerationJob(
   const request = validateRequest(input.payload as EpisodeScriptGenerationRequest);
   const episode = await getEpisode(database, dataRoot, request.seriesId, request.episodeIndex);
   if (episode.sources.length === 0) throw new Error("分集没有可用于生成长稿的冻结来源");
+  assertCalibration(database, episode.id, request);
   const payloadWithoutHash = {
     ...request,
     ...frozenIdentity(database, episode),
@@ -419,6 +432,7 @@ export function createEpisodeScriptGenerationJobHandler(
       throw new Error("长稿生成任务或模型冻结身份不一致");
     }
     const episode = await requireCurrentEpisode(database, dataRoot, task);
+    assertCalibration(database, task.episodeId, task);
     const characterBudget = Math.floor(task.targetDurationSeconds * task.charactersPerSecond * task.narrationOccupancy);
     const skeletonResult = await callWithCancellation(context, (signal) => generate({
       stage: "skeleton",
@@ -480,6 +494,7 @@ export function createEpisodeScriptGenerationJobHandler(
     }, () => {
       context.throwIfCancellationRequested();
       assertCurrentDatabaseIdentity(database, task);
+      assertCalibration(database, task.episodeId, task);
     });
     const actualCharacterCount = packagedParagraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0);
     context.reportProgress(1);

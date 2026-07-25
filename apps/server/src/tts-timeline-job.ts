@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
@@ -9,24 +8,26 @@ import { JobCancelledError, type JobExecutionContext, type JobHandler } from "./
 import { requireApprovedScriptForProduction } from "./script-approval-store.js";
 import { getScriptVersion } from "./script-version-store.js";
 import { renderSubtitleFiles, splitNarration, SUBTITLE_TIMELINE_CONTRACT } from "./subtitle-timeline.js";
-import { synthesizeSystemSpeech, systemSpeechInputHash, TtsCancelledError } from "./tts-provider.js";
+import {
+  probeSystemSpeechWav,
+  synthesizeSystemSpeech,
+  systemSpeechInputHash,
+  TtsCancelledError,
+  type SystemSpeechWavProbe,
+} from "./tts-provider.js";
+import { getCurrentTtsCalibration } from "./tts-calibration-job.js";
+
+export { probeSystemSpeechWav } from "./tts-provider.js";
 
 export const TTS_TIMELINE_JOB_TYPE = "tts_timeline";
 const PROVIDER_ID = "windows-system-speech";
 const DEFAULT_VOICE = "Microsoft Huihui Desktop";
-const MAX_PROCESS_OUTPUT = 64 * 1024;
-
-interface AudioProbe {
-  bytes: number;
-  durationMs: number;
-}
-
 interface TimelineDependencies {
   synthesize: typeof synthesizeSystemSpeech;
-  probe: (path: string, signal?: AbortSignal) => Promise<AudioProbe>;
+  probe: (path: string, signal?: AbortSignal) => Promise<SystemSpeechWavProbe>;
 }
 
-interface SegmentArtifact extends AudioProbe {
+interface SegmentArtifact extends SystemSpeechWavProbe {
   index: number;
   speechText: string;
   subtitleText: string;
@@ -46,52 +47,6 @@ function sha256File(path: string) {
   });
 }
 
-export async function probeSystemSpeechWav(path: string, signal?: AbortSignal): Promise<AudioProbe> {
-  const info = await stat(path);
-  const child = spawn("ffprobe", [
-    "-v", "error",
-    "-show_entries", "stream=codec_type,codec_name,channels,sample_rate:format=duration,size",
-    "-of", "json",
-    path,
-  ], { windowsHide: true, shell: false, signal });
-  let stdout = "";
-  let stderr = "";
-  let overflow = false;
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    stdout += chunk;
-    if (stdout.length > MAX_PROCESS_OUTPUT) { overflow = true; child.kill(); }
-  });
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-    if (stderr.length > MAX_PROCESS_OUTPUT) { overflow = true; child.kill(); }
-  });
-  const code = await new Promise<number | null>((resolvePromise, reject) => {
-    child.once("error", reject);
-    child.once("close", resolvePromise);
-  });
-  if (signal?.aborted) throw new JobCancelledError();
-  if (overflow) throw new Error("ffprobe 输出超过 64 KiB 限制");
-  if (code !== 0) throw new Error(`ffprobe 校验音频失败${stderr.trim() ? `：${stderr.trim()}` : ""}`);
-  let parsed: {
-    streams?: Array<{ codec_type?: string; codec_name?: string; channels?: number; sample_rate?: string }>;
-    format?: { duration?: string; size?: string };
-  };
-  try { parsed = JSON.parse(stdout) as typeof parsed; } catch { throw new Error("ffprobe 返回了无效 JSON"); }
-  const audio = parsed.streams?.filter((stream) => stream.codec_type === "audio") ?? [];
-  const audioStream = audio[0];
-  const hasVideo = parsed.streams?.some((stream) => stream.codec_type === "video") ?? false;
-  const durationMs = Math.floor(Number(parsed.format?.duration) * 1_000);
-  const reportedBytes = Number(parsed.format?.size);
-  if (audio.length !== 1 || !audioStream || hasVideo || audioStream.codec_name !== "pcm_s16le" ||
-      audioStream.channels !== 1 || audioStream.sample_rate !== "22050" ||
-      !Number.isSafeInteger(durationMs) || durationMs < 1 || reportedBytes !== info.size) {
-    throw new Error("本机语音 WAV 编码、声道、采样率、大小或时长无效");
-  }
-  return { bytes: info.size, durationMs };
-}
-
 function absoluteArtifactPath(dataRoot: string, relativePath: string) {
   const root = resolve(dataRoot);
   const absolute = resolve(root, relativePath);
@@ -103,14 +58,14 @@ function relativeArtifactPath(dataRoot: string, absolutePath: string) {
   return relative(resolve(dataRoot), absolutePath).split(sep).join("/");
 }
 
-function taskPayload(value: unknown) {
+function taskPayload(value: unknown, defaults?: { voice: string; rate: number }) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("语音时间轴任务参数无效");
   const payload = value as { episodeId?: unknown; voice?: unknown; rate?: unknown };
   if (typeof payload.episodeId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.episodeId)) {
     throw new Error("语音时间轴任务缺少有效分集 ID");
   }
-  const voice = payload.voice === undefined ? DEFAULT_VOICE : payload.voice;
-  const rate = payload.rate === undefined ? 0 : payload.rate;
+  const voice = payload.voice === undefined ? defaults?.voice ?? DEFAULT_VOICE : payload.voice;
+  const rate = payload.rate === undefined ? defaults?.rate ?? 0 : payload.rate;
   if (typeof voice !== "string" || !voice.trim() || !Number.isInteger(rate) || (rate as number) < -10 || (rate as number) > 10) {
     throw new Error("本机语音配置无效");
   }
@@ -143,7 +98,9 @@ export function createTtsTimelineJobHandler(
   const synthesize = dependencies.synthesize ?? synthesizeSystemSpeech;
   const probe = dependencies.probe ?? probeSystemSpeechWav;
   return async (context: JobExecutionContext) => {
-    const { episodeId, voice, rate } = taskPayload(context.job.payload);
+    const raw = taskPayload(context.job.payload);
+    const selected = getCurrentTtsCalibration(database, raw.episodeId).selection;
+    const { episodeId, voice, rate } = taskPayload(context.job.payload, selected);
     const permit = requireApprovedScriptForProduction(database, episodeId, "tts");
     const script = getScriptVersion(database, permit.scriptVersionId);
     if (!script || script.kind !== "packaged") throw new Error("批准包装稿不存在");
@@ -163,7 +120,7 @@ export function createTtsTimelineJobHandler(
          WHERE script_version_id = ? AND segment_index = ? AND input_hash = ? ORDER BY created_at DESC LIMIT 1`,
       ).get(script.id, index, inputHash) as { relative_path: string; file_hash: string; bytes: number; duration_ms: number } | undefined;
       let reused = false;
-      let measured: AudioProbe | undefined;
+    let measured: SystemSpeechWavProbe | undefined;
       if (stored) {
         if (stored.relative_path !== relativePath) throw new Error("已登记音频段路径不一致");
         measured = await probe(absoluteArtifactPath(dataRoot, stored.relative_path));

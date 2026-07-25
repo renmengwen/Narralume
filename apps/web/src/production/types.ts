@@ -73,8 +73,9 @@ export interface JobRecord {
   attempts: number;
   maxAttempts: number;
   cancelRequested: boolean;
-  payload?: { episodeId?: string; voice?: string; rate?: number } | Record<string, unknown>;
-  result?: { episodeId?: string; timelineHash?: string; durationMs?: number; segmentCount?: number; cueCount?: number; reusedSegments?: number } | Record<string, unknown> | null;
+  payload?: { episodeId?: string; voice?: string; rate?: number; mode?: string } | Record<string, unknown>;
+  result?: { episodeId?: string; timelineHash?: string; durationMs?: number; segmentCount?: number; cueCount?: number;
+    reusedSegments?: number; mode?: string; sampleId?: string; generateJobId?: string } | Record<string, unknown> | null;
   errorMessage: string | null;
 }
 export interface EpisodeRecommendation {
@@ -98,4 +99,21 @@ export interface TtsTimelineSummary {
 export interface TtsTimeline extends TtsTimelineSummary {
   segments: Array<{ index: number; text: string; inputHash: string; fileHash: string; bytes: number; durationMs: number }>;
   cues: Array<{ index: number; segmentIndex: number; startMs: number; endMs: number; text: string }>;
+}
+
+export interface TtsCalibrationSample {
+  sampleId: string; inputHash: string; exactText: string; textHash: string; characterCount: number;
+  characterCountMethod: "unicode_code_points_nfkc";
+  durationMs: number; charactersPerSecond: number; voice: string; rate: number; providerId: string;
+  relativePath: string; fileHash: string; bytes: number; episodeId: string; scriptVersionId: string;
+  contentHash: string; approvalRevision: number;
+}
+
+export interface TtsCalibrationSelection {
+  mode: "select"; episodeId: string; scriptVersionId: string; contentHash: string; approvalRevision: number;
+  generateJobId: string; sampleId: string; voice: string; rate: number; charactersPerSecond: number;
+}
+
+export interface TtsCalibrationWorkspace {
+  episodeId: string; generationJobId?: string; samples: TtsCalibrationSample[]; selection?: TtsCalibrationSelection;
 }

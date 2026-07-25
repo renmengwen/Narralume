@@ -4,6 +4,7 @@ import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
 const PROVIDER_VERSION = "windows-system-speech-v1";
+const MAX_PROCESS_OUTPUT = 64 * 1024;
 export const SYSTEM_SPEECH_UTF8_INPUT = "[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)";
 const POWERSHELL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
@@ -32,6 +33,57 @@ export interface SystemSpeechInput {
   voice?: string;
   rate?: number;
   contractVersion?: string;
+}
+
+export interface SystemSpeechWavProbe {
+  bytes: number;
+  durationMs: number;
+}
+
+export async function probeSystemSpeechWav(path: string, signal?: AbortSignal): Promise<SystemSpeechWavProbe> {
+  const info = await stat(path);
+  const child = spawn("ffprobe", [
+    "-v", "error",
+    "-show_entries", "stream=codec_type,codec_name,channels,sample_rate:format=duration,size",
+    "-of", "json",
+    path,
+  ], { windowsHide: true, shell: false, signal });
+  let stdout = "";
+  let stderr = "";
+  let overflow = false;
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+    if (stdout.length > MAX_PROCESS_OUTPUT) { overflow = true; child.kill(); }
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+    if (stderr.length > MAX_PROCESS_OUTPUT) { overflow = true; child.kill(); }
+  });
+  const code = await new Promise<number | null>((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("close", resolvePromise);
+  });
+  if (signal?.aborted) throw new TtsCancelledError("语音探测已取消");
+  if (overflow) throw new TtsProviderError("ffprobe 输出超过 64 KiB 限制");
+  if (code !== 0) throw new TtsProviderError(`ffprobe 校验音频失败${stderr.trim() ? `：${stderr.trim()}` : ""}`);
+  let parsed: {
+    streams?: Array<{ codec_type?: string; codec_name?: string; channels?: number; sample_rate?: string }>;
+    format?: { duration?: string; size?: string };
+  };
+  try { parsed = JSON.parse(stdout) as typeof parsed; } catch { throw new TtsProviderError("ffprobe 返回了无效 JSON"); }
+  const audio = parsed.streams?.filter((stream) => stream.codec_type === "audio") ?? [];
+  const audioStream = audio[0];
+  const hasVideo = parsed.streams?.some((stream) => stream.codec_type === "video") ?? false;
+  const durationMs = Math.floor(Number(parsed.format?.duration) * 1_000);
+  const reportedBytes = Number(parsed.format?.size);
+  if (audio.length !== 1 || !audioStream || hasVideo || audioStream.codec_name !== "pcm_s16le" ||
+      audioStream.channels !== 1 || audioStream.sample_rate !== "22050" ||
+      !Number.isSafeInteger(durationMs) || durationMs < 1 || reportedBytes !== info.size) {
+    throw new TtsProviderError("本机语音 WAV 编码、声道、采样率、大小或时长无效");
+  }
+  return { bytes: info.size, durationMs };
 }
 
 export function systemSpeechInputHash(input: Pick<SystemSpeechInput,

@@ -81,6 +81,13 @@ import {
 } from "./script-approval-store.js";
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
 import {
+  createTtsCalibrationJobHandler,
+  enqueueTtsCalibrationJob,
+  getCurrentTtsCalibration,
+  readVerifiedTtsCalibrationSample,
+  TTS_CALIBRATION_JOB_TYPE,
+} from "./tts-calibration-job.js";
+import {
   getTtsTimeline,
   listTtsTimelines,
   readVerifiedTtsSegment,
@@ -276,6 +283,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       ),
     } : {}),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
+    [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
     [FINAL_VIDEO_JOB_TYPE]: createFinalVideoJobHandler(connection.database, dataRoot),
@@ -289,6 +297,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
   supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
   supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
+  supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
@@ -781,6 +790,34 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
   );
 
+  app.get<{ Params: { episodeId: string } }>("/api/episodes/:episodeId/tts-calibration", async (request, reply) => {
+    try {
+      return { ok: true, calibration: getCurrentTtsCalibration(connection.database, request.params.episodeId) };
+    } catch (error) {
+      if (error instanceof ScriptApprovalStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { episodeId: string; sampleId: string } }>(
+    "/api/episodes/:episodeId/tts-calibration/:sampleId/audio",
+    async (request, reply) => {
+      try {
+        const bytes = await readVerifiedTtsCalibrationSample(
+          connection.database, dataRoot, request.params.episodeId, request.params.sampleId,
+        );
+        return reply.type("audio/wav").header("cache-control", "no-store").send(bytes);
+      } catch (error) {
+        if (error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        return reply.code(409).send({ ok: false, message: error instanceof Error ? error.message : "短样音频不可用" });
+      }
+    },
+  );
+
   app.post<{ Body: CreateJobBody }>("/api/jobs", async (request, reply) => {
     const body = request.body;
     if (!body || typeof body !== "object" || typeof body.type !== "string") {
@@ -898,6 +935,14 @@ export function buildApp(options: BuildAppOptions = {}) {
         job: result.job,
       });
     }
+    if (type === TTS_CALIBRATION_JOB_TYPE) {
+      const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+        ? body.payload as { episodeId?: unknown }
+        : {};
+      if (typeof payload.episodeId !== "string" || !payload.episodeId) {
+        return reply.code(400).send({ ok: false, message: "短样校准缺少有效分集 ID" });
+      }
+    }
     if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE) {
       try {
         const result = await enqueueChapterEventsAnalysisJob(connection.database, dataRoot, chapterTextProvider!, {
@@ -955,6 +1000,19 @@ export function buildApp(options: BuildAppOptions = {}) {
           ok: false,
           message: error instanceof Error ? error.message : "跨章骨架与长稿任务参数无效",
         });
+      }
+    }
+    if (type === TTS_CALIBRATION_JOB_TYPE) {
+      try {
+        const job = enqueueTtsCalibrationJob(connection.database, body.payload, { priority, maxAttempts, runAfter });
+        return reply.code(201).send({ ok: true, message: job.payload && (job.payload as { mode?: string }).mode === "select"
+          ? "短样选择任务已创建并持久化"
+          : "短样校准任务已创建并持久化", job });
+      } catch (error) {
+        if (error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        return reply.code(400).send({ ok: false, message: error instanceof Error ? error.message : "短样校准参数无效" });
       }
     }
     const job = createJob(connection.database, {

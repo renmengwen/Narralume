@@ -53,3 +53,15 @@
 | 2026-07-25 | reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | Series/Episode 与显式候选确认 | `apps/web/src/production/episode/` | 仅参考系列/分集作用域和显式选择；没有适配逐章事件证据的推荐闭包。 |
 | 2026-07-25 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | SQLite 任务状态与恢复 | `apps/server/src/database.ts`、`apps/server/src/episode-recommendation-job.ts` | 仅参考本地持久任务方法；不复制第二套任务或 Episode 存储。 |
 | 2026-07-25 | method-port / values-and-source-reference-only | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `appSettings`、`CreativeDefaultsSettings`、`creativeWorkflows`、`OneClick` | `apps/server/src/episode-policy.ts`、`apps/server/src/episode-recommendation-job.ts`、`apps/web/src/production/episode/` | 移植“系统默认可读、单任务可覆写、恢复时冻结身份”的方法；不复制其短视频默认值、固定语速/字数、业务 Prompt 或一键创作链。 |
+
+## PC-02C 跨章骨架与长稿参考来源
+
+| 日期 | 类型 | 来源仓库 | 来源提交 | 来源文件/能力 | Narralume 文件 | 修改说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-26 | reference-only / method-reference | `dramaclaw/dramaclaw` | `2864e72b3a717adbacfe09ded7b3ac6de2c2e28f` | `src/novelvideo/workflows/script_writing.py`、`literal_script_writing.py`、`task_backend/runners/script.py`、`api/routes/scripts.py`；前端 beat/source/compose gate | `apps/server/src/episode-script-generation-job.ts`、`apps/web/src/production/scripts/` | 仅参考逐 beat 处理、局部原文和结构化 metadata；不复制整集全文输入、生成即持久化、弱来源映射或未批准推进。 |
+| 2026-07-26 | method-port / source-reference-only | `HBAI-Ltd/Toonflow-app` | `bc61ec7a1b5df31293b286981a5f4ad4635464ee` | `data/skills/script_agent_decision.md`、`script_execution_skeleton.md`、`script_execution_adaptation.md`、`script_execution_script.md`；novel event 与 plan 路由 | `apps/server/src/episode-script-generation-job.ts` | 移植“结构化事件形成 beat 骨架、写当前 beat 时按映射读取原文、用户确认后推进”的方法；不复制源码、覆盖式 plan/script、固定章数/字数/时长或短剧付费节奏。 |
+| 2026-07-26 | reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | `ScriptProcessor.tsx`、`PreviousEpisodeSummary.tsx`、structured script editor 计划、`storyboard.py` | `apps/web/src/production/scripts/` | 仅参考 recap/nextHook、revision stale、route identity 与旧响应取消；结构化编辑器仍是计划文档，不作为可复制成熟实现。 |
+| 2026-07-26 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | `storyGenerationService.js`、`episodeStoryboardService.js`、`mergedEpisodePostProcess.js`；前端生成与画布稿件组件 | 无 | 已核对但不复制或移植：其生成即保存、纯文本 JSON fallback、覆盖式稿件和无批准下游不符合 Narralume 不可变版本与批准合同。 |
+| 2026-07-26 | budget-method-port / source-reference-only | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `server/services/agent/agentRunsFreeformHelpers.js`、`agentRunsFreeformWorkflow.js`、`agentRuns.js`、`storyboard/storyboardNarrationBudget.js` | `apps/server/src/episode-script-generation-job.ts` | 移植目标时长全链传播及真实 TTS 后按当前 voice/rate 实际时长反算字符预算的方法；`4.5` 字符/秒只允许显式 provisional fallback，不复制业务 prompt、一键创作或 HTML-video 链。 |
+
+本 Task 没有直接复制任何参考仓源码；实现只复用 Narralume 现有 `episode_sources`、持久 Job/provider、稿件版本与批准门合同，不新增第二套存储、通用 Agent 框架或参考项目运行时依赖。

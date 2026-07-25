@@ -94,6 +94,7 @@ PC-02 当前 checkpoint：
 - PC-03 验收：初版逗号一律拆分产生 104 cue/318,913ms，超过 5 分钟；修正为强标点必拆、仅超长句以弱标点回退后，真实 54 cue/295,462ms 通过。最终视频严格 ffprobe/full media chain GREEN；亮场单行与暗场双行抽帧目检无横裁、不超两行、未进入底部风险区；数据库 `max_lines=2`。
 - 视觉段验收：真实 1 cue 时间轴创建 1 段，绑定 900×1600 approved 候选后 PUT/GET 回读 `productionReady=true/r1`；刷新与真实 restart 后 URL、段和预览恢复。reject 后 productionReady false、联系表 409；重新 approve 并更新绑定后 r2 恢复。稳定态重复导出 JSON `a2d732…414a`、HTML `12553c…77fd` 均一致。当前短稿不足 8～15 段，UI 导出按产品门禁保持禁用，不冒充 PC-04 完成。
 - 长篇合同核验：当前前端和 `chapter_events_analyze` 是单章入口，但 Episode/faithful/package/TTS 后端已经支持跨 `chapterId`；单元测试覆盖两章，P3 真实 Gate 覆盖三章。Toonflow 真实做法是逐章摘要、Agent 推荐范围、用户确认、骨架自动分配，不能复制其短漫剧常量或把章节映射藏在文本骨架。当前 `180～300` 秒和视觉 8～15 段硬门禁必须改为配置/派生合同。
+- PC-02B 迁移授权：Coordinator 只读核对确认固定时长同时存在于前端表单/校验、`episode-store.ts` 和 migration v5 的 `episodes.target_duration_seconds CHECK BETWEEN 180 AND 300`；现有持久合同无法保存参考 20 分钟等可配置长时长。授权单写 Worker 新增且仅新增 migration v13，原样重建 `episodes` 并把技术范围改为 60～3600 秒，系统 policy 为默认参考 1200 秒、步长 30；不得修改历史 migration v5，不得新增表/列/第二套时长存储。升级必须保留现有 Episode、所有下游外键/级联与 240 秒数据，并以 60/1200/3600、59/3601、FK/级联回归封闭。该迁移按新增数据库迁移风险冻结后执行独立 Spec Review 与 Code Quality Review；其余复用接线仍按首版最小门禁。
 - 尚未接通：PC-02B 可配置时长/跨章自动选材、PC-02C 长稿、PC-04 动态多图生产及完整 UI 联系表、PC-05 真实说书 TTS、北派 render chunks/final video 和所有阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-03 `complete`。
 
 ## 当前写租约

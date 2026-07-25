@@ -28,11 +28,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`210aa0a`（PC-02 已接通章节、分集、稿件批准、资产、Prompt 审核与 TTS 时间轴试听首版）。
+- 当前 HEAD：`add9abe`（PC-02 固定阶段工作区持续接线；PC-03 字幕短句与安全区已完成真实媒体 Gate）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：`210aa0a` 集成态根 `typecheck/test/build/diff-check` GREEN；server 149 项中 148 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 最终 27/27 PASS，Vite 55 modules。真实 episode 1 仅生成一次 System.Speech Job，恢复 timeline `f90182a0…07355`、1 segment/1 cue/12,165ms；WAV 536,536 bytes、PCM s16le/22050Hz/mono，URL/刷新/切集/进程重启/逐段试听/SRT/ASS 全部恢复，console 0 error/0 warning。自动章节分析的 provider 内容门禁残余继续保留。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
+- 最近验证：`add9abe` 根 `typecheck/test/build/diff-check` GREEN；server 152 项中 151 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 27/27 PASS，Vite 55 modules。PC-03 真实 Gate 生成 54 WAV/54 cue/295,462ms，final 295.486016s、1080×1920、H.264 yuv420p + AAC mono 22050Hz、39,020,239 bytes；2 chunks，重启后 segments/chunks/final 全复用。亮场单行与暗场双行抽帧均无横裁、不超过两行、底部安全区有效。自动章节分析的 provider 内容门禁残余继续保留。P7 旧技术 E2E、项目包/恢复证据继续有效，但不能作为北派产品样片验收。
 - 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：由单写 Worker 在共享 TTS/字幕核心实施中文短句拆分、最多两行、单一 ASS 安全区样式，并保持“一 WAV 一 cue”复用现有媒体链；随后接通视觉段/联系表、分片与最终视频。自动章节分析的 provider 内容门禁作为外部残余风险保留，不篡改或跳过原文，也不阻塞已有人工证据入口与后续产品闭环。首版不以严格独立 Review 阻塞，以核心测试、全量 Gate 和真实抽帧代替。
+- 下一动作：由单写 Worker 接通显式 timeline cue 读取、视觉段编辑/资产候选绑定与联系表真实导出；随后完成 PC-04 多图语义生产、PC-05 真实说书 TTS 与 PC-06 北派样片。自动章节分析的 provider 内容门禁作为外部残余风险保留。复用型首版不以严格独立 Review 阻塞。
 
 ## 2026-07-25 产品闭环复开
 
@@ -51,7 +51,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- |
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
-| PC-03 字幕短句与可读性 | `queued` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 实际 1080×1920 帧无裁切，SRT/ASS 与音频时间一致 |
+| PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 补视觉描述/提示词、资产匹配、8～15 张不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面，正文节奏不机械 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
 | PC-06 北派真实样片与最终复验 | `queued` | 真实北派原文、第一人称故事弧、人工稿件/图片/整片批准、项目包恢复 | 内容、声音、字幕、画面、媒体与恢复全部通过后才恢复根目标 `complete` |
@@ -75,6 +75,7 @@ PC-02 当前 checkpoint：
 - 资产缺口与上传提交：`f46b9ba`（`前端：接通资产缺口与原图上传`）。复用现有 assets/candidates/upload/Job API；按当前系列已建资产派生无候选/待批准/已批准三态，明确不冒充自动识别全部资产；支持 PNG/JPEG/WebP 二进制上传、POST 后 GET 回读、成功 Job 按结果 assetId 定向刷新、候选 Map/request epoch 隔离和同步 mutation 门闩；不新增后端或依赖。
 - Prompt 派生与审核提交：`842ad7e`（`资产：接通提示词派生与审核备注`）。生成候选继续作为不可变 Prompt 版本，通过 `requestHash → job_image_*` 回读冻结完整 prompt；可选父候选进入 v2 hash/Job/source，服务端校验同资产，无父来源保持 v1 Job 身份兼容；新增已有 review event store 的只读 GET，note/approve/reject 使用最新 revision，409 刷新但不重放。未新增 migration、表、依赖或第二套 Prompt 存储。
 - TTS 时间轴试听提交：`210aa0a`（`音频：接通时间轴恢复与逐段试听`）。复用现有 `tts_timeline` Job 与持久表；新增最小 timeline 列表/精确查询/单段 WAV GET，WAV 在规范路径和普通文件检查后完整读入并复算 bytes/hash 再发送；AudioStage 支持批准稿门禁、voice/rate、Job 轮询取消、四重身份校验、timeline URL、最新有效恢复、stale route 防护和逐段试听，不改 TTS/FFmpeg 生成核心。
+- 字幕短句提交：`add9abe`（`字幕：统一短句时间轴与安全区`）。新增唯一共享字幕核心，强标点拆句、超长句弱标点/Unicode 兜底、最多两行/每行 16 code point、统一 SRT/ASS 转义和微软雅黑 54px/左右 80px/底部 180px 样式；TTS 在合成前拆为独立 WAV/cue，timeline/input hash 使用 v2 合同，render chunk 删除重复 ASS renderer 并复用共享实现。
 - 已接通：七阶段注册与依赖/Job 类型映射，`book/series/stage/chapter/episode/asset/job` URL 恢复，非法阶段回退，Job hydrate-first/3 秒轮询/终态停止/卸载清理/取消/进度换算，章节列表、原文证据与结构化事件同屏，系列真实主资产/状态资产/别名、候选列表与图片、候选批准/淘汰、生图 Job、prompt 分段组装及候选切换竞态保护。
 - 模块化：`ProductionWorkspace.tsx` 仅保留领域状态组合、URL 恢复和阶段编排；章节、资产、候选、Prompt Builder、Job 轮询已进入独立组件/hook/纯函数。Tailwind/组件化纠偏完成，后端模块化与公共函数边界已由 `d796d34` 固化进 `AGENTS.md`。
 - 验证：根 `npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 149 项中 148 PASS/1 symlink 权限 SKIP/0 FAIL，web 27/27 PASS；Vite 55 modules。
@@ -85,13 +86,14 @@ PC-02 当前 checkpoint：
 - 资产验收：真实系列建立无候选/待批准/已批准三类资产，三态从 `0/0/0` 恢复为 `1/1/1`；真实 PNG `900×1600`、7,725 bytes 上传并持久回读，批准后 UI 即时更新，切资产无候选污染；伪装 GIF 400、错误 Content-Type 415 且无脏记录，console 0 error/0 warning。浏览器自动文件选择与本轮新生图未重跑，上传请求/类型拒绝和 succeeded Job 定向刷新由 23 项 web 测试直接覆盖。
 - Prompt/审核验证：父候选存在/同资产校验、lineage 进入 hash/source、v1 无 lineage 兼容、同 prompt+lineage 幂等、review history GET、note 不改变 approved、完整 raw prompt 回读/旧格式不丢文本、409 刷新不重放均有直接 server/web 测试；真实浏览器验收待 Agent 平台 503 恢复后随资产全流程补跑，不冒充已通过。
 - AudioStage 验收：真实当前批准包装稿只有 1 段，System.Speech 产物真值为 12,165ms（独立 P4-02 Gate 的 20,506ms 属另一数据集）；页面显示 1 segment/1 cue、逐段 audio controls、SRT/ASS，WAV GET 200 `audio/wav` 且 ffprobe 为 PCM s16le/22050Hz/mono；刷新、episode 2 空态、回 1、真实 restart 后保持；后台章节 hydrate 不再覆盖 audio/scripts 阶段 status。
-- 尚未接通：字幕短句与安全区、视觉段显式绑定/联系表、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
+- PC-03 验收：初版逗号一律拆分产生 104 cue/318,913ms，超过 5 分钟；修正为强标点必拆、仅超长句以弱标点回退后，真实 54 cue/295,462ms 通过。最终视频严格 ffprobe/full media chain GREEN；亮场单行与暗场双行抽帧目检无横裁、不超两行、未进入底部风险区；数据库 `max_lines=2`。
+- 尚未接通：视觉段显式绑定/联系表、PC-04 多图生产、PC-05 真实说书 TTS、北派 render chunks/final video 和所有阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-03 `complete`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@210aa0a` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
+| PC-02/PC-04 | Coordinator | `dev@add9abe` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

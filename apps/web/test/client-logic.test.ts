@@ -18,7 +18,7 @@ import {
   productionWorkspacePath,
   resolveProductionStage,
 } from "../src/production-logic.ts";
-import { chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
+import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
 import { episodeDraft, episodePutPayload } from "../src/production/episode/episode-editor.ts";
 
 test("保存的主题优先于系统偏好", () => {
@@ -140,6 +140,12 @@ test("人工章节事件沿用现有持久任务合同并限制证据范围", ()
   }]), /证据范围/);
   assert.deepEqual(remainingChapterEventPageOffsets(200, 100), [100]);
   assert.deepEqual(remainingChapterEventPageOffsets(100, 100), []);
+});
+
+test("自动章节分析只提交书籍和章节身份", () => {
+  const chapter = { id: " chapter_1 ", title: "第一章", chapter_index: 0, char_count: 20, byte_start: 100, byte_end: 200 };
+  assert.deepEqual(chapterAnalysisJobPayload(" book_1 ", chapter), { bookId: "book_1", chapterId: "chapter_1" });
+  assert.throws(() => chapterAnalysisJobPayload(" ", chapter), /缺少有效/);
 });
 
 test("任务进度按服务端小数钳制且终态稳定", () => {

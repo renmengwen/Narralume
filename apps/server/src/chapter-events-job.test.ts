@@ -5,7 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildApp } from "./app.js";
-import { CHAPTER_EVENTS_JOB_TYPE } from "./chapter-events-job.js";
+import { CHAPTER_EVENTS_ANALYZE_JOB_TYPE, CHAPTER_EVENTS_JOB_TYPE } from "./chapter-events-job.js";
+
+const textProvider = {
+  baseUrl: "https://unused.example/v1",
+  apiKey: "unused",
+  model: "test-text",
+  providerId: "test-provider",
+};
 
 async function waitForJob(app: ReturnType<typeof buildApp>, jobId: string) {
   const deadline = Date.now() + 2_000;
@@ -68,6 +75,86 @@ test("默认章节事件任务先持久化再原子保存事件", async () => {
     assert.equal(events.statusCode, 200);
     assert.equal(events.json().total, 1);
     assert.equal(events.json().items[0].type, "character");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("自动分析任务复用冻结身份且空结果不清空人工事件", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-chapter-analysis-empty-"));
+  const app = buildApp({
+    dataRoot,
+    logger: false,
+    chapterTextProvider: textProvider,
+    chapterAnalyzer: async () => [],
+    jobPollMs: 5,
+    jobWorker: { workerId: "chapter-analysis-empty", leaseMs: 1_000, heartbeatMs: 100 },
+  });
+  const source = Buffer.from("第一章\n吴邪进入墓道。", "utf8");
+  try {
+    const imported = await app.inject({ method: "POST", url: "/api/books/import", headers: { "content-type": "text/plain" }, payload: source });
+    const bookId = imported.json().book.id as string;
+    const chapters = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const evidence = Buffer.from("吴邪", "utf8");
+    const byteStart = source.indexOf(evidence);
+    const manual = await app.inject({
+      method: "PUT",
+      url: `/api/books/${bookId}/chapters/${chapterId}/events`,
+      payload: { events: [{ type: "character", payload: { name: "吴邪" }, sources: [{ byteStart, byteEnd: byteStart + evidence.length }] }] },
+    });
+    assert.equal(manual.statusCode, 200);
+
+    const request = { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } };
+    const created = await app.inject({ method: "POST", url: "/api/jobs", payload: request });
+    assert.equal(created.statusCode, 201);
+    const reused = await app.inject({ method: "POST", url: "/api/jobs", payload: request });
+    assert.equal(reused.statusCode, 200);
+    assert.equal(reused.json().job.id, created.json().job.id);
+    const job = await waitForJob(app, created.json().job.id as string);
+    assert.equal(job.status, "succeeded");
+    assert.deepEqual(job.result, { analyzed: 0, preserved: true });
+    const oldStatus = await app.inject({ method: "POST", url: "/api/jobs", payload: request });
+    assert.equal(oldStatus.json().job.status, "succeeded");
+    const events = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters/${chapterId}/events` });
+    assert.equal(events.json().total, 1);
+    assert.equal(events.json().items[0].payload.name, "吴邪");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("运行中的自动分析任务响应持久取消请求", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-chapter-analysis-cancel-"));
+  const app = buildApp({
+    dataRoot,
+    logger: false,
+    chapterTextProvider: textProvider,
+    chapterAnalyzer: ({ signal }) => new Promise((_resolve, reject) => {
+      signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    }),
+    jobPollMs: 5,
+    jobWorker: { workerId: "chapter-analysis-cancel", leaseMs: 1_000, heartbeatMs: 100 },
+  });
+  const source = Buffer.from("第一章\n吴邪进入墓道。", "utf8");
+  try {
+    const imported = await app.inject({ method: "POST", url: "/api/books/import", headers: { "content-type": "text/plain" }, payload: source });
+    const bookId = imported.json().book.id as string;
+    const chapters = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const created = await app.inject({ method: "POST", url: "/api/jobs", payload: { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } } });
+    const jobId = created.json().job.id as string;
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const current = await app.inject({ method: "GET", url: `/api/jobs/${jobId}` });
+      if (current.json().job.status === "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const cancelled = await app.inject({ method: "POST", url: `/api/jobs/${jobId}/cancel` });
+    assert.equal(cancelled.statusCode, 200);
+    assert.equal((await waitForJob(app, jobId)).status, "cancelled");
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

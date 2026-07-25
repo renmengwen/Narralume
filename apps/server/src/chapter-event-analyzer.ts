@@ -1,0 +1,262 @@
+import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
+import { resolve, sep } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+
+import {
+  CHAPTER_EVENT_TYPES,
+  ChapterEventError,
+  type ChapterEventInput,
+  type ChapterEventType,
+} from "./chapter-event-store.js";
+
+const MAX_CHAPTER_BYTES = 128 * 1024;
+const MAX_ATOM_BYTES = 16 * 1024;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_ATOMS_PER_REQUEST = 10;
+const EVENT_TYPES = new Set<string>(CHAPTER_EVENT_TYPES);
+
+export interface ChapterEvidenceAtom {
+  id: string;
+  byteStart: number;
+  byteEnd: number;
+  text: string;
+}
+
+export interface ChapterTextModelConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  providerId: string;
+}
+
+export interface ChapterAnalysisInput {
+  chapterId: string;
+  atoms: readonly ChapterEvidenceAtom[];
+  signal?: AbortSignal;
+}
+
+export type AnalyzeChapterEvents = (
+  input: ChapterAnalysisInput,
+) => Promise<readonly ChapterEventInput[]>;
+
+interface ChapterSourceRow {
+  byte_start: number;
+  byte_end: number;
+  content_hash: string;
+  encoding: string;
+  original_file_path: string;
+}
+
+function sha256(value: Uint8Array | string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function readRange(path: string, start: number, end: number) {
+  const bytes = Buffer.alloc(end - start);
+  const file = await open(path, "r").catch(() => {
+    throw new ChapterEventError(500, "原文文件无法读取");
+  });
+  try {
+    let read = 0;
+    while (read < bytes.length) {
+      const result = await file.read(bytes, read, bytes.length - read, start + read);
+      if (result.bytesRead === 0) throw new ChapterEventError(500, "原文文件不完整");
+      read += result.bytesRead;
+    }
+    return bytes;
+  } finally {
+    await file.close();
+  }
+}
+
+export async function buildChapterEvidenceAtoms(
+  database: DatabaseSync,
+  dataRoot: string,
+  bookId: string,
+  chapterId: string,
+) {
+  const chapter = database.prepare(
+    `SELECT chapters.byte_start, chapters.byte_end, chapters.content_hash,
+            books.encoding, books.original_file_path
+     FROM chapters JOIN books ON books.id = chapters.book_id
+     WHERE books.id = ? AND chapters.id = ?`,
+  ).get(bookId, chapterId) as ChapterSourceRow | undefined;
+  if (!chapter) throw new ChapterEventError(404, "章节不存在");
+  const length = chapter.byte_end - chapter.byte_start;
+  if (length > MAX_CHAPTER_BYTES) {
+    throw new ChapterEventError(422, `章节超过自动分析上限 ${MAX_CHAPTER_BYTES} 字节，请使用人工事件入口`);
+  }
+  const root = resolve(dataRoot);
+  const path = resolve(root, chapter.original_file_path);
+  if (!path.startsWith(`${root}${sep}`)) throw new ChapterEventError(500, "原文路径无效");
+  const bytes = await readRange(path, chapter.byte_start, chapter.byte_end);
+  if (sha256(bytes) !== chapter.content_hash) throw new ChapterEventError(409, "原文内容已变化，请重新索引");
+
+  const atoms: ChapterEvidenceAtom[] = [];
+  let start = 0;
+  for (let cursor = 0; cursor <= bytes.length; cursor += 1) {
+    if (cursor < bytes.length && bytes[cursor] !== 0x0a) continue;
+    let end = cursor;
+    if (end > start && bytes[end - 1] === 0x0d) end -= 1;
+    const raw = bytes.subarray(start, end);
+    if (raw.byteLength > MAX_ATOM_BYTES) {
+      throw new ChapterEventError(422, `单段原文超过自动分析上限 ${MAX_ATOM_BYTES} 字节，请使用人工事件入口`);
+    }
+    if (raw.byteLength > 0) {
+      let text: string;
+      try { text = new TextDecoder(chapter.encoding.toLowerCase(), { fatal: true }).decode(raw); }
+      catch { throw new ChapterEventError(500, "原文编码无效"); }
+      if (text.trim()) {
+        const byteStart = chapter.byte_start + start;
+        const byteEnd = chapter.byte_start + end;
+        atoms.push({
+          id: `evidence_${sha256(`chapter-evidence-v1\0${chapterId}\0${byteStart}\0${byteEnd}\0${sha256(raw)}`)}`,
+          byteStart,
+          byteEnd,
+          text,
+        });
+      }
+    }
+    start = cursor + 1;
+  }
+  if (atoms.length === 0) throw new ChapterEventError(422, "章节没有可供自动分析的非空原文");
+  return { atoms, contentHash: chapter.content_hash };
+}
+
+function prompt(atoms: readonly ChapterEvidenceAtom[]) {
+  return [
+    "你是小说章节结构化事件分析器。只输出严格 JSON，不要输出 Markdown 或解释。",
+    "只能引用下面提供的 evidenceId；禁止返回字节偏移。没有可靠事件时返回空 events。",
+    "事件类型仅限 character、location、prop、causality、revelation、suspense。",
+    "character/location/prop 的 payload 为 {name,detail?}；causality 为 {cause,effect}；revelation 为 {fact}；suspense 为 {question}。",
+    "输出格式：{\"events\":[{\"type\":\"character\",\"payload\":{\"name\":\"...\"},\"evidenceIds\":[\"evidence_...\"]}]}。",
+    "原文证据段：",
+    ...atoms.map((atom) => JSON.stringify({ evidenceId: atom.id, text: atom.text })),
+  ].join("\n");
+}
+
+async function limitedJson(response: Response) {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new Error("章节分析模型响应超过大小限制");
+  }
+  if (!response.body) throw new Error("章节分析模型没有返回内容");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("章节分析模型响应超过大小限制");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total);
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown; }
+  catch { throw new Error("章节分析模型返回了无效 JSON"); }
+}
+
+function responseText(body: unknown) {
+  const value = body as {
+    output_text?: unknown;
+    output?: Array<{ content?: Array<{ text?: unknown }> }>;
+  };
+  if (typeof value?.output_text === "string") return value.output_text;
+  const parts = value?.output?.flatMap((item) => item.content ?? [])
+    .map((item) => item.text).filter((item): item is string => typeof item === "string");
+  if (parts?.length) return parts.join("");
+  throw new Error("章节分析模型返回结果缺少文本内容");
+}
+
+function modelEvents(value: unknown, atoms: readonly ChapterEvidenceAtom[]): ChapterEventInput[] {
+  let body: unknown;
+  try { body = JSON.parse(typeof value === "string" ? value : ""); }
+  catch { throw new Error("章节分析结果不是严格 JSON"); }
+  const events = (body as { events?: unknown })?.events;
+  if (!Array.isArray(events) || events.length > 200) throw new Error("章节分析结果事件列表无效");
+  const evidence = new Map(atoms.map((atom) => [atom.id, atom]));
+  return events.map((raw): ChapterEventInput => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("章节分析结果事件无效");
+    const item = raw as { type?: unknown; payload?: unknown; evidenceIds?: unknown };
+    if (typeof item.type !== "string" || !EVENT_TYPES.has(item.type)) throw new Error("章节分析结果事件类型无效");
+    if (!Array.isArray(item.evidenceIds) || item.evidenceIds.length < 1 || item.evidenceIds.length > 20) {
+      throw new Error("章节分析结果必须引用 1～20 条证据");
+    }
+    const ids = item.evidenceIds.map((id) => {
+      if (typeof id !== "string" || !evidence.has(id)) throw new Error("章节分析结果引用了未知证据 ID");
+      return id;
+    });
+    if (new Set(ids).size !== ids.length) throw new Error("章节分析结果重复引用相同证据");
+    const type = item.type as ChapterEventType;
+    return {
+      type,
+      payload: item.payload as never,
+      sources: ids.map((id) => {
+        const atom = evidence.get(id)!;
+        return { byteStart: atom.byteStart, byteEnd: atom.byteEnd };
+      }),
+    } as ChapterEventInput;
+  });
+}
+
+export function createOpenAiResponsesChapterAnalyzer(
+  config: ChapterTextModelConfig,
+  fetchImpl: typeof fetch = fetch,
+): AnalyzeChapterEvents {
+  let endpoint: URL;
+  try { endpoint = new URL("responses", `${config.baseUrl.replace(/\/+$/, "")}/`); }
+  catch { throw new Error("章节分析模型配置无效"); }
+  if (!config.apiKey.trim() || !config.model.trim() || !config.providerId.trim() ||
+      (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
+    throw new Error("章节分析模型配置无效");
+  }
+  async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal) {
+    let response: Response;
+    try {
+      response = await fetchImpl(endpoint, {
+        method: "POST",
+        headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: config.model,
+          input: [{ role: "user", content: [{ type: "input_text", text: prompt(atoms) }] }],
+          text: { format: { type: "json_object" } },
+        }),
+        signal,
+        redirect: "error",
+      });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new Error("章节分析模型请求失败");
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
+    }
+    return modelEvents(responseText(await limitedJson(response)), atoms);
+  }
+  return async ({ atoms, signal }) => {
+    const events: ChapterEventInput[] = [];
+    for (let offset = 0; offset < atoms.length; offset += MAX_ATOMS_PER_REQUEST) {
+      if (signal?.aborted) throw signal.reason;
+      try {
+        events.push(...await analyzeBatch(atoms.slice(offset, offset + MAX_ATOMS_PER_REQUEST), signal));
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        throw new Error(`章节分析第 ${Math.floor(offset / MAX_ATOMS_PER_REQUEST) + 1} 批失败：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+      if (events.length > 200) throw new Error("章节分析结果事件数量超过 200 条");
+    }
+    return events;
+  };
+}
+
+export const parseChapterAnalysisEvents = modelEvents;

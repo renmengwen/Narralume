@@ -23,6 +23,11 @@ export function remainingChapterEventPageOffsets(total: number, loaded: number) 
   return offsets;
 }
 
+export function chapterAnalysisJobPayload(bookId: string, chapter: Chapter) {
+  if (!bookId.trim() || !chapter.id.trim()) throw new Error("章节自动分析缺少有效的书籍或章节 ID");
+  return { bookId: bookId.trim(), chapterId: chapter.id.trim() };
+}
+
 export function chapterEventDraft(event: ChapterEvent): ChapterEventDraft {
   const named = event.type === "character" || event.type === "location" || event.type === "prop";
   return {

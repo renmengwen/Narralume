@@ -24,7 +24,18 @@ import {
   replaceChapterEvents,
   type ChapterEventInput,
 } from "./chapter-event-store.js";
-import { CHAPTER_EVENTS_JOB_TYPE, createChapterEventsJobHandler } from "./chapter-events-job.js";
+import {
+  CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+  CHAPTER_EVENTS_JOB_TYPE,
+  createChapterEventsAnalysisJobHandler,
+  createChapterEventsJobHandler,
+  enqueueChapterEventsAnalysisJob,
+} from "./chapter-events-job.js";
+import {
+  createOpenAiResponsesChapterAnalyzer,
+  type AnalyzeChapterEvents,
+  type ChapterTextModelConfig,
+} from "./chapter-event-analyzer.js";
 import { indexBookChapters } from "./chapter-index.js";
 import { resolveDataRoot } from "./config.js";
 import { openDatabase } from "./database.js";
@@ -81,6 +92,8 @@ interface BuildAppOptions {
   jobPollMs?: number;
   jobWorker?: Partial<JobWorkerOptions>;
   imageProvider?: OpenAiImageConfig | null;
+  chapterTextProvider?: ChapterTextModelConfig | null;
+  chapterAnalyzer?: AnalyzeChapterEvents;
 }
 
 interface CreateJobBody {
@@ -149,6 +162,16 @@ function imageProviderFromEnvironment(): OpenAiImageConfig | null {
   return Object.values(config).every(Boolean) ? config : null;
 }
 
+function chapterTextProviderFromEnvironment(): ChapterTextModelConfig | null {
+  const config = {
+    baseUrl: process.env.NARRALUME_TEXT_BASE_URL?.trim() ?? "",
+    apiKey: process.env.NARRALUME_TEXT_API_KEY?.trim() ?? "",
+    model: process.env.NARRALUME_TEXT_MODEL?.trim() ?? "",
+    providerId: process.env.NARRALUME_TEXT_PROVIDER_ID?.trim() ?? "",
+  };
+  return Object.values(config).every(Boolean) ? config : null;
+}
+
 function decodeHeader(value: string | string[] | undefined, fallback = "") {
   const raw = Array.isArray(value) ? value[0] : value;
   if (!raw) return fallback;
@@ -199,8 +222,19 @@ export function buildApp(options: BuildAppOptions = {}) {
   const imageProvider = options.imageProvider === undefined
     ? imageProviderFromEnvironment()
     : options.imageProvider;
+  const chapterTextProvider = options.chapterTextProvider === undefined
+    ? chapterTextProviderFromEnvironment()
+    : options.chapterTextProvider;
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
+    ...(chapterTextProvider ? {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        connection.database,
+        dataRoot,
+        chapterTextProvider,
+        options.chapterAnalyzer ?? createOpenAiResponsesChapterAnalyzer(chapterTextProvider),
+      ),
+    } : {}),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
@@ -212,6 +246,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   };
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
   supportedJobTypes.add(IMAGE_CANDIDATE_JOB_TYPE);
+  supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
   let worker: JobWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
@@ -689,6 +724,9 @@ export function buildApp(options: BuildAppOptions = {}) {
         throw error;
       }
     }
+    if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE && !chapterTextProvider) {
+      return reply.code(409).send({ ok: false, message: "Narralume 章节分析模型尚未配置，仍可使用人工事件入口" });
+    }
     if (type === TTS_TIMELINE_JOB_TYPE) {
       const episodeId = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? (body.payload as { episodeId?: unknown }).episodeId
@@ -747,6 +785,26 @@ export function buildApp(options: BuildAppOptions = {}) {
         message: result.created ? "图片生成任务已创建并持久化" : "已复用相同图片生成任务",
         job: result.job,
       });
+    }
+    if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE) {
+      try {
+        const result = await enqueueChapterEventsAnalysisJob(connection.database, dataRoot, chapterTextProvider!, {
+          payload: body.payload ?? {}, priority, maxAttempts, runAfter,
+        });
+        return reply.code(result.created ? 201 : 200).send({
+          ok: true,
+          message: result.created ? "章节自动分析任务已创建并持久化" : "已复用相同章节自动分析任务",
+          job: result.job,
+        });
+      } catch (error) {
+        if (error instanceof ChapterEventError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        return reply.code(400).send({
+          ok: false,
+          message: error instanceof Error ? error.message : "章节自动分析任务参数无效",
+        });
+      }
     }
     const job = createJob(connection.database, {
       type,

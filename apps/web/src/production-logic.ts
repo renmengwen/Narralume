@@ -1,5 +1,5 @@
 export const PRODUCTION_STAGES = [
-  { id: "events", label: "章节事件", dependsOn: [], jobTypes: ["chapter_events_replace"] },
+  { id: "events", label: "章节事件", dependsOn: [], jobTypes: ["chapter_events_replace", "chapter_events_analyze"] },
   { id: "episode", label: "故事弧与分集", dependsOn: ["events"], jobTypes: [] },
   { id: "scripts", label: "忠实稿与包装稿", dependsOn: ["episode"], jobTypes: [] },
   { id: "assets", label: "资产与候选图", dependsOn: ["scripts"], jobTypes: ["image_candidate_generate"] },

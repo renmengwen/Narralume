@@ -8,7 +8,7 @@ import {
 } from "./chapter-event-editor";
 import type { Chapter, ChapterEvent } from "./types";
 
-export function ChapterEventsStage({ chapters, total, selected, text, events, locked, onSelect, onSave }: { chapters: Chapter[]; total: number; selected?: Chapter; text: string; events: ChapterEvent[]; locked: boolean; onSelect: (id: string) => void; onSave: (drafts: ChapterEventDraft[]) => void }) {
+export function ChapterEventsStage({ chapters, total, selected, text, events, locked, onSelect, onSave, onAnalyze }: { chapters: Chapter[]; total: number; selected?: Chapter; text: string; events: ChapterEvent[]; locked: boolean; onSelect: (id: string) => void; onSave: (drafts: ChapterEventDraft[]) => void; onAnalyze: () => void }) {
   const [drafts, setDrafts] = useState<ChapterEventDraft[]>([]);
 
   useEffect(() => { setDrafts(events.map(chapterEventDraft)); }, [events]);
@@ -26,9 +26,10 @@ export function ChapterEventsStage({ chapters, total, selected, text, events, lo
       <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.17em] text-[var(--accent)]">STRUCTURED EVIDENCE</p><h2 id="events-heading" className="m-0 max-w-3xl font-serif text-[clamp(28px,3.6vw,50px)] font-semibold leading-[1.13] tracking-[-.04em]">章节事件是后续生产的证据索引。</h2><p className="my-6 max-w-3xl text-sm leading-7 text-[var(--fg-secondary)]">先核对人物、地点、冲突、转折和线索，再进入故事弧；所有改编必须能回到原文字节范围。</p>
       <div className="border-t border-[var(--border-subtle)]">
         {selected ? <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border-subtle)] py-4">
+          <button type="button" disabled={locked} className="rounded border border-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--accent)] disabled:opacity-50" onClick={onAnalyze}>自动分析本章</button>
           <button type="button" disabled={locked} className="rounded border border-[var(--border-strong)] px-3 py-2 text-xs font-semibold disabled:opacity-50" onClick={() => setDrafts((current) => [...current, emptyChapterEventDraft(selected)])}>添加人工事件</button>
           <button type="button" disabled={locked} className="rounded bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50" onClick={() => onSave(drafts)}>保存为持久任务</button>
-          <span className="text-[11px] text-[var(--fg-tertiary)]">本入口只保存人工整理结果，不冒充自动分析。章节字节范围 {selected.byte_start}～{selected.byte_end}</span>
+          <span className="text-[11px] text-[var(--fg-tertiary)]">自动分析只引用服务端冻结的原文证据段；人工保存入口保持独立。章节字节范围 {selected.byte_start}～{selected.byte_end}</span>
         </div> : null}
         {drafts.map((draft, index) => <article className="border-b border-[var(--border-subtle)] py-5" key={draft.key}>
           <div className="grid grid-cols-[120px_minmax(0,1fr)_auto] gap-3 max-md:grid-cols-1">

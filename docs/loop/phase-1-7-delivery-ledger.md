@@ -25,16 +25,18 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 2026-07-25 用户进一步明确为首版硬约束：当前产品闭环大部分复用既有 API、Job、恢复与媒体核心，先完成可用首版，不以严格 Review 阻塞连续实现。此类前端编排/接线只保留 Worker 最小测试、Coordinator 边界核对和真实工作流验收；只有实际新增数据库迁移、耐久写核心、恢复原语、TTS/FFmpeg 等高风险核心时才恢复严格独立 Review。
 
+2026-07-26 用户把“尽量复用多个参考项目、尽量少造轮子”提升为最新硬约束：能以 `copy` 或 `port` 落地的任务不因业务名称恢复严格独立 Review，即使涉及 TTS，也只保留来源登记、最小可运行测试、Coordinator 边界核对和真实工作流验收；只有无法复用而确需新造的数据迁移、耐久写、恢复原语或媒体核心，才重新评估独立 Review。该约束覆盖本轮 MuseDock 模型配置页、MiniMax/MiMo TTS 移植与 `node-edge-tts` 官方包接入。
+
 2026-07-25 用户修正长篇改编合同：目标时长必须由系统配置并保存到 Episode，20 分钟只作参考；Agent 基于逐章事件摘要、目标时长和真实语速推荐连续原著范围，用户确认或调整后才冻结到结构化 `episode_sources`。不得把多章全文一次拼入模型，也不得复制 Toonflow 的短漫剧时长、字数、固定章数或付费节奏。视觉段数量由真实故事 beat、时间轴和画面驻留策略派生，旧 8～15 段只保留为 3～5 分钟首版 Gate，不得成为全局门禁。
 
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`ec2b85c`（TTS-CAL 业务提交 `9086d10` 已入库；本地启动配置、研究文档、AGENTS.md 提交规范已分别独立提交）。
-- 工作区：干净（TTS-CAL 业务、本地启动配置、研究文档、AGENTS.md 规范均已分别独立提交）；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：TTS-CAL 根 `npm run typecheck`、`npm test`、`npm run build` 串行 GREEN；server 203 项中 202 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 48/48 PASS，Vite 58 modules。双 voice/rate 短样生成 Job、append-only 选择 Job、measured CPS 回传长稿预算与完整 TTS 默认 voice/rate 已全部接线并通过定向测试。
-- 当前 Task：`TTS-CAL` committed；业务提交 `9086d1050c9ac28e23c08beb4170e182265f5998`，Worker `pc02c_worker` 已释放。代码已完成双 voice/rate 短样生成、append-only 选择、刷新/restart 恢复和音频试听接线；measured CPS 已回传长稿 budget 与完整 TTS 默认 voice/rate。
-- 下一动作：在真实《盗墓笔记》episode 上跑 System.Speech 双样端到端验收——生成双样 → 试听 → 选择 → restart 恢复 → 确认 measured CPS 真正传到长稿生成和完整 TTS。验收通过后 TTS-CAL 转 `complete`，进入 PC-05 真实说书 TTS。
+- 当前 HEAD：`e8884fe`（TTS-CAL 业务提交 `9086d10` 与 Responses 兼容修复 `e8884fe` 已入库；本控制提交不得自引用）。
+- 工作区：仅有用户未跟踪文件 `docs/handoff-to-next-session.md`；未清理、未暂存、未混入任何业务或 Ledger 提交。
+- 最近验证：TTS-CAL 真实《盗墓笔记》双样、试听、显式选择、刷新/restart、API/UI 恢复、measured 长稿预算消费和完整 TTS 消费全部 PASS；根 `npm run typecheck`、`npm test`、`npm run build` 串行 GREEN，server 203 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 48 PASS，Vite 58 modules，console 0 error/0 warning。
+- 当前 Task：`TTS-CAL` complete；`CFG-01 模型设置中心` implementing，PC-05 来源研究同步开始。TTS-CAL 业务提交 `9086d1050c9ac28e23c08beb4170e182265f5998`，Responses 兼容修复 `e8884fe`；Worker 已释放。
+- 下一动作：按 `opendesign` 扫描现有设计系统与工作区结构，冻结全局模型设置入口和页面布局；按冻结参考顺序登记 MuseDock 模型配置页及 MiniMax/MiMo TTS 的 `copy/port/reference-only` 决策；阅读 `node-edge-tts` 官方 npm/GitHub 文档并核对 `zh-CN-YunjianNeural`、逐词边界和字幕合同，然后实现模型设置中心与 PC-05 三 provider 最小闭包。
 
 ## 2026-07-25 产品闭环复开
 
@@ -56,9 +58,10 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | PC-02B 可配置时长与跨章自动选材 | `complete` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 第三版根门禁、v12 恢复、隔离真实 UI Gate与同一 candidate 双 Review全部 PASS；业务 `ece2ac3` |
 | PC-02C 跨章骨架与长稿 | `complete` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 第三版综合复审、根三门/diff、真实 API/UI/卸载回归全部 PASS；业务 `eec9857` |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
-| TTS-CAL TTS 短样校准 | `committed` | 依赖 PC-02C 与当前批准包装稿；复用 jobs、System.Speech、WAV/ffprobe 和 AudioStage | 至少两个真实 voice/rate sample；exact text/hash、字符数、duration、CPS、identity；显式选择、刷新/restart、长稿预算与完整 TTS 真实消费。业务 `9086d10`，待真实 episode 双样端到端验收 |
+| TTS-CAL TTS 短样校准 | `complete` | 依赖 PC-02C 与当前批准包装稿；复用 jobs、System.Speech、WAV/ffprobe 和 AudioStage | 两个真实 rate sample、试听/选择/restart/API/UI 恢复、measured 长稿预算与完整 TTS 消费全部 PASS；业务 `9086d10`，兼容修复 `e8884fe` |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
-| PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
+| CFG-01 模型设置中心 | `implementing` | 复用 MuseDock 模型配置页并映射 Narralume 自身 provider 合同；`opendesign` 决定全局入口、页面位置和布局；不得形成 MuseDock 运行时依赖 | 文本/图像/TTS 模型配置可从 UI 持久保存、读取、编辑和用于真实运行时；中文异步四态、密钥不回显；刷新/restart 恢复 |
+| PC-05 真实 TTS 与听音 | `queued` | 依赖 CFG-01；优先移植 MuseDock MiniMax/MiMo 调用逻辑，并按官方文档接入 `node-edge-tts`；复用现有 timeline/cue/字幕/Job 管线，保留 System.Speech fallback | 默认 provider 为 Edge TTS；Language 中文、Gender 男性、Voice `Chinese - China - Yunjian`；MiniMax/MiMo 可配置；逐词边界映射现有 cue；音色/语速/专名经真实短样与全片听音验收 |
 | PC-06 北派真实样片与最终复验 | `queued` | 真实北派原文、第一人称跨章故事弧、人工稿件/图片/整片批准、项目包恢复 | 按系统配置的目标时长完成；内容、声音、字幕、画面、媒体与恢复全部通过后才恢复根目标 `complete` |
 
 PC-01 完成证据：
@@ -96,13 +99,14 @@ PC-02 当前 checkpoint：
 - 视觉段验收：真实 1 cue 时间轴创建 1 段，绑定 900×1600 approved 候选后 PUT/GET 回读 `productionReady=true/r1`；刷新与真实 restart 后 URL、段和预览恢复。reject 后 productionReady false、联系表 409；重新 approve 并更新绑定后 r2 恢复。稳定态重复导出 JSON `a2d732…414a`、HTML `12553c…77fd` 均一致。当前短稿不足 8～15 段，UI 导出按产品门禁保持禁用，不冒充 PC-04 完成。
 - 长篇合同核验：当前前端和 `chapter_events_analyze` 是单章入口，但 Episode/faithful/package/TTS 后端已经支持跨 `chapterId`；单元测试覆盖两章，P3 真实 Gate 覆盖三章。Toonflow 真实做法是逐章摘要、Agent 推荐范围、用户确认、骨架自动分配，不能复制其短漫剧常量或把章节映射藏在文本骨架。当前 `180～300` 秒和视觉 8～15 段硬门禁必须改为配置/派生合同。
 - PC-02B 迁移授权：Coordinator 只读核对确认固定时长同时存在于前端表单/校验、`episode-store.ts` 和 migration v5 的 `episodes.target_duration_seconds CHECK BETWEEN 180 AND 300`；现有持久合同无法保存参考 20 分钟等可配置长时长。授权单写 Worker 新增且仅新增 migration v13，原样重建 `episodes` 并把技术范围改为 60～3600 秒，系统 policy 为默认参考 1200 秒、步长 30；不得修改历史 migration v5，不得新增表/列/第二套时长存储。升级必须保留现有 Episode、所有下游外键/级联与 240 秒数据，并以 60/1200/3600、59/3601、FK/级联回归封闭。该迁移按新增数据库迁移风险冻结后执行独立 Spec Review 与 Code Quality Review；其余复用接线仍按首版最小门禁。
-- 尚未完成：TTS-CAL 真实 System.Speech 双样端到端验收、完整长稿音频、PC-04 动态多图生产及完整联系表审核、PC-05 真实说书听音、北派 render chunks/final video、项目包恢复和全阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-02C 与 PC-03 `complete`，TTS-CAL `committed`。
+- 尚未完成：真实 Episode 当前仅两条极短跨章 evidence，成功 measured Job 的 25 字稿只证明运行时消费，不能冒充目标长篇内容；CFG-01 模型设置中心、PC-05 三 provider 真实说书听音与完整长稿音频、PC-04 动态多图生产及完整联系表审核、北派 render chunks/final video、项目包恢复和全阶段连续真实工作流验收仍待完成。PC-02 保持 `implementing`，PC-02C、PC-03 与 TTS-CAL `complete`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| TTS-CAL | `pc02c_worker` 已释放 | 共享工作区 `dev@9086d10`；业务提交 `9086d10` | `apps/server/src/app.ts`、`job-store.ts`、`tts-provider.ts`、`tts-timeline-job.ts`、`episode-script-generation-job.ts`、新增 `tts-calibration-job*.ts` 及对应测试；`apps/web/src/production/audio/**`、`production/scripts/**`、`production/types.ts`、`production-logic.ts`、`ProductionWorkspace.tsx`、`apps/web/test/client-logic.test.ts` | Coordinator | 单写上述业务路径；不得触碰 Ledger、用户本地配置、database migration 或默认数据根 | `committed` |
+| CFG-01 / PC-05 来源与设计 | Coordinator | 共享工作区 `dev@e8884fe` | `opendesign/**`、`docs/research/**`；只读 Narralume/MuseDock UI、provider 与配置合同；本 Ledger 仅 Coordinator 更新 | Coordinator | 不得写 MuseDock，不得读取或输出密钥值；用户文件 `docs/handoff-to-next-session.md` 排除 | `implementing` |
+| TTS-CAL | `pc02c_worker` 已释放 | 共享工作区；业务 `9086d10`，兼容修复 `e8884fe` | 无 | Coordinator | 真实 3101/5174 验收资源已释放 | `complete` |
 | PC-02C | Coordinator / Writer 已释放 | 第三版 `1f8261b:b370e11`；业务 `eec9857`，完成登记 `f6460de` | 无 | Coordinator | 本地 3101/5174 与隔离 Gate 已释放 | `complete` |
 | PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3`；业务 `ece2ac3`，完成登记 `cc294e7` | 无 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `complete` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
@@ -116,7 +120,9 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| TTS-CAL TTS 短样校准 | `committed` | PC-02C complete；当前批准包装稿；现有 jobs/System.Speech/AudioStage | `pc02c_worker` 已释放 | - | - | 一次独立综合 Review；复用核心，仅新编排/接线 | 同一次独立综合 Review | 根 typecheck/test/build GREEN，server 202 PASS/1权限SKIP、web 48 PASS；待真实 System.Speech 双样/试听/选择/restart/API/UI 端到端 Gate | `9086d1050c9ac28e23c08beb4170e182265f5998` | 真实 episode 双样端到端验收待做；selection 已 append-only 复用 jobs 且被长稿 budget/TTS runtime 消费，不写 `audio_segments` 冒充正式 timeline |
+| CFG-01 模型设置中心 | `implementing` | PC-01 工作台；MuseDock 模型配置页；Narralume 现有 provider/runtime 合同 | Coordinator | - | - | 最新复用硬约束：不做严格独立 Review；来源登记、最小测试、Coordinator 自审与真实 Gate | 同左 | 待 `opendesign` mockup/verifier、设置保存/读取/运行时消费、刷新/restart 与密钥不回显 Gate | - | 必须先冻结页面位置和 MuseDock 来源；保持 Narralume 独立运行时，不复制敏感配置 |
+| PC-05 真实 TTS 与听音 | `queued` | CFG-01；现有 TTS-CAL、timeline/cue/字幕/Job；MuseDock MiniMax/MiMo；`node-edge-tts` 官方合同 | Coordinator | - | - | 复用/官方包接入不做严格独立 Review；保留最小 provider 测试、Coordinator 自审与真实短样/全片 Gate | 同左 | 待 Edge TTS 默认值、逐词边界、MiniMax/MiMo 真实调用、失败清理、恢复与听音验收 | - | 默认 Edge TTS：中文/男性/`Chinese - China - Yunjian`；不得新造第二套字幕或 TTS store |
+| TTS-CAL TTS 短样校准 | `complete` | PC-02C complete；当前批准包装稿；现有 jobs/System.Speech/AudioStage | `pc02c_worker` 已释放 | `9086d10` 业务树；`e8884fe` provider 兼容修复 | - | Coordinator 自审；复用型任务按最新硬约束不做严格独立 Review | 同左 | 双样 `15.939s/3.764352 CPS` 与 `14.329s/4.187312 CPS`，显式选择 rate 1；音频 HTTP 200/WAV/hash 一致；restart 后同 Job/双样/选择/approval r5/API/UI 恢复；measured 长稿 Job `job_episode_scripts_1a946fa7…` budget 4070、attempt 1；完整 TTS Job `job_099d3d6b…` rate 1、10.936s/2 segments/2 cues、timeline `ecd41108…`；根三门 GREEN，server 203 PASS/1权限SKIP、web 48 PASS、Vite 58，console 0 | `9086d1050c9ac28e23c08beb4170e182265f5998`、`e8884fe` | 当前两条极短 evidence 只生成 25 字，不冒充产品长稿；selection 已由长稿 budget/TTS runtime 真实消费，不写 `audio_segments` 冒充正式 timeline |
 | PC-02C 跨章骨架与长稿 | `complete` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:1f8261ba193b3caf94bb2b8de893439564f55408:b370e11f706301b957bf9bb49dd63d300ce1e09a` | `56230f413537d08887ea2e98402f3144b0193f2d` | PASS：同一次独立综合复审，无 P0-P2 finding | 同一次独立综合复审 | 根三门/diff GREEN，server 200 PASS/1权限SKIP、web46/46；真实 API/UI 成功/取消/失败/冷恢复与 React 19 unmount 回归 GREEN，console 0 | `eec9857dc00323b12e3fd2fb246c8df3c661dc38` | 无；进入 TTS 短样校准来源登记 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a` | `c38d990ca0d782d680684f9fa3c498d825b2e351` | PASS：chunk duration、隐式原始/解析起点、历史跳章同值 PUT 均关闭；95 项 94 PASS/1权限SKIP | PASS：封存稿件/父链/source/批准身份、推荐消费、React commit identity 均关闭；project-package 47 PASS/1 SKIP、web32/32 | 根三门/diff GREEN，server 180 PASS/1权限SKIP、web39/39；v12 21表恢复完整；默认空起点 `requestedStartChapterId=null`/needs_analysis 冷恢复与推荐子集消费冷恢复均 GREEN，console 0 | `ece2ac301e07fd7373336e88a1a188109a1aee72` | 外部 provider 重启映射受执行策略限制；默认 identity Gate 使用非网络注入且未调用模型，不影响既有真实推荐成功证据；进入 PC-02C |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
@@ -314,6 +320,8 @@ PC-02 当前 checkpoint：
 | 2026-07-26 PC-02C 完成 | 中文业务提交 `eec9857dc00323b12e3fd2fb246c8df3c661dc38`，恰好 10 个已审业务路径。提交后仅剩用户本地启动配置 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`docs/research/2026-07-24-north-tomb-video-project-summary.md`、`package.json`、`scripts/`，未清理、未暂存、未混入。PC-02C complete，立即进入 TTS 短样校准来源登记。 |
 | 2026-07-26 TTS-CAL 来源与写租约 | 五仓来源按冻结顺序登记并以中文提交 `80922d8` 推送；DramaClaw/Toonflow/LocalMiniDrama 无适配完整闭包，LumenX 只移植试听与显式应用分离，MuseDock 只移植真实 duration/CPS 与预算方法。Coordinator 核对现有 jobs 足以 append-only 保存生成与选择，无需 migration/新表。分配 `pc02c_worker` 单写最小闭包：两个真实 sample、持久选择/恢复/试听，以及长稿 measured budget 和完整 TTS voice/rate 消费；禁止第二套 TTS store、通用 provider/router、新依赖和用户本地路径。 |
 | 2026-07-26 TTS-CAL 实现与提交 | `pc02c_worker` 完成全部代码后停止，由接手 Coordinator 验证入库。新增 `tts-calibration-job.ts`（双 voice/rate 短样生成 + ffprobe 实测 duration/CPS + append-only 选择 Job），`tts-provider.ts` 提取 `probeSystemSpeechWav` 共享，`tts-timeline-job.ts` 完整 TTS 默认消费已选校准 voice/rate，`episode-script-generation-job.ts` measured 状态下复核身份一致性并驱动长稿字数预算；前端 AudioStage 双样试听/选择、ScriptStage measured CPS 锁定、types/production-logic/client-logic.test 全部跟进；API 新增 `GET /api/episodes/:episodeId/tts-calibration` 与 `:sampleId/audio`。根 typecheck/test/build 串行 GREEN，server 202 PASS/1权限SKIP、web 48 PASS、Vite 58 modules。业务提交 `feat(tts): 完成双样短样校准` `9086d1050c9ac28e23c08beb4170e182265f5998`；同批本地启动配置、研究文档、AGENTS.md 提交规范已分别独立提交，提交规范同步改为 Conventional Commits。TTS-CAL `committed`，待真实 episode 双样端到端验收后转 `complete`。 |
+| 2026-07-26 TTS-CAL 真实验收与 Responses 修复 | 真实《盗墓笔记》Episode 1 在批准稿 `script_29b9c25…` approval r5 上生成两条 60 字 System.Speech 短样：rate 0 为 15.939s/3.764352 CPS，rate 1 为 14.329s/4.187312 CPS；两条试听 HTTP 200、`audio/wav`、RIFF/WAVE、bytes/hash 与持久记录一致，显式选择 rate 1。仅重启后端、前端 PID 不变，API/UI 恢复同一 generation Job、两样本、所选 rate/CPS 与 approval r5。measured 长稿 Job `job_episode_scripts_1a946fa7f7b783d130d885804b7a88e5bc7adc437346e138b95c326373337333` 一次成功，budget 4070、identity measured；完整 TTS Job `job_099d3d6b-6c33-4ed0-8899-f3ace3fb0d27` 一次成功，rate 1、10.936s、2 segments/2 cues、timeline `ecd41108a00d8ad1e38cdf79aec7e31db49a6cacdfa2a29b23383a513e6e31d2`。Responses 兼容端因可选 `text.format=json_object` 稳定 400，删除该字段后真实调用成功；三阶段不发送该字段的回归与根三门全部 GREEN：server 203 PASS/1权限SKIP、web 48 PASS、Vite 58，console 0。修复提交 `e8884fe`；TTS-CAL `complete`。当前仅两条极短 evidence，25 字成功稿只证明 measured CPS 真正被消费，不作为产品长稿验收。 |
+| 2026-07-26 用户新增模型设置与三 TTS provider 硬约束 | 用户要求尽量复用多个参考项目、尽量少造轮子，复用型任务不进行严格独立 Review；该规则写入状态机、CFG-01 与 PC-05 Review 边界。新增 CFG-01：把 MuseDock 模型配置页移植到 Narralume，由 `opendesign` 决定 UI 与全局页面位置，保持独立运行时。PC-05 必须优先移植 MuseDock 已有 MiniMax/MiMo 调用逻辑，并在阅读官方文档后新增 `node-edge-tts` npm 包；选择它用于零成本成片、TypeScript 原生和逐词字幕。默认 provider 改为 Edge TTS，Language 中文、Gender 男性、Voice `Chinese - China - Yunjian`；逐词边界复用现有 timeline/cue/字幕存储，不建第二套。MiniMax/MiMo 保持可配置，System.Speech 作为本地 fallback。 |
 
 ## 决策与剩余风险
 
@@ -323,6 +331,9 @@ PC-02 当前 checkpoint：
 - 2026-07-25：用户进一步把“资产管理、生图提示词也必须先参考，不重复造轮子”确认为第一原则。该原则覆盖主/状态资产、别名、候选图、显式选择、联系表、prompt 结构/派生/版本/复用/审核；到具体能力前必须先按冻结优先级搜索并登记 `copy / port / reference-only` 决策。已冻结 Toonflow `bc61ec7` 的资产保存/生成/prompt 组织、LumenX `7a1213a` 的共享资产/变体/候选/Prompt Builder/assembly、MuseDock `3cf8d392` 的 provider/生成规划门禁；实现必须映射到 Narralume 已有 `master/state/alias`、append-only candidates、review revision 和 visual binding，禁止新造覆盖式影子资产库或把旁白直接当生图 prompt。
 - 2026-07-25：用户离线、休息或暂时不回复时，Coordinator 不等待确认，按当前 Ledger 恢复入口持续执行到 Phase 1-7 根目标真实完成；仅在缺少必须的外部授权、产品方向重大决策、不可逆或高风险外部操作、用户主观审美选择，或充分排查仍无法解除的真实阻塞时暂停提问。
 - 2026-07-25：用户把“当前大部分代码为复用，首版先做出来，不做严格 Review 阻塞推进”设为硬约束。复用现有 API、Job、恢复与媒体核心的接线默认只做 Worker 最小测试、Coordinator 窄边界核对和真实浏览器/API/文件验收；仅实际新增数据库迁移、耐久写核心、恢复原语、TTS/FFmpeg 等高风险核心时再恢复对应独立 Review。
+- 2026-07-26：最新用户硬约束覆盖并收紧前述 Review 例外：优先从多个参考项目 `copy/port`，最大限度少造轮子；只要任务主体是复用已验证代码或接入官方包，就不做严格独立 Review，包括本轮模型设置页、MiniMax/MiMo 和 Edge TTS。最低门禁仍保留来源/许可证核对、最小可运行测试、Coordinator 边界与安全自审，以及真实 UI/API/音频/恢复验收；仅确认无代码可复用而必须新造高风险核心时，才重新评估独立 Review。
+- 2026-07-26：CFG-01 复用 MuseDock 模型设置界面和交互方法，但持久化与运行时消费必须映射 Narralume 自身合同；`opendesign` 负责决定全局入口、页面位置和布局，不能把全局 provider 配置随意塞入某个 Episode 阶段。任何密钥仅在本地配置边界处理，不进入代码、提交、Ledger、设计产物或输出，读取界面不得回显完整值。
+- 2026-07-26：PC-05 的默认 TTS 切为 `node-edge-tts`；默认筛选为中文/男性，UI 默认标签 `Chinese - China - Yunjian`，实际 voice ID、逐词边界事件、输出格式和许可证须以本轮官方文档核对结果为准。MiniMax/MiMo 复用 MuseDock provider 调用、轮询、下载与失败清理逻辑；所有 provider 统一进入 Narralume 现有 Job、timeline、cue、字幕、ffprobe 与恢复链路，不新增影子存储或 MuseDock 运行时依赖。
 - Node 22 内置 `node:sqlite` 当前可用但仍输出实验性警告；首版不因此新增 ORM。
 - 项目包恢复的 no-replace 合同当前为 Windows-only；普通文件 symlink 负向测试因账户权限 `EPERM` SKIP，但 Junction 与硬链接拒绝真实 PASS。
 - 固定 P7 Gate 数据根依靠 Ledger 单写者排他，没有另加跨进程脚本锁；Windows 超长产物路径应使用 `\\?\` 前缀或 Node/FFprobe/FFmpeg，普通 PowerShell 可能产生不存在的假阴性。

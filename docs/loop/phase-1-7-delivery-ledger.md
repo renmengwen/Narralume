@@ -95,13 +95,13 @@ PC-02 当前 checkpoint：
 - 视觉段验收：真实 1 cue 时间轴创建 1 段，绑定 900×1600 approved 候选后 PUT/GET 回读 `productionReady=true/r1`；刷新与真实 restart 后 URL、段和预览恢复。reject 后 productionReady false、联系表 409；重新 approve 并更新绑定后 r2 恢复。稳定态重复导出 JSON `a2d732…414a`、HTML `12553c…77fd` 均一致。当前短稿不足 8～15 段，UI 导出按产品门禁保持禁用，不冒充 PC-04 完成。
 - 长篇合同核验：当前前端和 `chapter_events_analyze` 是单章入口，但 Episode/faithful/package/TTS 后端已经支持跨 `chapterId`；单元测试覆盖两章，P3 真实 Gate 覆盖三章。Toonflow 真实做法是逐章摘要、Agent 推荐范围、用户确认、骨架自动分配，不能复制其短漫剧常量或把章节映射藏在文本骨架。当前 `180～300` 秒和视觉 8～15 段硬门禁必须改为配置/派生合同。
 - PC-02B 迁移授权：Coordinator 只读核对确认固定时长同时存在于前端表单/校验、`episode-store.ts` 和 migration v5 的 `episodes.target_duration_seconds CHECK BETWEEN 180 AND 300`；现有持久合同无法保存参考 20 分钟等可配置长时长。授权单写 Worker 新增且仅新增 migration v13，原样重建 `episodes` 并把技术范围改为 60～3600 秒，系统 policy 为默认参考 1200 秒、步长 30；不得修改历史 migration v5，不得新增表/列/第二套时长存储。升级必须保留现有 Episode、所有下游外键/级联与 240 秒数据，并以 60/1200/3600、59/3601、FK/级联回归封闭。该迁移按新增数据库迁移风险冻结后执行独立 Spec Review 与 Code Quality Review；其余复用接线仍按首版最小门禁。
-- 尚未完成：PC-02C 冻结 candidate 的综合 Review/提交、TTS 短样校准与完整长稿音频、PC-04 动态多图生产及完整联系表审核、PC-05 真实说书听音、北派 render chunks/final video、项目包恢复和全阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-03 `complete`。
+- 尚未完成：TTS 短样校准与完整长稿音频、PC-04 动态多图生产及完整联系表审核、PC-05 真实说书听音、北派 render chunks/final video、项目包恢复和全阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-02C 与 PC-03 `complete`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02C | `pc02c_worker` | 共享工作区 `dev@6d4a517`；第二版 candidate `70dedb6` 已失效 | 只允许 `apps/web/src/production/scripts/use-script-workspace.ts` 与对应 `apps/web/test/client-logic.test.ts` 最小根修；其余业务路径保持 | Coordinator | 单写两条 web 路径；默认服务只读，不启动隔离 Gate | `implementing` |
+| PC-02C | Coordinator / Writer 已释放 | 第三版 `1f8261b:b370e11`；业务 `eec9857`，完成登记 `f6460de` | 无 | Coordinator | 本地 3101/5174 与隔离 Gate 已释放 | `complete` |
 | PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3`；业务 `ece2ac3`，完成登记 `cc294e7` | 无 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `complete` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
@@ -114,7 +114,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PC-02C 跨章骨架与长稿 | `changes_requested` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | `pc02c_worker` / 两条 web 路径单写租约 | 第二版 `git-index-tree-v1:114c03d225f7a6b41d4677e7402315103f82d42c:70dedb655fba9994ea73252c48f903d8c5f8dff4` 已失效 | `6d4a517c56c426b1257b195a39417ff984110d1c` | FAIL：同一次综合复审只余 1×P2 | 同一次综合复审 | 第二版根三门与真实 Gate 保留服务端/终态范围；实际 hook unmount 窗口未覆盖，需根修后重跑 web/根门禁和受影响 UI Gate | 待提交 | 已关闭：原子 pair、canonical summary、provider 分离、render/route stale；仅修 layout cleanup 同步失效和真实 unmount 回归 |
+| PC-02C 跨章骨架与长稿 | `complete` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:1f8261ba193b3caf94bb2b8de893439564f55408:b370e11f706301b957bf9bb49dd63d300ce1e09a` | `56230f413537d08887ea2e98402f3144b0193f2d` | PASS：同一次独立综合复审，无 P0-P2 finding | 同一次独立综合复审 | 根三门/diff GREEN，server 200 PASS/1权限SKIP、web46/46；真实 API/UI 成功/取消/失败/冷恢复与 React 19 unmount 回归 GREEN，console 0 | `eec9857dc00323b12e3fd2fb246c8df3c661dc38` | 无；进入 TTS 短样校准来源登记 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a` | `c38d990ca0d782d680684f9fa3c498d825b2e351` | PASS：chunk duration、隐式原始/解析起点、历史跳章同值 PUT 均关闭；95 项 94 PASS/1权限SKIP | PASS：封存稿件/父链/source/批准身份、推荐消费、React commit identity 均关闭；project-package 47 PASS/1 SKIP、web32/32 | 根三门/diff GREEN，server 180 PASS/1权限SKIP、web39/39；v12 21表恢复完整；默认空起点 `requestedStartChapterId=null`/needs_analysis 冷恢复与推荐子集消费冷恢复均 GREEN，console 0 | `ece2ac301e07fd7373336e88a1a188109a1aee72` | 外部 provider 重启映射受执行策略限制；默认 identity Gate 使用非网络注入且未调用模型，不影响既有真实推荐成功证据；进入 PC-02C |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |

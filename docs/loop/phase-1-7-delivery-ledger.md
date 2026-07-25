@@ -26,11 +26,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`a781b71`（PC-01 已登记；PC-02 参考顺序已纠正；系列生产工作台信息架构 mockup 已提交）。
+- 当前 HEAD：`05f9f23`（PC-02 已组件化接通章节读取、资产/候选操作、Job 轮询取消和 URL 恢复；尚未完成连续生产验收）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：既有工程基线 typecheck/test/build、P7 技术 E2E、项目包/恢复与媒体合同均 GREEN；用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
+- 最近验证：`05f9f23` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 142 项中 141 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 11/11 PASS，Vite 43 modules；server health 与 web 均 HTTP 200。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
 - 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：先按冻结顺序完成每个能力的来源登记；当前已完成 DramaClaw 工作区/恢复、Toonflow 资产/prompt、LumenX 变体/候选/prompt assembly 和 MuseDock provider/规划门禁取证。修复 PC-02 第一批 URL/文案后，继续按 Narralume 现有合同接通七阶段；通用控件优先官方 `shadcn/ui`，不形成参考项目运行时依赖。
+- 下一动作：补最新 PC-02 UI 的真实浏览器验收；Codex 内置浏览器若仍受 localhost URL policy 限制则保留待验，不伪造通过。随后先按冻结顺序取证并接通章节事件编辑/生成入口，再依次接通故事弧与分集、稿件/批准、资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频；通用控件优先官方 `shadcn/ui`，不形成参考项目运行时依赖。
 
 ## 2026-07-25 产品闭环复开
 
@@ -63,11 +63,20 @@ PC-01 完成证据：
 - 验证：提交前两轮全量 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP，web 7/7 PASS。
 - 业务提交：`41c6e33`（`前端：接通书库到系列工作台`）。剩余风险：固定阶段仍为入口骨架，由 PC-02 接通真实生产 API。
 
+PC-02 当前 checkpoint：
+
+- Web checkpoint：`05f9f23`（`前端：组件化接通章节与资产工作区`）；candidate index tree：`3d017ef328c35cdcaf8ed0070e6f37d350a9c053`。
+- 已接通：七阶段注册与依赖/Job 类型映射，`book/series/stage/chapter/episode/asset/job` URL 恢复，非法阶段回退，Job hydrate-first/3 秒轮询/终态停止/卸载清理/取消/进度换算，章节列表、原文证据与结构化事件同屏，系列真实主资产/状态资产/别名、候选列表与图片、候选批准/淘汰、生图 Job、prompt 分段组装及候选切换竞态保护。
+- 模块化：`ProductionWorkspace.tsx` 仅保留领域状态组合、URL 恢复和阶段编排；章节、资产、候选、Prompt Builder、Job 轮询已进入独立组件/hook/纯函数。Tailwind/组件化纠偏完成，后端模块化与公共函数边界已由 `d796d34` 固化进 `AGENTS.md`。
+- 验证：`npm run typecheck`、`npm test`、`npm run build`、`git diff --check` 串行 GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP/0 FAIL，web 11/11 PASS；server health 与 web HTTP 200；Vite 43 modules。
+- 浏览器边界：PC-01 的真实浏览器验收继续有效；`05f9f23` 新增 PC-02 UI 尚未完成真实点击复验。若 Codex 内置浏览器仍被 localhost URL policy 阻断，只登记工具限制，不记为产品失败或验收通过。
+- 尚未接通：章节事件编辑/生成、故事弧与分集、忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
+
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@a781b71` | `apps/web/src/**`、`apps/web/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；必要的最小 API 查询接线另行登记；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
+| PC-02 | Coordinator | `dev@05f9f23` | `apps/web/src/**`、`apps/web/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；必要的最小 API 查询接线另行登记；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

@@ -30,11 +30,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`80922d8`（PC-02C 已完成并推送；TTS 短样校准五仓来源已独立登记）。
-- 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`docs/research/2026-07-24-north-tomb-video-project-summary.md`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：PC-02C 第三版根 `npm run typecheck`、`npm test`、`npm run build` 与最终 10 文件 `git diff --check` 串行 GREEN；server 201 项中 200 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 46/46 PASS，Vite 58 modules。新增真实 React 19 `createRoot` 挂载→POST pending→`root.unmount()` commit→passive cleanup 前 resolve 回归，Job/status/busy/error 零旧写回。默认产品 UI 在《盗墓笔记》545 章数据中从 Script 切 Assets 再返回，faithful/package 各 2 份、批准 withdrawn r4 与生成入口恢复，console 0 error/0 warning；精确微窗口由上述 React 回归覆盖，未用浏览器 sleep 冒充。
-- 当前 Task：`TTS-CAL` implementing；来源提交 `80922d8d46cab3efa571f6a69a9633daf0e1f495`，单写租约分配给 `pc02c_worker`，只复用现有 System.Speech、WAV/ffprobe、jobs、批准门和 AudioStage。
-- 下一动作：实现两个真实 voice/rate 短样、append-only 选择 Job、刷新/restart 恢复和音频试听；选中 sample 必须被长稿 measured budget 与完整 TTS 默认 voice/rate 真正消费。禁止 migration、新表、通用 provider/router、第二套完整 TTS store 或新增依赖。
+- 当前 HEAD：`ec2b85c`（TTS-CAL 业务提交 `9086d10` 已入库；本地启动配置、研究文档、AGENTS.md 提交规范已分别独立提交）。
+- 工作区：干净（TTS-CAL 业务、本地启动配置、研究文档、AGENTS.md 规范均已分别独立提交）；本 Ledger 由 Coordinator 独立维护。
+- 最近验证：TTS-CAL 根 `npm run typecheck`、`npm test`、`npm run build` 串行 GREEN；server 203 项中 202 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 48/48 PASS，Vite 58 modules。双 voice/rate 短样生成 Job、append-only 选择 Job、measured CPS 回传长稿预算与完整 TTS 默认 voice/rate 已全部接线并通过定向测试。
+- 当前 Task：`TTS-CAL` committed；业务提交 `9086d1050c9ac28e23c08beb4170e182265f5998`，Worker `pc02c_worker` 已释放。代码已完成双 voice/rate 短样生成、append-only 选择、刷新/restart 恢复和音频试听接线；measured CPS 已回传长稿 budget 与完整 TTS 默认 voice/rate。
+- 下一动作：在真实《盗墓笔记》episode 上跑 System.Speech 双样端到端验收——生成双样 → 试听 → 选择 → restart 恢复 → 确认 measured CPS 真正传到长稿生成和完整 TTS。验收通过后 TTS-CAL 转 `complete`，进入 PC-05 真实说书 TTS。
 
 ## 2026-07-25 产品闭环复开
 
@@ -56,7 +56,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | PC-02B 可配置时长与跨章自动选材 | `complete` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 第三版根门禁、v12 恢复、隔离真实 UI Gate与同一 candidate 双 Review全部 PASS；业务 `ece2ac3` |
 | PC-02C 跨章骨架与长稿 | `complete` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 第三版综合复审、根三门/diff、真实 API/UI/卸载回归全部 PASS；业务 `eec9857` |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
-| TTS-CAL TTS 短样校准 | `implementing` | 依赖 PC-02C 与当前批准包装稿；复用 jobs、System.Speech、WAV/ffprobe 和 AudioStage | 至少两个真实 voice/rate sample；exact text/hash、字符数、duration、CPS、identity；显式选择、刷新/restart、长稿预算与完整 TTS 真实消费 |
+| TTS-CAL TTS 短样校准 | `committed` | 依赖 PC-02C 与当前批准包装稿；复用 jobs、System.Speech、WAV/ffprobe 和 AudioStage | 至少两个真实 voice/rate sample；exact text/hash、字符数、duration、CPS、identity；显式选择、刷新/restart、长稿预算与完整 TTS 真实消费。业务 `9086d10`，待真实 episode 双样端到端验收 |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
 | PC-06 北派真实样片与最终复验 | `queued` | 真实北派原文、第一人称跨章故事弧、人工稿件/图片/整片批准、项目包恢复 | 按系统配置的目标时长完成；内容、声音、字幕、画面、媒体与恢复全部通过后才恢复根目标 `complete` |
@@ -96,13 +96,13 @@ PC-02 当前 checkpoint：
 - 视觉段验收：真实 1 cue 时间轴创建 1 段，绑定 900×1600 approved 候选后 PUT/GET 回读 `productionReady=true/r1`；刷新与真实 restart 后 URL、段和预览恢复。reject 后 productionReady false、联系表 409；重新 approve 并更新绑定后 r2 恢复。稳定态重复导出 JSON `a2d732…414a`、HTML `12553c…77fd` 均一致。当前短稿不足 8～15 段，UI 导出按产品门禁保持禁用，不冒充 PC-04 完成。
 - 长篇合同核验：当前前端和 `chapter_events_analyze` 是单章入口，但 Episode/faithful/package/TTS 后端已经支持跨 `chapterId`；单元测试覆盖两章，P3 真实 Gate 覆盖三章。Toonflow 真实做法是逐章摘要、Agent 推荐范围、用户确认、骨架自动分配，不能复制其短漫剧常量或把章节映射藏在文本骨架。当前 `180～300` 秒和视觉 8～15 段硬门禁必须改为配置/派生合同。
 - PC-02B 迁移授权：Coordinator 只读核对确认固定时长同时存在于前端表单/校验、`episode-store.ts` 和 migration v5 的 `episodes.target_duration_seconds CHECK BETWEEN 180 AND 300`；现有持久合同无法保存参考 20 分钟等可配置长时长。授权单写 Worker 新增且仅新增 migration v13，原样重建 `episodes` 并把技术范围改为 60～3600 秒，系统 policy 为默认参考 1200 秒、步长 30；不得修改历史 migration v5，不得新增表/列/第二套时长存储。升级必须保留现有 Episode、所有下游外键/级联与 240 秒数据，并以 60/1200/3600、59/3601、FK/级联回归封闭。该迁移按新增数据库迁移风险冻结后执行独立 Spec Review 与 Code Quality Review；其余复用接线仍按首版最小门禁。
-- 尚未完成：TTS 短样校准与完整长稿音频、PC-04 动态多图生产及完整联系表审核、PC-05 真实说书听音、北派 render chunks/final video、项目包恢复和全阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-02C 与 PC-03 `complete`。
+- 尚未完成：TTS-CAL 真实 System.Speech 双样端到端验收、完整长稿音频、PC-04 动态多图生产及完整联系表审核、PC-05 真实说书听音、北派 render chunks/final video、项目包恢复和全阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-02C 与 PC-03 `complete`，TTS-CAL `committed`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| TTS-CAL | `pc02c_worker` | 共享工作区 `dev@80922d8` | `apps/server/src/app.ts`、`job-store.ts`、`tts-provider.ts`、`tts-timeline-job.ts`、`episode-script-generation-job.ts`、新增 `tts-calibration-job*.ts` 及对应测试；`apps/web/src/production/audio/**`、`production/scripts/**`、`production/types.ts`、`production-logic.ts`、`ProductionWorkspace.tsx`、`apps/web/test/client-logic.test.ts` | Coordinator | 单写上述业务路径；不得触碰 Ledger、用户本地配置、database migration 或默认数据根 | `implementing` |
+| TTS-CAL | `pc02c_worker` 已释放 | 共享工作区 `dev@9086d10`；业务提交 `9086d10` | `apps/server/src/app.ts`、`job-store.ts`、`tts-provider.ts`、`tts-timeline-job.ts`、`episode-script-generation-job.ts`、新增 `tts-calibration-job*.ts` 及对应测试；`apps/web/src/production/audio/**`、`production/scripts/**`、`production/types.ts`、`production-logic.ts`、`ProductionWorkspace.tsx`、`apps/web/test/client-logic.test.ts` | Coordinator | 单写上述业务路径；不得触碰 Ledger、用户本地配置、database migration 或默认数据根 | `committed` |
 | PC-02C | Coordinator / Writer 已释放 | 第三版 `1f8261b:b370e11`；业务 `eec9857`，完成登记 `f6460de` | 无 | Coordinator | 本地 3101/5174 与隔离 Gate 已释放 | `complete` |
 | PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3`；业务 `ece2ac3`，完成登记 `cc294e7` | 无 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `complete` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
@@ -116,7 +116,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| TTS-CAL TTS 短样校准 | `implementing` | PC-02C complete；当前批准包装稿；现有 jobs/System.Speech/AudioStage | `pc02c_worker` / 上述单写路径 | - | - | 一次独立综合 Review；复用核心，仅新编排/接线 | 同一次独立综合 Review | 待 Worker 最小测试、根三门/diff、真实 System.Speech 双样/试听/选择/restart/API/UI Gate | - | selection 必须 append-only 复用 jobs 且被长稿 budget/TTS runtime 消费；不写 `audio_segments` 冒充正式 timeline |
+| TTS-CAL TTS 短样校准 | `committed` | PC-02C complete；当前批准包装稿；现有 jobs/System.Speech/AudioStage | `pc02c_worker` 已释放 | - | - | 一次独立综合 Review；复用核心，仅新编排/接线 | 同一次独立综合 Review | 根 typecheck/test/build GREEN，server 202 PASS/1权限SKIP、web 48 PASS；待真实 System.Speech 双样/试听/选择/restart/API/UI 端到端 Gate | `9086d1050c9ac28e23c08beb4170e182265f5998` | 真实 episode 双样端到端验收待做；selection 已 append-only 复用 jobs 且被长稿 budget/TTS runtime 消费，不写 `audio_segments` 冒充正式 timeline |
 | PC-02C 跨章骨架与长稿 | `complete` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:1f8261ba193b3caf94bb2b8de893439564f55408:b370e11f706301b957bf9bb49dd63d300ce1e09a` | `56230f413537d08887ea2e98402f3144b0193f2d` | PASS：同一次独立综合复审，无 P0-P2 finding | 同一次独立综合复审 | 根三门/diff GREEN，server 200 PASS/1权限SKIP、web46/46；真实 API/UI 成功/取消/失败/冷恢复与 React 19 unmount 回归 GREEN，console 0 | `eec9857dc00323b12e3fd2fb246c8df3c661dc38` | 无；进入 TTS 短样校准来源登记 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a` | `c38d990ca0d782d680684f9fa3c498d825b2e351` | PASS：chunk duration、隐式原始/解析起点、历史跳章同值 PUT 均关闭；95 项 94 PASS/1权限SKIP | PASS：封存稿件/父链/source/批准身份、推荐消费、React commit identity 均关闭；project-package 47 PASS/1 SKIP、web32/32 | 根三门/diff GREEN，server 180 PASS/1权限SKIP、web39/39；v12 21表恢复完整；默认空起点 `requestedStartChapterId=null`/needs_analysis 冷恢复与推荐子集消费冷恢复均 GREEN，console 0 | `ece2ac301e07fd7373336e88a1a188109a1aee72` | 外部 provider 重启映射受执行策略限制；默认 identity Gate 使用非网络注入且未调用模型，不影响既有真实推荐成功证据；进入 PC-02C |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
@@ -313,6 +313,7 @@ PC-02 当前 checkpoint：
 | 2026-07-26 PC-02C 第三版综合复审 | PASS，绑定 Ledger `56230f413537d08887ea2e98402f3144b0193f2d` 与第三版 revision；10/10 candidate blob 一致、0 mismatch，candidate/cached/working diff check 均 PASS。确认 layout cleanup 在真实 unmount commit 同步失效 route/job/mounted，routeKey guard 不误清新 route，React 19 pending POST→unmount→passive cleanup 前 resolve 回归零旧写回；首轮两个 P1、provider 最小分离、render identity 与 route 切换无退化。Reviewer 定向 server20/20、web39/39，Review 前后 HEAD/index/status 不变，无 P0-P2 finding。 |
 | 2026-07-26 PC-02C 完成 | 中文业务提交 `eec9857dc00323b12e3fd2fb246c8df3c661dc38`，恰好 10 个已审业务路径。提交后仅剩用户本地启动配置 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`docs/research/2026-07-24-north-tomb-video-project-summary.md`、`package.json`、`scripts/`，未清理、未暂存、未混入。PC-02C complete，立即进入 TTS 短样校准来源登记。 |
 | 2026-07-26 TTS-CAL 来源与写租约 | 五仓来源按冻结顺序登记并以中文提交 `80922d8` 推送；DramaClaw/Toonflow/LocalMiniDrama 无适配完整闭包，LumenX 只移植试听与显式应用分离，MuseDock 只移植真实 duration/CPS 与预算方法。Coordinator 核对现有 jobs 足以 append-only 保存生成与选择，无需 migration/新表。分配 `pc02c_worker` 单写最小闭包：两个真实 sample、持久选择/恢复/试听，以及长稿 measured budget 和完整 TTS voice/rate 消费；禁止第二套 TTS store、通用 provider/router、新依赖和用户本地路径。 |
+| 2026-07-26 TTS-CAL 实现与提交 | `pc02c_worker` 完成全部代码后停止，由接手 Coordinator 验证入库。新增 `tts-calibration-job.ts`（双 voice/rate 短样生成 + ffprobe 实测 duration/CPS + append-only 选择 Job），`tts-provider.ts` 提取 `probeSystemSpeechWav` 共享，`tts-timeline-job.ts` 完整 TTS 默认消费已选校准 voice/rate，`episode-script-generation-job.ts` measured 状态下复核身份一致性并驱动长稿字数预算；前端 AudioStage 双样试听/选择、ScriptStage measured CPS 锁定、types/production-logic/client-logic.test 全部跟进；API 新增 `GET /api/episodes/:episodeId/tts-calibration` 与 `:sampleId/audio`。根 typecheck/test/build 串行 GREEN，server 202 PASS/1权限SKIP、web 48 PASS、Vite 58 modules。业务提交 `feat(tts): 完成双样短样校准` `9086d1050c9ac28e23c08beb4170e182265f5998`；同批本地启动配置、研究文档、AGENTS.md 提交规范已分别独立提交，提交规范同步改为 Conventional Commits。TTS-CAL `committed`，待真实 episode 双样端到端验收后转 `complete`。 |
 
 ## 决策与剩余风险
 

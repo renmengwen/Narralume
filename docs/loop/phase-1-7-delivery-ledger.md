@@ -28,11 +28,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`4a9d776`（PC-02 已接通章节事件人工编辑持久任务；故事弧与分集接线实施中）。
+- 当前 HEAD：`a00318d`（PC-02 已接通章节事件人工编辑、故事弧与分集证据首版）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：`4a9d776` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 142 项中 141 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 12/12 PASS，Vite 44 modules；server health 与 web 均 HTTP 200。真实浏览器冷启动从完整 URL 恢复章节事件与 Job，console 0 error/0 warning。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
+- 最近验证：`a00318d` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` GREEN；server 142 项中 141 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 14/14 PASS，Vite 47 modules；server health 与 web 均 HTTP 200。真实浏览器从 Episode 1 空态保存 240 秒故事弧，持久证据 `7149..7169` 与 SHA-256 回读、重复保存幂等、刷新恢复、Episode 2 空态再回 1、console 0 error/0 warning 全部通过。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
 - 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：复用现有 Episode GET/PUT 接通故事弧与分集首版，随后依次接通稿件/批准、资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频；自动章节分析另按最小 provider + Job 闭包实施，不与人工事件入口混淆。通用控件优先官方 `shadcn/ui`，不形成参考项目运行时依赖。
+- 下一动作：由单写 Worker 按已完成的五级参考调查实施自动章节分析最小 provider + Job 闭包；随后依次接通稿件/批准、资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频。复用型首版不以严格独立 Review 阻塞，执行 Worker 最小测试、Coordinator 窄边界核对与真实工作流验收；不与人工事件入口混淆，不形成参考项目运行时依赖。
 
 ## 2026-07-25 产品闭环复开
 
@@ -69,17 +69,19 @@ PC-02 当前 checkpoint：
 
 - Web checkpoint：`05f9f23`（`前端：组件化接通章节与资产工作区`）；candidate index tree：`3d017ef328c35cdcaf8ed0070e6f37d350a9c053`。
 - 章节事件人工编辑提交：`4a9d776`（`前端：接通章节事件人工编辑任务`）。复用现有 `chapter_events_replace`、Job 轮询/取消与服务端证据校验；六类事件、绝对字节证据、多页完整读取、空列表清除、终态 Job 身份和切章竞态均进入同一前端闭包，不新增后端路由、表或依赖，也不冒充自动 LLM 分析。
+- 故事弧与分集提交：`a00318d`（`前端：接通故事弧与分集证据`）。复用现有 Episode GET/PUT 与章节事件证据快照；支持 URL 序号恢复、404 空态、180～300 秒故事弧、可选 recap/nextHook、证据选择、保存后 GET 回读、刷新恢复和重复保存幂等，不新增后端路由、表或依赖。
 - 已接通：七阶段注册与依赖/Job 类型映射，`book/series/stage/chapter/episode/asset/job` URL 恢复，非法阶段回退，Job hydrate-first/3 秒轮询/终态停止/卸载清理/取消/进度换算，章节列表、原文证据与结构化事件同屏，系列真实主资产/状态资产/别名、候选列表与图片、候选批准/淘汰、生图 Job、prompt 分段组装及候选切换竞态保护。
 - 模块化：`ProductionWorkspace.tsx` 仅保留领域状态组合、URL 恢复和阶段编排；章节、资产、候选、Prompt Builder、Job 轮询已进入独立组件/hook/纯函数。Tailwind/组件化纠偏完成，后端模块化与公共函数边界已由 `d796d34` 固化进 `AGENTS.md`。
-- 验证：`npm run typecheck`、`npm test`、`npm run build`、`git diff --check` 串行 GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP/0 FAIL，web 11/11 PASS；server health 与 web HTTP 200；Vite 43 modules。
+- 验证：`npm run typecheck`、`npm test`、`npm run build`、目标 `git diff --check` 串行 GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP/0 FAIL，web 14/14 PASS；server health 与 web HTTP 200；Vite 47 modules。
 - 浏览器验收：在真实《盗墓笔记》545 章书籍与 `盗墓笔记视觉说书` 系列中，选择第一章后创建地点事件 `长沙镖子岭`；GB18030 精确证据 `7149..7169` 读回为 `50年前，长沙镖子岭。`，Job `job_6a27dd89-bc6b-429b-9524-9fe030e79d32` succeeded；完整 URL 冷启动恢复表单与证据，console 0 error/0 warning。
-- 尚未接通：自动章节分析、故事弧与分集、忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
+- Episode 浏览器验收：第 1 集从 GET 404 空态保存 `第一集：血尸疑冢`、240 秒故事弧与 `长沙镖子岭` 事件；API/UI 回读同一章节、`7149..7169`、原文和 SHA-256；重复保存 sourceCount 仍为 1；整页刷新恢复；切 Episode 2 显示独立空态，再回 1 完整恢复；console 0 error/0 warning。
+- 尚未接通：自动章节分析、忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@4a9d776` | `apps/web/src/**`、`apps/web/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；必要的最小 API 查询接线另行登记；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
+| PC-02 | Coordinator | `dev@a00318d` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
@@ -280,6 +282,7 @@ PC-02 当前 checkpoint：
 - 2026-07-25：用户明确要求前端也优先复用参考项目逻辑、避免重复造轮子，并指出必须服从文档冻结优先级。PC-02 顺序固定为 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock`；第一版仅登记 MuseDock 的来源记录已由 `980721d` 纠正，尚未据此抽取业务代码。抽取前登记来源仓库、commit、源文件和改造说明；只迁移通用交互/编排方法，Narralume 保持独立运行时与自身产品合同。
 - 2026-07-25：用户进一步把“资产管理、生图提示词也必须先参考，不重复造轮子”确认为第一原则。该原则覆盖主/状态资产、别名、候选图、显式选择、联系表、prompt 结构/派生/版本/复用/审核；到具体能力前必须先按冻结优先级搜索并登记 `copy / port / reference-only` 决策。已冻结 Toonflow `bc61ec7` 的资产保存/生成/prompt 组织、LumenX `7a1213a` 的共享资产/变体/候选/Prompt Builder/assembly、MuseDock `3cf8d392` 的 provider/生成规划门禁；实现必须映射到 Narralume 已有 `master/state/alias`、append-only candidates、review revision 和 visual binding，禁止新造覆盖式影子资产库或把旁白直接当生图 prompt。
 - 2026-07-25：用户离线、休息或暂时不回复时，Coordinator 不等待确认，按当前 Ledger 恢复入口持续执行到 Phase 1-7 根目标真实完成；仅在缺少必须的外部授权、产品方向重大决策、不可逆或高风险外部操作、用户主观审美选择，或充分排查仍无法解除的真实阻塞时暂停提问。
+- 2026-07-25：用户把“当前大部分代码为复用，首版先做出来，不做严格 Review 阻塞推进”设为硬约束。复用现有 API、Job、恢复与媒体核心的接线默认只做 Worker 最小测试、Coordinator 窄边界核对和真实浏览器/API/文件验收；仅实际新增数据库迁移、耐久写核心、恢复原语、TTS/FFmpeg 等高风险核心时再恢复对应独立 Review。
 - Node 22 内置 `node:sqlite` 当前可用但仍输出实验性警告；首版不因此新增 ORM。
 - 项目包恢复的 no-replace 合同当前为 Windows-only；普通文件 symlink 负向测试因账户权限 `EPERM` SKIP，但 Junction 与硬链接拒绝真实 PASS。
 - 固定 P7 Gate 数据根依靠 Ledger 单写者排他，没有另加跨进程脚本锁；Windows 超长产物路径应使用 `\\?\` 前缀或 Node/FFprobe/FFmpeg，普通 PowerShell 可能产生不存在的假阴性。

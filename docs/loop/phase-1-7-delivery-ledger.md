@@ -26,11 +26,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`cea579b`（既有工程基线总账已推送 `origin/dev`）。
+- 当前 HEAD：`41c6e33`（PC-01 业务提交；产品闭环总账控制提交待本次独立登记）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：既有工程基线 typecheck/test/build、P7 技术 E2E、项目包/恢复与媒体合同均 GREEN；用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
-- 当前 Task：`PC-01` implementing；补齐书库到系列项目的前端“下一步”入口和系列工作台导航。
-- 下一动作：完成 `PC-01` 最小接线与浏览器验收，冻结综合 Review；随后自动进入 `PC-02`，不以单个提交或页面完成作为停止条件。
+- 当前 Task：`PC-02` implementing；优先复用 Narralume 现有 API 与参考项目中已验证的前端流程逻辑，接通固定阶段创作工作区。
+- 下一动作：只读盘点参考项目的阶段导航、任务状态、恢复与审核交互，先登记来源仓库/commit/源文件/改造说明，再按 Narralume 现有合同做最小接线；不形成运行时依赖。
 
 ## 2026-07-25 产品闭环复开
 
@@ -47,17 +47,27 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 | Task | 状态 | 范围 | 验收边界 |
 | --- | --- | --- | --- |
-| PC-01 前端下一步与系列工作台 | `implementing` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
-| PC-02 固定阶段创作工作区 | `queued` | 接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染现有 API；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代 |
+| PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
+| PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
 | PC-03 字幕短句与可读性 | `queued` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 实际 1080×1920 帧无裁切，SRT/ASS 与音频时间一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 补视觉描述/提示词、资产匹配、8～15 张不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面，正文节奏不机械 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
 | PC-06 北派真实样片与最终复验 | `queued` | 真实北派原文、第一人称故事弧、人工稿件/图片/整片批准、项目包恢复 | 内容、声音、字幕、画面、媒体与恢复全部通过后才恢复根目标 `complete` |
 
+PC-01 完成证据：
+
+- Candidate：首版 `git-index-tree-v1:142d167:875deac317717c4e5b9c05038eb8c53fc86612a4`；综合 Review 发现刷新恢复后返回书库会形成“已选书但章节未加载”的伪状态，首版失效。
+- 最终 Candidate：`git-index-tree-v1:142d167:6173504c314afef6978b3e526195f2444e9ae5e5`；仅四个 web 业务文件，用户本地启动配置未混入。
+- 综合 Review：PASS；绑定最终 candidate。复审覆盖 PC-01 规格、现有 series API 合同、中文 loading/成功/失败状态、防重复、URL 恢复与刷新后返回一致性，无新增 finding。
+- 浏览器验收：`http://127.0.0.1:5174/`；未选书按钮禁用，选择《盗墓笔记》后启用；创建/复用 `盗墓笔记视觉说书`，URL 含 `book/series`；显示七个固定阶段；刷新恢复、返回书库和修复后的未选状态均 PASS；控制台 0 error/warning。后端 `http://127.0.0.1:3101/api/health` HTTP 200。
+- 验证：提交前两轮全量 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP，web 7/7 PASS。
+- 业务提交：`41c6e33`（`前端：接通书库到系列工作台`）。剩余风险：固定阶段仍为入口骨架，由 PC-02 接通真实生产 API。
+
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| PC-02 | Coordinator | `dev@41c6e33` | 待来源盘点后登记最小前端/API 接线路径；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
@@ -255,6 +265,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。
 - 2026-07-25：用户授权后续生图、多模态和配音模型真实测试只读 `D:\code3\MuseDock` 中已有的本机配置与调用合同并直接执行，不因此普通配置问题暂停提问；MuseDock 仍不得成为 Narralume 运行时依赖，密钥/账号不得进入代码、提交、Ledger 或输出。
+- 2026-07-25：用户明确要求前端也优先复用参考项目逻辑、避免重复造轮子。PC-02 起先只读比较参考实现，抽取前登记来源仓库、commit、源文件和改造说明；只迁移通用交互/编排方法，Narralume 保持独立运行时与自身产品合同。
 - 2026-07-25：用户离线、休息或暂时不回复时，Coordinator 不等待确认，按当前 Ledger 恢复入口持续执行到 Phase 1-7 根目标真实完成；仅在缺少必须的外部授权、产品方向重大决策、不可逆或高风险外部操作、用户主观审美选择，或充分排查仍无法解除的真实阻塞时暂停提问。
 - Node 22 内置 `node:sqlite` 当前可用但仍输出实验性警告；首版不因此新增 ORM。
 - 项目包恢复的 no-replace 合同当前为 Windows-only；普通文件 symlink 负向测试因账户权限 `EPERM` SKIP，但 Junction 与硬链接拒绝真实 PASS。

@@ -32,48 +32,4 @@
 
 ## Git 提交信息规范
 
-所有提交信息严格遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范。违反规范的提交不得入仓。Coordinator 在冻结 candidate 前必须复核提交信息是否符合本规范。
-
-### 格式
-
-`<type>[(scope)]: <description>`
-
-- type 与 description 之间使用英文半角冒号加一个空格 `: `。
-- type 使用下方固定英文标识之一，不得自创、不得用中文。
-- scope 可选，用于标识改动范围（模块/包名），使用英文小写；无明确范围时省略。
-- description 使用中文，简洁说明本次提交做了什么。
-
-### type 取值
-
-| type | 用途 |
-|---|---|
-| `feat` | 新功能（用户可感知的新能力） |
-| `fix` | bug 修复 |
-| `docs` | 文档变更（README、研究文档、设计文档、AGENTS.md 等） |
-| `style` | 代码格式（不影响逻辑：空白、分号、格式化） |
-| `refactor` | 重构（既非新增功能也非修复） |
-| `perf` | 性能优化 |
-| `test` | 测试相关（新增/修改测试用例） |
-| `build` | 构建系统或依赖变更（package.json、tsconfig、vite.config、端口、启动脚本等） |
-| `ci` | CI 配置 |
-| `chore` | 杂项（不属以上任何类别的常规任务） |
-| `revert` | 回滚某次提交 |
-
-### 规则
-
-1. **单一职责**：一个提交只做一件事，不混入无关改动。功能、文档、环境配置、研究记录、规范更新分别独立提交，禁止“顺手带上”。
-2. **业务与总账分离**：业务代码改动与 Delivery Ledger 控制改动不在同一提交。
-3. **本地配置独立提交**：端口、开发脚本、proxy 等本地环境改动用 `build` 单独提交，不混入 `feat`/`fix`。
-4. **描述要求**：description 说明“做了什么”，禁止 `update`、`fix`、`wip`、`misc` 等无信息量描述，禁止仅列文件名。
-5. **不携带未授权改动**：提交前确认 `git status --short`，只提交本提交边界内的文件；覆盖、清理或混入他人未提交改动视为破坏协作。
-6. **提交前门禁**：业务提交前串行通过 `npm run typecheck`、`npm test`、`npm run build`；纯 `docs`/`build`/`chore` 可豁免测试，但仍需确认未触碰业务代码。
-
-### 示例
-
-- `feat(tts): 完成双样短样校准`
-- `fix(server): 修复校准选择未持久化的问题`
-- `docs: 登记抽帧证据记录`
-- `build: 统一本地开发端口与启动脚本`
-- `docs: 明确提交信息规范为 Conventional Commits`
-- `refactor(audio): 提取 probeSystemSpeechWav 为共享方法`
-- `test(tts): 补充校准 Job 的边界用例`
+提交信息遵循 Conventional Commits：`<type>[(scope)]: <description>`。type 用英文（feat/fix/docs/style/refactor/perf/test/build/ci/chore/revert），description 用中文。一个提交只做一件事，业务/总账/环境配置分别独立提交。

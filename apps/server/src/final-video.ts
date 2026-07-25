@@ -59,6 +59,7 @@ interface FinalVideoDependencies {
   publishLstat: typeof lstat;
   publishRenameSync: typeof renameSync;
   publishRemoveSync: typeof rmSync;
+  recoverRemoveSync: typeof rmSync;
 }
 
 interface PublishedDirectoryInspection {
@@ -217,6 +218,7 @@ async function recoverPublish(
   probe: typeof probeNineSixteenVideo,
   publishLstat: typeof lstat,
   publishRenameNow: typeof renameSync,
+  recoverRemoveNow: typeof rmSync,
 ) {
   if (!await exists(backup, publishLstat)) return;
   const expectedBackup = await validPublishedPair(dataRoot, backup, manifestBase, finalRelativePath, probe, publishLstat);
@@ -253,7 +255,7 @@ async function recoverPublish(
       targetCaptured = false;
       assertSameDirectorySync(target, targetInspection.identity);
       assertSameDirectorySync(backupQuarantine, backupInspection.identity);
-      rmSync(backupQuarantine, { recursive: true });
+      recoverRemoveNow(backupQuarantine, { recursive: true });
       backupCaptured = false;
       return;
     }
@@ -268,11 +270,17 @@ async function recoverPublish(
     backupCaptured = false;
     assertSameDirectorySync(target, backupInspection.identity);
   } catch (error) {
-    if (targetCaptured && !existsSync(target)) {
-      try { renameSync(targetQuarantine, target); targetCaptured = false; } catch { /* 保留隔离目录以便人工恢复。 */ }
+    if (targetCaptured) {
+      try {
+        if (existsSync(target)) throw new Error("最终导出目标已存在，不能回滚隔离目录");
+        renameSync(targetQuarantine, target); targetCaptured = false;
+      } catch { /* 保留隔离目录以便人工恢复。 */ }
     }
-    if (backupCaptured && !existsSync(backup)) {
-      try { renameSync(backupQuarantine, backup); backupCaptured = false; } catch { /* 保留隔离目录以便人工恢复。 */ }
+    if (backupCaptured) {
+      try {
+        if (existsSync(backup)) throw new Error("最终导出备份已存在，不能回滚隔离目录");
+        renameSync(backupQuarantine, backup); backupCaptured = false;
+      } catch { /* 保留隔离目录以便人工恢复。 */ }
     }
     throw error;
   }
@@ -311,6 +319,7 @@ export async function exportFinalVideo(
   const publishLstat = dependencies.publishLstat ?? lstat;
   const publishRenameNow = dependencies.publishRenameSync ?? renameSync;
   const publishRemoveNow = dependencies.publishRemoveSync ?? rmSync;
+  const recoverRemoveNow = dependencies.recoverRemoveSync ?? rmSync;
   const snapshot = loadRenderPlanSnapshot(database, input.episodeId, input.timelineHash);
   const rows = database.prepare(
     `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
@@ -344,7 +353,7 @@ export async function exportFinalVideo(
   await assertSafeDirectoryIfPresent(dataRoot, target);
   await assertSafeDirectoryIfPresent(dataRoot, `${target}.backup`);
   await recoverPublish(dataRoot, target, `${target}.backup`, { ...manifestBase, exportHash }, finalRelativePath,
-    probe, publishLstat, publishRenameNow);
+    probe, publishLstat, publishRenameNow, recoverRemoveNow);
 
   const validatedChunks = [];
   for (const row of rows) {

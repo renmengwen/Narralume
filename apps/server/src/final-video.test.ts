@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, renameSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -214,6 +214,74 @@ test("崩溃残留只按完整 pair 恢复且非 ENOENT 与清理失败原样返
       }) as typeof lstat }), /stat-denied/u);
     assert.equal((await stat(target)).isDirectory(), true);
     assert.equal((await stat(backup)).isDirectory(), true);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("quarantine 清理前 EACCES 会保留完整 target 并回滚 backup", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  try {
+    const first = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    const target = dirname(first.finalPath);
+    const backup = `${target}.backup`;
+    const video = await readFile(first.finalPath);
+    const manifest = await readFile(first.manifestPath);
+    await cp(target, backup, { recursive: true });
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, recoverRemoveSync: () => {
+        throw Object.assign(new Error("cleanup-eacces"), { code: "EACCES" });
+      } }), /cleanup-eacces/u);
+    assert.deepEqual(await readFile(first.finalPath), video);
+    assert.deepEqual(await readFile(first.manifestPath), manifest);
+    assert.deepEqual(await readFile(join(backup, "video.mp4")), video);
+    assert.deepEqual(await readFile(join(backup, "manifest.json")), manifest);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("quarantine 部分删除且 backup 竞争会保留完整 target 与明确残余", async () => {
+  const current = await fixture();
+  const base = {
+    probe: async (path: string) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+    run: async (_command: string, _args: string[], options?: { cwd?: string }) => {
+      if (!options?.cwd) throw new Error("missing cwd");
+      await writeFile(join(options.cwd, "final.tmp.mp4"), "final-video"); return "";
+    },
+  };
+  let quarantine = "";
+  try {
+    const first = await exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, base);
+    const target = dirname(first.finalPath);
+    const backup = `${target}.backup`;
+    const video = await readFile(first.finalPath);
+    const manifest = await readFile(first.manifestPath);
+    await cp(target, backup, { recursive: true });
+    await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, recoverRemoveSync: (path) => {
+        quarantine = path.toString();
+        rmSync(join(quarantine, "manifest.json"));
+        mkdirSync(backup);
+        throw new Error("cleanup-partial");
+      } }), /cleanup-partial/u);
+    assert.deepEqual(await readFile(first.finalPath), video);
+    assert.deepEqual(await readFile(first.manifestPath), manifest);
+    assert.equal((await stat(backup)).isDirectory(), true, "竞争 backup 阻止隔离目录回滚");
+    assert.equal((await stat(quarantine)).isDirectory(), true, "部分删除的隔离目录必须保留为失败现场");
+    assert.deepEqual(await readFile(join(quarantine, "video.mp4")), video);
+    await assert.rejects(stat(join(quarantine, "manifest.json")), { code: "ENOENT" });
   } finally {
     current.connection.close();
     await rm(current.dataRoot, { recursive: true, force: true });

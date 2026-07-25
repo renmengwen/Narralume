@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { renameSync } from "node:fs";
+import { mkdirSync, renameSync } from "node:fs";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -198,10 +198,10 @@ test("崩溃残留只按完整 pair 恢复且非 ENOENT 与清理失败原样返
 
     await cp(target, backup, { recursive: true });
     await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
-      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRemove: async (path, options) => {
-        if (path === backup) throw Object.assign(new Error("cleanup-denied"), { code: "EACCES" });
-        await rm(path, options);
-      } }), /cleanup-denied/u);
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRenameSync: (from, to) => {
+        if (from.toString().includes(".recover-") && to === target) throw new Error("restore-denied");
+        renameSync(from, to);
+      } }), /restore-denied/u);
     assert.equal((await stat(target)).isDirectory(), true);
     assert.equal((await stat(backup)).isDirectory(), true);
     await rm(backup, { recursive: true });
@@ -236,15 +236,16 @@ test("target 验证后被替换时不得删除唯一有效 backup", async () => 
     const backup = `${target}.backup`;
     const validatedTarget = `${target}.validated`;
     await cp(target, backup, { recursive: true });
-    let targetStats = 0;
+    let replaced = false;
     await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
-      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishLstat: (async (path: string) => {
-        if (path === target && ++targetStats === 4) {
-          await rename(target, validatedTarget);
-          await mkdir(target);
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRenameSync: (from, to) => {
+        if (from.toString().startsWith(`${target}.recover-`) && to === target && !replaced) {
+          replaced = true;
+          renameSync(from, validatedTarget);
+          mkdirSync(from);
         }
-        return lstat(path);
-      }) as typeof lstat }), /发布目录在验证后已被替换/u);
+        renameSync(from, to);
+      } }), /捕获目录已被替换/u);
     assert.equal((await stat(backup)).isDirectory(), true, "有效 backup 不得被竞态删除");
     assert.equal((await stat(validatedTarget)).isDirectory(), true);
   } finally {
@@ -269,17 +270,18 @@ test("backup-only 验证后被替换时不得恢复未验证目录", async () =>
     const backup = `${target}.backup`;
     const validatedBackup = `${backup}.validated`;
     await rename(target, backup);
-    let backupStats = 0;
+    let replaced = false;
     await assert.rejects(exportFinalVideo(current.connection.database, current.dataRoot,
-      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishLstat: (async (path: string) => {
-        if (path === backup && ++backupStats === 4) {
-          await rename(backup, validatedBackup);
-          await mkdir(backup);
+      { episodeId: "episode", timelineHash: TIMELINE }, { ...base, publishRenameSync: (from, to) => {
+        if (from.toString().startsWith(`${backup}.recover-`) && to === target && !replaced) {
+          replaced = true;
+          renameSync(from, validatedBackup);
+          mkdirSync(from);
         }
-        return lstat(path);
-      }) as typeof lstat }), /发布目录在验证后已被替换/u);
-    await assert.rejects(stat(target), { code: "ENOENT" });
-    assert.equal((await stat(backup)).isDirectory(), true, "替换后的未验证 backup 不得成为 target");
+        renameSync(from, to);
+      } }), /捕获目录已被替换/u);
+    assert.equal((await stat(target)).isDirectory(), true, "替换后的未验证目录只能留作失败现场");
+    await assert.rejects(stat(backup), { code: "ENOENT" });
     assert.equal((await stat(validatedBackup)).isDirectory(), true);
   } finally {
     current.connection.close();
@@ -345,7 +347,7 @@ test("最后一次分片复验返回取消时不进入目录切换并清理 stag
             if (signal?.aborted && path !== current.chunkPath) throw new JobCancelledError();
             return result;
           },
-          publishRename: async (from, to) => { publishRenames += 1; await rename(from, to); },
+          publishRenameSync: (from, to) => { publishRenames += 1; renameSync(from, to); },
         });
     } catch (error) { rejected = error; }
     assert.ok(rejected instanceof JobCancelledError);
@@ -389,7 +391,7 @@ test("最后异步复验期间撤回批准会拒绝发布并保留旧 pair", asy
           }
           return result;
         },
-        publishRename: async (from, to) => { publishRenames += 1; await rename(from, to); },
+        publishRenameSync: (from, to) => { publishRenames += 1; renameSync(from, to); },
       }), /未人工批准|批准/);
     assert.equal(sourceProbes, 2, "撤回必须发生在最终异步文件复验期间");
     assert.equal(publishRenames, 0, "批准身份变化后不能进入目录切换");

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, createReadStream, renameSync, rmSync } from "node:fs";
+import { constants, createReadStream, lstatSync, renameSync, rmSync } from "node:fs";
 import { copyFile, lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -56,8 +56,6 @@ export interface FinalVideoManifest {
 interface FinalVideoDependencies {
   run: typeof runVideoProcess;
   probe: typeof probeNineSixteenVideo;
-  publishRename: typeof rename;
-  publishRemove: typeof rm;
   publishLstat: typeof lstat;
   publishRenameSync: typeof renameSync;
   publishRemoveSync: typeof rmSync;
@@ -161,15 +159,6 @@ function sameDirectory(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-async function assertSameDirectory(
-  path: string,
-  identity: PublishedDirectoryInspection["identity"],
-  publishLstat: typeof lstat,
-) {
-  const current = await directoryIdentity(path, publishLstat);
-  if (!sameDirectory(current, identity)) throw new Error("最终导出发布目录在验证后已被替换");
-}
-
 async function validPublishedPair(
   dataRoot: string,
   directory: string,
@@ -205,6 +194,20 @@ async function validPublishedPair(
   return { identity: after, valid };
 }
 
+function existsSync(path: string) {
+  try { lstatSync(path); return true; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function assertSameDirectorySync(path: string, identity: PublishedDirectoryInspection["identity"]) {
+  const info = lstatSync(path);
+  if (!info.isDirectory() || info.isSymbolicLink() || info.dev !== identity.dev || info.ino !== identity.ino) {
+    throw new Error("最终导出捕获目录已被替换");
+  }
+}
+
 async function recoverPublish(
   dataRoot: string,
   target: string,
@@ -212,35 +215,67 @@ async function recoverPublish(
   manifestBase: Omit<FinalVideoManifest, "finalVideo">,
   finalRelativePath: string,
   probe: typeof probeNineSixteenVideo,
-  publishRename: typeof rename,
-  publishRemove: typeof rm,
   publishLstat: typeof lstat,
+  publishRenameNow: typeof renameSync,
 ) {
   if (!await exists(backup, publishLstat)) return;
-  const backupInspection = await validPublishedPair(dataRoot, backup, manifestBase, finalRelativePath, probe, publishLstat);
-  if (!backupInspection) return;
-  if (!await exists(target, publishLstat)) {
-    if (!backupInspection.valid) throw new Error("最终导出备份不完整，拒绝恢复");
-    if (await exists(target, publishLstat)) throw new Error("最终导出目标在恢复前已出现");
-    await assertSameDirectory(backup, backupInspection.identity, publishLstat);
-    await publishRename(backup, target);
-    return;
+  const expectedBackup = await validPublishedPair(dataRoot, backup, manifestBase, finalRelativePath, probe, publishLstat);
+  if (!expectedBackup) return;
+  const expectedTarget = await validPublishedPair(dataRoot, target, manifestBase, finalRelativePath, probe, publishLstat);
+  const suffix = `.recover-${process.pid}-${randomUUID()}`;
+  const backupQuarantine = `${backup}${suffix}`;
+  const targetQuarantine = `${target}${suffix}`;
+  let backupCaptured = false;
+  let targetCaptured = false;
+  try {
+    publishRenameNow(backup, backupQuarantine);
+    backupCaptured = true;
+    if (existsSync(target)) {
+      publishRenameNow(target, targetQuarantine);
+      targetCaptured = true;
+    }
+    const backupInspection = await validPublishedPair(
+      dataRoot, backupQuarantine, manifestBase, finalRelativePath, probe, publishLstat,
+    );
+    const targetInspection = targetCaptured
+      ? await validPublishedPair(dataRoot, targetQuarantine, manifestBase, finalRelativePath, probe, publishLstat)
+      : null;
+    if (!backupInspection) throw new Error("最终导出备份捕获后消失");
+    if (!sameDirectory(expectedBackup.identity, backupInspection.identity) ||
+        Boolean(expectedTarget) !== Boolean(targetInspection) ||
+        (expectedTarget && targetInspection && !sameDirectory(expectedTarget.identity, targetInspection.identity))) {
+      throw new Error("最终导出发布目录在捕获前已被替换");
+    }
+
+    if (targetInspection?.valid) {
+      assertSameDirectorySync(targetQuarantine, targetInspection.identity);
+      publishRenameNow(targetQuarantine, target);
+      targetCaptured = false;
+      assertSameDirectorySync(target, targetInspection.identity);
+      assertSameDirectorySync(backupQuarantine, backupInspection.identity);
+      rmSync(backupQuarantine, { recursive: true });
+      backupCaptured = false;
+      return;
+    }
+    if (!backupInspection.valid) throw new Error("最终导出目标与备份均不完整，拒绝恢复");
+    if (targetInspection) {
+      assertSameDirectorySync(targetQuarantine, targetInspection.identity);
+      rmSync(targetQuarantine, { recursive: true });
+      targetCaptured = false;
+    }
+    assertSameDirectorySync(backupQuarantine, backupInspection.identity);
+    publishRenameNow(backupQuarantine, target);
+    backupCaptured = false;
+    assertSameDirectorySync(target, backupInspection.identity);
+  } catch (error) {
+    if (targetCaptured && !existsSync(target)) {
+      try { renameSync(targetQuarantine, target); targetCaptured = false; } catch { /* 保留隔离目录以便人工恢复。 */ }
+    }
+    if (backupCaptured && !existsSync(backup)) {
+      try { renameSync(backupQuarantine, backup); backupCaptured = false; } catch { /* 保留隔离目录以便人工恢复。 */ }
+    }
+    throw error;
   }
-  const targetInspection = await validPublishedPair(dataRoot, target, manifestBase, finalRelativePath, probe, publishLstat);
-  if (!targetInspection) throw new Error("最终导出目标在恢复验证期间已消失");
-  if (targetInspection.valid) {
-    await assertSameDirectory(target, targetInspection.identity, publishLstat);
-    await assertSameDirectory(backup, backupInspection.identity, publishLstat);
-    await publishRemove(backup, { recursive: true });
-    return;
-  }
-  if (!backupInspection.valid) throw new Error("最终导出目标与备份均不完整，拒绝恢复");
-  await assertSameDirectory(backup, backupInspection.identity, publishLstat);
-  await assertSameDirectory(target, targetInspection.identity, publishLstat);
-  await publishRemove(target, { recursive: true });
-  if (await exists(target, publishLstat)) throw new Error("最终导出目标在恢复切换前已出现");
-  await assertSameDirectory(backup, backupInspection.identity, publishLstat);
-  await publishRename(backup, target);
 }
 
 function publishDirectorySync(
@@ -273,8 +308,6 @@ export async function exportFinalVideo(
 ) {
   const run = dependencies.run ?? runVideoProcess;
   const probe = dependencies.probe ?? probeNineSixteenVideo;
-  const publishRename = dependencies.publishRename ?? rename;
-  const publishRemove = dependencies.publishRemove ?? rm;
   const publishLstat = dependencies.publishLstat ?? lstat;
   const publishRenameNow = dependencies.publishRenameSync ?? renameSync;
   const publishRemoveNow = dependencies.publishRemoveSync ?? rmSync;
@@ -311,7 +344,7 @@ export async function exportFinalVideo(
   await assertSafeDirectoryIfPresent(dataRoot, target);
   await assertSafeDirectoryIfPresent(dataRoot, `${target}.backup`);
   await recoverPublish(dataRoot, target, `${target}.backup`, { ...manifestBase, exportHash }, finalRelativePath,
-    probe, publishRename, publishRemove, publishLstat);
+    probe, publishLstat, publishRenameNow);
 
   const validatedChunks = [];
   for (const row of rows) {

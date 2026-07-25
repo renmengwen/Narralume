@@ -23,14 +23,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 2026-07-24 用户再次确认首版以复用代码为主、边界不细拆且减少 Review：只有真正新造高风险核心才双 Review；大量复用已验证核心并做迁移接线、编排和真实门禁时只执行一次独立综合 Review；低风险 Coordinator 自审。Phase 结束保留阶段门禁，但最后一个 Task 的综合 Review 已覆盖全阶段真实工作流时可合并，不重复审查。
 
+2026-07-25 用户进一步明确为首版硬约束：当前产品闭环大部分复用既有 API、Job、恢复与媒体核心，先完成可用首版，不以严格 Review 阻塞连续实现。此类前端编排/接线只保留 Worker 最小测试、Coordinator 边界核对和真实工作流验收；只有实际新增数据库迁移、耐久写核心、恢复原语、TTS/FFmpeg 等高风险核心时才恢复严格独立 Review。
+
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`05f9f23`（PC-02 已组件化接通章节读取、资产/候选操作、Job 轮询取消和 URL 恢复；尚未完成连续生产验收）。
+- 当前 HEAD：`4a9d776`（PC-02 已接通章节事件人工编辑持久任务；故事弧与分集接线实施中）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：`05f9f23` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 142 项中 141 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 11/11 PASS，Vite 43 modules；server health 与 web 均 HTTP 200。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
+- 最近验证：`4a9d776` 集成态串行 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 142 项中 141 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 12/12 PASS，Vite 44 modules；server health 与 web 均 HTTP 200。真实浏览器冷启动从完整 URL 恢复章节事件与 Job，console 0 error/0 warning。P7 技术 E2E、项目包/恢复与媒体合同证据继续有效，但用户复验确认该 P7 产物仅为技术贯通片，不能作为产品样片验收。
 - 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：补最新 PC-02 UI 的真实浏览器验收；Codex 内置浏览器若仍受 localhost URL policy 限制则保留待验，不伪造通过。随后先按冻结顺序取证并接通章节事件编辑/生成入口，再依次接通故事弧与分集、稿件/批准、资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频；通用控件优先官方 `shadcn/ui`，不形成参考项目运行时依赖。
+- 下一动作：复用现有 Episode GET/PUT 接通故事弧与分集首版，随后依次接通稿件/批准、资产缺口、TTS/字幕、视觉段/联系表、分片与最终视频；自动章节分析另按最小 provider + Job 闭包实施，不与人工事件入口混淆。通用控件优先官方 `shadcn/ui`，不形成参考项目运行时依赖。
 
 ## 2026-07-25 产品闭环复开
 
@@ -66,17 +68,18 @@ PC-01 完成证据：
 PC-02 当前 checkpoint：
 
 - Web checkpoint：`05f9f23`（`前端：组件化接通章节与资产工作区`）；candidate index tree：`3d017ef328c35cdcaf8ed0070e6f37d350a9c053`。
+- 章节事件人工编辑提交：`4a9d776`（`前端：接通章节事件人工编辑任务`）。复用现有 `chapter_events_replace`、Job 轮询/取消与服务端证据校验；六类事件、绝对字节证据、多页完整读取、空列表清除、终态 Job 身份和切章竞态均进入同一前端闭包，不新增后端路由、表或依赖，也不冒充自动 LLM 分析。
 - 已接通：七阶段注册与依赖/Job 类型映射，`book/series/stage/chapter/episode/asset/job` URL 恢复，非法阶段回退，Job hydrate-first/3 秒轮询/终态停止/卸载清理/取消/进度换算，章节列表、原文证据与结构化事件同屏，系列真实主资产/状态资产/别名、候选列表与图片、候选批准/淘汰、生图 Job、prompt 分段组装及候选切换竞态保护。
 - 模块化：`ProductionWorkspace.tsx` 仅保留领域状态组合、URL 恢复和阶段编排；章节、资产、候选、Prompt Builder、Job 轮询已进入独立组件/hook/纯函数。Tailwind/组件化纠偏完成，后端模块化与公共函数边界已由 `d796d34` 固化进 `AGENTS.md`。
 - 验证：`npm run typecheck`、`npm test`、`npm run build`、`git diff --check` 串行 GREEN；server 142 项中 141 PASS/1 symlink 权限 SKIP/0 FAIL，web 11/11 PASS；server health 与 web HTTP 200；Vite 43 modules。
-- 浏览器边界：PC-01 的真实浏览器验收继续有效；`05f9f23` 新增 PC-02 UI 尚未完成真实点击复验。若 Codex 内置浏览器仍被 localhost URL policy 阻断，只登记工具限制，不记为产品失败或验收通过。
-- 尚未接通：章节事件编辑/生成、故事弧与分集、忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
+- 浏览器验收：在真实《盗墓笔记》545 章书籍与 `盗墓笔记视觉说书` 系列中，选择第一章后创建地点事件 `长沙镖子岭`；GB18030 精确证据 `7149..7169` 读回为 `50年前，长沙镖子岭。`，Job `job_6a27dd89-bc6b-429b-9524-9fe030e79d32` succeeded；完整 URL 冷启动恢复表单与证据，console 0 error/0 warning。
+- 尚未接通：自动章节分析、故事弧与分集、忠实稿/包装稿/人工批准撤回、上传与生图后候选自动刷新、prompt 恢复/版本/派生来源、审核 note、视觉段显式绑定/联系表、TTS/字幕、render chunks/final video，以及所有阶段连续真实工作流验收。PC-02 保持 `implementing`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02 | Coordinator | `dev@05f9f23` | `apps/web/src/**`、`apps/web/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；必要的最小 API 查询接线另行登记；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
+| PC-02 | Coordinator | `dev@4a9d776` | `apps/web/src/**`、`apps/web/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；必要的最小 API 查询接线另行登记；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根 | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

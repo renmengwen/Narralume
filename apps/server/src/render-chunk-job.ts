@@ -10,6 +10,7 @@ import { probeNineSixteenVideo, runVideoProcess } from "./ffmpeg-video.js";
 import { type JobExecutionContext, type JobHandler } from "./job-worker.js";
 import { renderNineSixteenTemplate, type NineSixteenScene } from "./nine-sixteen-template.js";
 import { requireApprovedScriptForProduction } from "./script-approval-store.js";
+import { renderAss } from "./subtitle-timeline.js";
 import { assertVisualPlanReady, type VisualSegmentRecord } from "./visual-segment-store.js";
 
 export const RENDER_CHUNKS_JOB_TYPE = "render_chunks";
@@ -261,18 +262,10 @@ export function renderChunkIdentity(input: {
   return { identity, renderHash: sha256(JSON.stringify(identity)) };
 }
 
-function assTimestamp(ms: number, end: boolean) {
-  const value = end ? Math.ceil(ms / 10) : Math.floor(ms / 10);
-  return `${Math.floor(value / 360_000)}:${String(Math.floor(value / 6_000) % 60).padStart(2, "0")}:` +
-    `${String(Math.floor(value / 100) % 60).padStart(2, "0")}.${String(value % 100).padStart(2, "0")}`;
-}
-
 function localAss(cues: CueRow[], startMs: number) {
-  const events = cues.map((cue) => {
-    const text = cue.text.replace(/[{}]/gu, (character) => character === "{" ? "｛" : "｝").replace(/\r?\n/gu, "\\N");
-    return `Dialogue: 0,${assTimestamp(cue.start_ms - startMs, false)},${assTimestamp(cue.end_ms - startMs, true)},Default,,0,0,0,,${text}`;
-  }).join("\n");
-  return `[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,OutlineColour,BorderStyle,Outline,Alignment,MarginL,MarginR,MarginV\nStyle: Default,Microsoft YaHei,54,&H00FFFFFF,&H80000000,1,2,2,80,80,120\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n${events}\n`;
+  return renderAss(cues.map((cue) => ({
+    index: cue.cue_index, startMs: cue.start_ms, endMs: cue.end_ms, text: cue.text,
+  })), startMs);
 }
 
 async function concatAudio(paths: string[], outputPath: string, signal: AbortSignal) {

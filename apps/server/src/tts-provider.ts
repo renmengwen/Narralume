@@ -31,10 +31,11 @@ export interface SystemSpeechInput {
   signal?: AbortSignal;
   voice?: string;
   rate?: number;
+  contractVersion?: string;
 }
 
 export function systemSpeechInputHash(input: Pick<SystemSpeechInput,
-  "text" | "scriptVersionId" | "contentHash" | "voice" | "rate">) {
+  "text" | "scriptVersionId" | "contentHash" | "voice" | "rate" | "contractVersion">) {
   const voice = input.voice ?? "Microsoft Huihui Desktop";
   const rate = input.rate ?? 0;
   return createHash("sha256").update(JSON.stringify({
@@ -44,6 +45,7 @@ export function systemSpeechInputHash(input: Pick<SystemSpeechInput,
     text: input.text,
     voice,
     rate,
+    contractVersion: input.contractVersion,
   })).digest("hex");
 }
 

@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { JobCancelledError, type JobExecutionContext, type JobHandler } from "./job-worker.js";
 import { requireApprovedScriptForProduction } from "./script-approval-store.js";
 import { getScriptVersion } from "./script-version-store.js";
+import { renderSubtitleFiles, splitNarration, SUBTITLE_TIMELINE_CONTRACT } from "./subtitle-timeline.js";
 import { synthesizeSystemSpeech, systemSpeechInputHash, TtsCancelledError } from "./tts-provider.js";
 
 export const TTS_TIMELINE_JOB_TYPE = "tts_timeline";
@@ -27,7 +28,8 @@ interface TimelineDependencies {
 
 interface SegmentArtifact extends AudioProbe {
   index: number;
-  text: string;
+  speechText: string;
+  subtitleText: string;
   inputHash: string;
   relativePath: string;
   fileHash: string;
@@ -115,21 +117,6 @@ function taskPayload(value: unknown) {
   return { episodeId: payload.episodeId, voice: voice.trim(), rate: rate as number };
 }
 
-function srtTimestamp(ms: number) {
-  const hours = Math.floor(ms / 3_600_000);
-  const minutes = Math.floor(ms / 60_000) % 60;
-  const seconds = Math.floor(ms / 1_000) % 60;
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")},${String(ms % 1_000).padStart(3, "0")}`;
-}
-
-function assTimestamp(ms: number, end: boolean) {
-  const centiseconds = end ? Math.ceil(ms / 10) : Math.floor(ms / 10);
-  const hours = Math.floor(centiseconds / 360_000);
-  const minutes = Math.floor(centiseconds / 6_000) % 60;
-  const seconds = Math.floor(centiseconds / 100) % 60;
-  return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(centiseconds % 100).padStart(2, "0")}`;
-}
-
 async function durableText(path: string, content: string) {
   try {
     if (await readFile(path, "utf8") !== content) throw new Error("已存在的字幕产物与时间轴身份不一致");
@@ -148,18 +135,6 @@ async function durableText(path: string, content: string) {
   }
 }
 
-function subtitles(cues: Array<{ index: number; text: string; startMs: number; endMs: number }>) {
-  const srt = cues.map((cue) =>
-    `${cue.index + 1}\n${srtTimestamp(cue.startMs)} --> ${srtTimestamp(cue.endMs)}\n${cue.text}\n`,
-  ).join("\n");
-  const events = cues.map((cue) => {
-    const text = cue.text.replace(/[{}]/g, (character) => character === "{" ? "｛" : "｝").replace(/\r?\n/g, "\\N");
-    return `Dialogue: 0,${assTimestamp(cue.startMs, false)},${assTimestamp(cue.endMs, true)},Default,,0,0,0,,${text}`;
-  }).join("\n");
-  const ass = `[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,OutlineColour,BorderStyle,Outline,Alignment,MarginL,MarginR,MarginV\nStyle: Default,Microsoft YaHei,54,&H00FFFFFF,&H80000000,1,2,2,80,80,120\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n${events}\n`;
-  return { srt, ass };
-}
-
 export function createTtsTimelineJobHandler(
   database: DatabaseSync,
   dataRoot: string,
@@ -176,10 +151,11 @@ export function createTtsTimelineJobHandler(
     await mkdir(resolve(audioDirectory, "segments"), { recursive: true });
     const segments: SegmentArtifact[] = [];
 
-    for (const [index, paragraph] of script.paragraphs.entries()) {
+    const units = script.paragraphs.flatMap((paragraph) => splitNarration(paragraph.text));
+    for (const [index, unit] of units.entries()) {
       context.throwIfCancellationRequested();
-      const text = paragraph.text.trim();
-      const inputHash = systemSpeechInputHash({ text, scriptVersionId: script.id, contentHash: script.contentHash, voice, rate });
+      const text = unit.speechText;
+      const inputHash = systemSpeechInputHash({ text, scriptVersionId: script.id, contentHash: script.contentHash, voice, rate, contractVersion: SUBTITLE_TIMELINE_CONTRACT });
       const path = resolve(audioDirectory, "segments", `${inputHash}.wav`);
       const relativePath = relativeArtifactPath(dataRoot, path);
       const stored = database.prepare(
@@ -214,7 +190,7 @@ export function createTtsTimelineJobHandler(
           const controller = new AbortController();
           const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
           try {
-            await synthesize({ text, outputPath: path, scriptVersionId: script.id, contentHash: script.contentHash, voice, rate, signal: controller.signal });
+            await synthesize({ text, outputPath: path, scriptVersionId: script.id, contentHash: script.contentHash, voice, rate, contractVersion: SUBTITLE_TIMELINE_CONTRACT, signal: controller.signal });
           } catch (error) {
             if (error instanceof TtsCancelledError) throw new JobCancelledError();
             throw error;
@@ -225,25 +201,25 @@ export function createTtsTimelineJobHandler(
         }
       }
       if (!measured) throw new Error("音频段未生成有效探测结果");
-      segments.push({ index, text, inputHash, relativePath, fileHash: await sha256File(path), ...measured, reused });
-      context.reportProgress((index + 1) / (script.paragraphs.length + 1));
+      segments.push({ index, speechText: text, subtitleText: unit.subtitleText, inputHash, relativePath, fileHash: await sha256File(path), ...measured, reused });
+      context.reportProgress((index + 1) / (units.length + 1));
     }
 
     context.throwIfCancellationRequested();
     const timelineHash = createHash("sha256").update(JSON.stringify({
-      contract: "tts-timeline-v1", scriptVersionId: script.id, voice, rate,
+      contract: SUBTITLE_TIMELINE_CONTRACT, scriptVersionId: script.id, voice, rate,
       segments: segments.map(({ inputHash, fileHash, durationMs }) => ({ inputHash, fileHash, durationMs })),
     })).digest("hex");
     let cursor = 0;
     const cues = segments.map((segment) => {
       const startMs = cursor;
       cursor += segment.durationMs;
-      return { index: segment.index, text: segment.text, startMs, endMs: cursor };
+      return { index: segment.index, text: segment.subtitleText, startMs, endMs: cursor };
     });
     const totalDurationMs = cursor;
     const srtPath = resolve(audioDirectory, `${timelineHash}.srt`);
     const assPath = resolve(audioDirectory, `${timelineHash}.ass`);
-    const rendered = subtitles(cues);
+    const rendered = renderSubtitleFiles(cues);
     await durableText(srtPath, rendered.srt);
     await durableText(assPath, rendered.ass);
     context.throwIfCancellationRequested();
@@ -258,7 +234,7 @@ export function createTtsTimelineJobHandler(
           timeline_hash, segment_index, episode_id, script_version_id, text, provider_id, voice, rate,
           input_hash, relative_path, file_hash, bytes, duration_ms, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        timelineHash, segment.index, episodeId, script.id, segment.text, PROVIDER_ID, voice, rate,
+        timelineHash, segment.index, episodeId, script.id, segment.speechText, PROVIDER_ID, voice, rate,
         segment.inputHash, segment.relativePath, segment.fileHash, segment.bytes, segment.durationMs, createdAt);
       for (const cue of cues) transaction.run(
         `INSERT OR IGNORE INTO subtitle_cues (

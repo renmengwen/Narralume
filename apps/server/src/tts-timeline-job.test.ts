@@ -33,7 +33,7 @@ function seedEpisode(database: ReturnType<typeof openDatabase>["database"]) {
       id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
     ) VALUES ('script_tts', 'episode_tts', 'packaged', 1, NULL, ?, ?, 1)`,
   ).run(JSON.stringify({ paragraphs: [
-    { text: "第一段真实旁白。", sourceIndexes: [0] },
+    { text: "甲".repeat(35), sourceIndexes: [0] },
     { text: "第二段真实旁白。", sourceIndexes: [0] },
   ] }), "a".repeat(64));
 }
@@ -72,37 +72,38 @@ test("批准稿按真实音频段建立可恢复时间轴并复用内容寻址�
     });
     const first = await run({ episodeId: "episode_tts" });
     assert.equal(first.status, "succeeded");
-    assert.equal(syntheses, 2);
+    assert.equal(syntheses, 3);
     const result = first.result as {
       timelineHash: string; durationMs: number; segmentCount: number; cueCount: number;
       srtRelativePath: string; assRelativePath: string; reusedSegments: number;
     };
-    assert.equal(result.durationMs, 2_500);
-    assert.equal(result.segmentCount, 2);
-    assert.equal(result.cueCount, 2);
+    assert.equal(result.durationMs, 3_750);
+    assert.equal(result.segmentCount, 3);
+    assert.equal(result.cueCount, 3);
     assert.equal(result.reusedSegments, 0);
     assert.equal(connection.database.prepare(
       "SELECT COUNT(*) AS count FROM audio_segments WHERE timeline_hash = ?",
-    ).get(result.timelineHash)!.count, 2);
+    ).get(result.timelineHash)!.count, 3);
     const cues = connection.database.prepare(
       "SELECT start_ms, end_ms FROM subtitle_cues WHERE timeline_hash = ? ORDER BY cue_index",
     ).all(result.timelineHash) as unknown as Array<{ start_ms: number; end_ms: number }>;
     assert.deepEqual(cues.map((cue) => ({ ...cue })), [
       { start_ms: 0, end_ms: 1_250 },
       { start_ms: 1_250, end_ms: 2_500 },
+      { start_ms: 2_500, end_ms: 3_750 },
     ]);
     assert.match(await readFile(join(dataRoot, result.srtRelativePath), "utf8"), /00:00:01,250 --> 00:00:02,500/);
     assert.match(await readFile(join(dataRoot, result.assRelativePath), "utf8"), /PlayResY: 1920/);
 
     const repeated = await run({ episodeId: "episode_tts" });
     assert.equal(repeated.status, "succeeded");
-    assert.equal(syntheses, 2);
+    assert.equal(syntheses, 3);
     assert.equal((repeated.result as { timelineHash: string }).timelineHash, result.timelineHash);
-    assert.equal((repeated.result as { reusedSegments: number }).reusedSegments, 2);
+    assert.equal((repeated.result as { reusedSegments: number }).reusedSegments, 3);
 
     const changedVoice = await run({ episodeId: "episode_tts", voice: "测试音色" });
     assert.equal(changedVoice.status, "succeeded");
-    assert.equal(syntheses, 4);
+    assert.equal(syntheses, 6);
     assert.notEqual((changedVoice.result as { timelineHash: string }).timelineHash, result.timelineHash);
 
     const beforeCheckpointFailure = connection.database.prepare("SELECT COUNT(*) AS count FROM audio_segments").get()!.count;
@@ -175,7 +176,7 @@ test("批准稿按真实音频段建立可恢复时间轴并复用内容寻址�
     changeScriptApproval(connection.database, "episode_tts", { action: "withdraw", expectedRevision: 3 });
     const withdrawn = await run({ episodeId: "episode_tts" });
     assert.equal(withdrawn.status, "failed");
-    assert.equal(syntheses, 8);
+    assert.equal(syntheses, 12);
   } finally {
     connection.close();
     await rm(dataRoot, { recursive: true, force: true });

@@ -19,6 +19,7 @@ import {
   resolveProductionStage,
 } from "../src/production-logic.ts";
 import { chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
+import { episodeDraft, episodePutPayload } from "../src/production/episode/episode-editor.ts";
 
 test("保存的主题优先于系统偏好", () => {
   assert.equal(resolveTheme("light", true), "light");
@@ -147,6 +148,30 @@ test("任务进度按服务端小数钳制且终态稳定", () => {
   assert.equal(normalizeJobProgress("succeeded", 0), 100);
   assert.equal(isTerminalJobStatus("cancelled"), true);
   assert.equal(isTerminalJobStatus("queued"), false);
+});
+
+test("分集编辑恢复时按事件 ID 去重，保存时裁剪并保留空可选字段", () => {
+  const draft = episodeDraft({
+    id: "episode_1", seriesProjectId: "series_1", index: 1, title: " 第一集 ", storyArc: " 起承转合 ",
+    targetDurationSeconds: 240, recap: null, nextHook: null, createdAt: 1, updatedAt: 1,
+    sources: [
+      { sourceIndex: 0, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 0, byteEnd: 3, sourceHash: "hash_1", sourceText: "甲" },
+      { sourceIndex: 1, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 3, byteEnd: 6, sourceHash: "hash_2", sourceText: "乙" },
+    ],
+  });
+  assert.deepEqual(draft.sourceEventIds, ["event_1"]);
+  assert.deepEqual(episodePutPayload({ ...draft, sourceEventIds: [" event_1 ", "event_1"], recap: "  ", nextHook: " 钩子 " }), {
+    title: "第一集", storyArc: "起承转合", targetDurationSeconds: 240, recap: null, nextHook: "钩子", sourceEventIds: ["event_1"],
+  });
+});
+
+test("分集编辑拒绝空字段、越界时长和空证据", () => {
+  const valid = { title: "第一集", storyArc: "故事弧", targetDurationSeconds: 240, recap: "", nextHook: "", sourceEventIds: ["event_1"] };
+  assert.throws(() => episodePutPayload({ ...valid, title: " " }), /标题不能为空/);
+  assert.throws(() => episodePutPayload({ ...valid, storyArc: " " }), /故事弧不能为空/);
+  assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 179 }), /180 至 300/);
+  assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 301 }), /180 至 300/);
+  assert.throws(() => episodePutPayload({ ...valid, sourceEventIds: [] }), /至少选择一个/);
 });
 
 test("非 2xx JSON 响应保留服务端中文错误", async () => {

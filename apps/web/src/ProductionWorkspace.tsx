@@ -13,6 +13,7 @@ import {
 import { AssetStage } from "./production/assets/AssetStage";
 import { chapterEventsJobPayload, remainingChapterEventPageOffsets, type ChapterEventDraft } from "./production/chapter-event-editor";
 import { ChapterEventsStage } from "./production/ChapterEventsStage";
+import { EpisodeStage } from "./production/episode/EpisodeStage";
 import { ProductionHeader } from "./production/ProductionHeader";
 import { ProductionStatus } from "./production/ProductionStatus";
 import { StageNavigation } from "./production/StageNavigation";
@@ -25,7 +26,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [chapterTotal, setChapterTotal] = useState(0);
   const [selectedChapter, setSelectedChapter] = useState(restored?.chapterId);
-  const [episodeIndex] = useState(restored?.episodeIndex ?? 1);
+  const [episodeIndex, setEpisodeIndex] = useState(restored?.episodeIndex ?? 1);
   const [selectedAssetId, setSelectedAssetId] = useState(restored?.assetId);
   const [chapterText, setChapterText] = useState("");
   const [events, setEvents] = useState<ChapterEvent[]>([]);
@@ -110,6 +111,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
     setBusy(true); setSelectedChapter(id); setChapterText(""); setEvents([]); replaceLocation({ chapterId: id });
   }
   function selectAsset(id: string | undefined) { setSelectedAssetId(id); replaceLocation({ assetId: id }); }
+  function selectEpisode(index: number) { if (index === episodeIndex) return; setEpisodeIndex(index); replaceLocation({ episodeIndex: index }); }
   function trackJob(id: string) { setJobId(id); replaceLocation({ jobId: id }); }
 
   return <main className="min-h-screen bg-[var(--bg-canvas)] p-7 text-[var(--fg-primary)] max-md:p-0">
@@ -117,7 +119,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
       <ProductionHeader series={series} onLeave={onLeave} />
       <StageNavigation stage={stage} onChange={selectStage} />
       <ProductionStatus status={status} busy={busy} job={currentJob} onCancel={() => void cancelJob()} />
-      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} setBusy={setBusy} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : <StagePlaceholder stage={stage} />}
+      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} /> : stage === "episode" ? <EpisodeStage seriesId={series.id} episodeIndex={episodeIndex} chapter={selectedChapterRecord} events={events} chapterCount={chapters.length} chapterTotal={chapterTotal} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} setBusy={setBusy} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : <StagePlaceholder stage={stage} />}
     </div>
   </main>;
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createElement, StrictMode } from "react";
+import { act, createElement, StrictMode, useEffect, useLayoutEffect } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 import {
@@ -29,8 +30,22 @@ import {
   type EpisodeDraft,
 } from "../src/production/episode/episode-editor.ts";
 import { useCommittedEpisodeIdentity } from "../src/production/episode/use-episode-workspace.ts";
+import {
+  applyIfCurrentScriptRoute,
+  useCommittedScriptWorkspaceRefs,
+  useScriptWorkspace,
+} from "../src/production/scripts/use-script-workspace.ts";
 import type { EpisodeRecommendation } from "../src/production/types.ts";
-import { allowedSourceIndexes, approvalPutPayload, scriptDraft, scriptPostPayload } from "../src/production/scripts/script-editor.ts";
+import {
+  allowedSourceIndexes,
+  approvalPutPayload,
+  canStartEpisodeScriptGeneration,
+  completedEpisodeScriptVersions,
+  episodeScriptJobMatchesIdentity,
+  resolveEpisodeScriptWorkspaceStatus,
+  scriptDraft,
+  scriptPostPayload,
+} from "../src/production/scripts/script-editor.ts";
 
 test("保存的主题优先于系统偏好", () => {
   assert.equal(resolveTheme("light", true), "light");
@@ -391,6 +406,239 @@ test("批准与撤回 payload 始终携带当前 revision", () => {
   assert.deepEqual(approvalPutPayload("approve", approval, "packaged_1"), { action: "approve", expectedRevision: 3, scriptVersionId: "packaged_1" });
   assert.deepEqual(approvalPutPayload("withdraw", { ...approval, status: "approved", scriptVersionId: "packaged_1" }), { action: "withdraw", expectedRevision: 3 });
   assert.throws(() => approvalPutPayload("approve", approval), /请选择/);
+});
+
+test("长稿 Job 只归属冻结的系列、分集和 Episode identity", () => {
+  const job = {
+    id: "job_scripts_1",
+    type: "episode_scripts_generate",
+    status: "running" as const,
+    progress: 0.4,
+    attempts: 1,
+    maxAttempts: 3,
+    cancelRequested: false,
+    errorMessage: null,
+    payload: { seriesId: "series_1", episodeIndex: 2, episodeId: "episode_2" },
+  };
+  assert.equal(episodeScriptJobMatchesIdentity(job, "series_1", 2, "episode_2"), true);
+  assert.equal(episodeScriptJobMatchesIdentity(job, "series_1", 1, "episode_2"), false);
+  assert.equal(episodeScriptJobMatchesIdentity(job, "series_2", 2, "episode_2"), false);
+  assert.equal(episodeScriptJobMatchesIdentity(job, "series_1", 2, "episode_old"), false);
+  assert.equal(episodeScriptJobMatchesIdentity({ ...job, type: "tts_timeline" }, "series_1", 2), false);
+});
+
+test("长稿终态恢复只消费同 identity 的成功版本结果", () => {
+  const job = {
+    id: "job_scripts_1",
+    type: "episode_scripts_generate",
+    status: "succeeded" as const,
+    progress: 1,
+    attempts: 1,
+    maxAttempts: 3,
+    cancelRequested: false,
+    errorMessage: null,
+    payload: { seriesId: "series_1", episodeIndex: 2, episodeId: "episode_2" },
+    result: { faithfulVersionId: "faithful_1", packagedVersionId: "packaged_1" },
+  };
+  assert.deepEqual(completedEpisodeScriptVersions(job, "series_1", 2, "episode_2"), {
+    faithfulVersionId: "faithful_1",
+    packagedVersionId: "packaged_1",
+  });
+  assert.equal(completedEpisodeScriptVersions({ ...job, status: "failed" }, "series_1", 2, "episode_2"), undefined);
+  assert.equal(completedEpisodeScriptVersions(job, "series_1", 3, "episode_2"), undefined);
+  assert.equal(completedEpisodeScriptVersions({ ...job, result: {} }, "series_1", 2, "episode_2"), undefined);
+});
+
+test("长稿生成入口在忙碌、活跃 Job 或缺少 Episode 时防止重复提交", () => {
+  assert.equal(canStartEpisodeScriptGeneration(false, false, "episode_1"), true);
+  assert.equal(canStartEpisodeScriptGeneration(true, false, "episode_1"), false);
+  assert.equal(canStartEpisodeScriptGeneration(false, true, "episode_1"), false);
+  assert.equal(canStartEpisodeScriptGeneration(false, false), false);
+});
+
+test("长稿 cancelled/failed 终态无论基础 hydrate 返回顺序都不会被覆盖", () => {
+  const terminalJobs = [
+    {
+      status: "cancelled" as const,
+      errorMessage: null,
+      expected: "跨章骨架与长稿任务已取消",
+    },
+    {
+      status: "failed" as const,
+      errorMessage: "模型请求失败",
+      expected: "跨章骨架与长稿任务失败：模型请求失败",
+    },
+  ];
+  for (const terminal of terminalJobs) {
+    const job = {
+      id: `job_${terminal.status}`,
+      type: "episode_scripts_generate",
+      status: terminal.status,
+      progress: 0.2,
+      attempts: 1,
+      maxAttempts: 3,
+      cancelRequested: terminal.status === "cancelled",
+      errorMessage: terminal.errorMessage,
+      payload: { seriesId: "series_1", episodeIndex: 1, episodeId: "episode_1" },
+    };
+    for (const order of ["base-first", "job-first"] as const) {
+      let status = "";
+      if (order === "base-first") {
+        status = resolveEpisodeScriptWorkspaceStatus("基础状态", undefined, "series_1", 1, "episode_1");
+        status = resolveEpisodeScriptWorkspaceStatus(status, job, "series_1", 1, "episode_1");
+      } else {
+        status = resolveEpisodeScriptWorkspaceStatus(status, job, "series_1", 1, "episode_1");
+        status = resolveEpisodeScriptWorkspaceStatus("基础状态", job, "series_1", 1, "episode_1");
+      }
+      assert.equal(status, terminal.expected);
+    }
+    assert.equal(
+      resolveEpisodeScriptWorkspaceStatus("当前分集基础状态", job, "series_1", 2, "episode_2"),
+      "当前分集基础状态",
+    );
+    assert.equal(
+      resolveEpisodeScriptWorkspaceStatus("分集尚未创建", job, "series_1", 1),
+      "分集尚未创建",
+    );
+  }
+});
+
+test("StrictMode 未提交的稿件 render 不会提前改写 route 或 Job ref", () => {
+  const routeRef = { current: "series_1:1" };
+  const committedJob = { id: "job_committed" } as never;
+  const jobRef = { current: committedJob };
+  function Probe() {
+    useCommittedScriptWorkspaceRefs(routeRef, jobRef, "series_2:2", { id: "job_aborted" } as never);
+    return createElement("span", null, "probe");
+  }
+  renderToString(createElement(StrictMode, null, createElement(Probe)));
+  assert.equal(routeRef.current, "series_1:1");
+  assert.equal(jobRef.current, committedJob);
+});
+
+test("延迟 POST 在切换系列或分集后不能写入新 URL、状态或 busy", async () => {
+  const routeRef = { current: "series_1:1" };
+  const expectedRoute = routeRef.current;
+  const response = Promise.withResolvers<void>();
+  const applied: string[] = [];
+  const completion = response.promise.then(() => {
+    applyIfCurrentScriptRoute(true, routeRef, expectedRoute, () => applied.push("job"));
+    applyIfCurrentScriptRoute(true, routeRef, expectedRoute, () => applied.push("status"));
+    applyIfCurrentScriptRoute(true, routeRef, expectedRoute, () => applied.push("busy"));
+  });
+  routeRef.current = "series_2:2";
+  response.resolve();
+  await completion;
+  assert.deepEqual(applied, []);
+  assert.equal(applyIfCurrentScriptRoute(false, { current: expectedRoute }, expectedRoute, () => applied.push("unmounted")), false);
+});
+
+test("真实卸载 commit 会在 passive cleanup 前阻止长稿 POST 旧写回", async () => {
+  const originalFetch = globalThis.fetch;
+  const postResponse = Promise.withResolvers<Response>();
+  const callbacks: string[] = [];
+  let passiveCleanupRan = false;
+  let postStarted = false;
+  let generateScripts: (() => Promise<void>) | undefined;
+  const browserGlobals = globalThis as typeof globalThis & {
+    window?: unknown;
+    document?: unknown;
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const originalWindow = browserGlobals.window;
+  const originalDocument = browserGlobals.document;
+  const originalActEnvironment = browserGlobals.IS_REACT_ACT_ENVIRONMENT;
+
+  const documentLike = {
+    nodeType: 9,
+    addEventListener() {},
+    removeEventListener() {},
+    defaultView: undefined as unknown,
+    documentElement: { namespaceURI: "http://www.w3.org/1999/xhtml" },
+  };
+  const container = {
+    nodeType: 1,
+    tagName: "DIV",
+    namespaceURI: "http://www.w3.org/1999/xhtml",
+    ownerDocument: documentLike,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  documentLike.defaultView = {
+    document: documentLike,
+    HTMLElement: class HTMLElement {},
+    HTMLIFrameElement: class HTMLIFrameElement {},
+  };
+  browserGlobals.window = documentLike.defaultView;
+  browserGlobals.document = documentLike;
+  browserGlobals.IS_REACT_ACT_ENVIRONMENT = true;
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url === "/api/jobs" && init?.method === "POST") {
+      postStarted = true;
+      return postResponse.promise;
+    }
+    if (url.endsWith("/scripts")) return Response.json({ items: [] });
+    if (url.endsWith("/approval")) return Response.json({
+      approval: { episodeId: "episode_1", status: "unapproved", revision: 0, scriptVersionId: null, changedAt: null },
+    });
+    return Response.json({ episode: {
+      id: "episode_1", seriesProjectId: "series_1", index: 1, title: "第一集", storyArc: "故事弧",
+      targetDurationSeconds: 240, recap: null, nextHook: null, createdAt: 1, updatedAt: 1,
+      sources: [{ sourceIndex: 0, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 0, byteEnd: 3,
+        sourceHash: "hash_1", sourceText: "原文" }],
+    } });
+  };
+
+  function Probe() {
+    const workspace = useScriptWorkspace({
+      seriesId: "series_1",
+      episodeIndex: 1,
+      jobActive: false,
+      setBusy: (busy) => callbacks.push(`busy:${busy}`),
+      setStatus: (status) => callbacks.push(`status:${status}`),
+      onJobCreated: (id) => callbacks.push(`job:${id}`),
+    });
+    generateScripts = workspace.generateScripts;
+    useLayoutEffect(() => () => {
+      assert.equal(passiveCleanupRan, false);
+      postResponse.resolve(Response.json({ message: "任务已创建", job: { id: "job_old" } }));
+    }, []);
+    useEffect(() => () => { passiveCleanupRan = true; }, []);
+    return null;
+  }
+
+  const root = createRoot(container as never);
+  try {
+    await act(async () => {
+      root.render(createElement(Probe));
+    });
+    assert.ok(generateScripts);
+    await act(async () => {
+      void generateScripts!();
+      await Promise.resolve();
+    });
+    assert.equal(postStarted, true);
+    callbacks.length = 0;
+
+    await act(async () => {
+      root.unmount();
+      await postResponse.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    assert.deepEqual(callbacks, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) delete browserGlobals.window;
+    else browserGlobals.window = originalWindow;
+    if (originalDocument === undefined) delete browserGlobals.document;
+    else browserGlobals.document = originalDocument;
+    if (originalActEnvironment === undefined) delete browserGlobals.IS_REACT_ACT_ENVIRONMENT;
+    else browserGlobals.IS_REACT_ACT_ENVIRONMENT = originalActEnvironment;
+  }
 });
 
 test("非 2xx JSON 响应保留服务端中文错误", async () => {

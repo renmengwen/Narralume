@@ -182,8 +182,8 @@ export function validateStoredScriptVersion(database: DatabaseSync, id: string) 
   return row;
 }
 
-export function createScriptVersion(
-  database: DatabaseSync, episodeId: string, input: ScriptVersionInput, now = Date.now(),
+function createScriptVersionInTransaction(
+  database: DatabaseSync, episodeId: string, input: ScriptVersionInput, now: number,
 ) {
   if (!database.prepare("SELECT id FROM episodes WHERE id = ?").get(episodeId)) {
     throw new ScriptVersionStoreError(404, "分集不存在");
@@ -211,42 +211,81 @@ export function createScriptVersion(
     throw new ScriptVersionStoreError(409, "稿件引用了不可用的分集来源");
   }
   const { contentJson, contentHash } = normalizedContent(input.paragraphs);
+  const existing = database.prepare(
+    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+     FROM script_versions
+     WHERE episode_id = ? AND kind = ? AND content_hash = ? AND parent_version_id IS ?`,
+  ).get(episodeId, input.kind, contentHash, parentVersionId) as VersionRow | undefined;
+  if (existing) return versionResult(database, existing);
+  const version = Number(database.prepare(
+    "SELECT COALESCE(MAX(version), 0) + 1 AS version FROM script_versions WHERE episode_id = ? AND kind = ?",
+  ).get(episodeId, input.kind)?.version);
+  const id = scriptVersionId({ episodeId, kind: input.kind, version, contentHash, parentVersionId });
+  database.prepare(
+    `INSERT INTO script_versions (
+       id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, episodeId, input.kind, version, parentVersionId, contentJson, contentHash, now);
+  const insertSource = database.prepare(
+    `INSERT INTO script_version_sources (
+       script_version_id, segment_index, source_index, episode_source_index,
+       chapter_id, source_event_id, source_byte_start, source_byte_end, source_hash
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  input.paragraphs.forEach((paragraph, segmentIndex) => paragraph.sourceIndexes.forEach((episodeSourceIndex, sourceIndex) => {
+    const source = availableSources.get(episodeSourceIndex)!;
+    insertSource.run(id, segmentIndex, sourceIndex, episodeSourceIndex, source.chapter_id,
+      source.source_event_id, source.source_byte_start, source.source_byte_end, source.source_hash);
+  }));
+  return versionResult(database, database.prepare(
+    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+     FROM script_versions WHERE id = ?`,
+  ).get(id) as unknown as VersionRow);
+}
+
+export function createScriptVersion(
+  database: DatabaseSync, episodeId: string, input: ScriptVersionInput, now = Date.now(),
+) {
   database.exec("BEGIN IMMEDIATE");
   try {
-    const existing = database.prepare(
-      `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
-       FROM script_versions
-       WHERE episode_id = ? AND kind = ? AND content_hash = ? AND parent_version_id IS ?`,
-    ).get(episodeId, input.kind, contentHash, parentVersionId) as VersionRow | undefined;
-    if (existing) {
-      database.exec("COMMIT");
-      return versionResult(database, existing);
-    }
-    const version = Number(database.prepare(
-      "SELECT COALESCE(MAX(version), 0) + 1 AS version FROM script_versions WHERE episode_id = ? AND kind = ?",
-    ).get(episodeId, input.kind)?.version);
-    const id = scriptVersionId({ episodeId, kind: input.kind, version, contentHash, parentVersionId });
-    database.prepare(
-      `INSERT INTO script_versions (
-         id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, episodeId, input.kind, version, parentVersionId, contentJson, contentHash, now);
-    const insertSource = database.prepare(
-      `INSERT INTO script_version_sources (
-         script_version_id, segment_index, source_index, episode_source_index,
-         chapter_id, source_event_id, source_byte_start, source_byte_end, source_hash
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    input.paragraphs.forEach((paragraph, segmentIndex) => paragraph.sourceIndexes.forEach((episodeSourceIndex, sourceIndex) => {
-      const source = availableSources.get(episodeSourceIndex)!;
-      insertSource.run(id, segmentIndex, sourceIndex, episodeSourceIndex, source.chapter_id,
-        source.source_event_id, source.source_byte_start, source.source_byte_end, source.source_hash);
-    }));
+    const version = createScriptVersionInTransaction(database, episodeId, input, now);
     database.exec("COMMIT");
-    return versionResult(database, database.prepare(
-      `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
-       FROM script_versions WHERE id = ?`,
-    ).get(id) as unknown as VersionRow);
+    return version;
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* 保留原始写入错误。 */ }
+    throw error;
+  }
+}
+
+export function createScriptVersionPair(
+  database: DatabaseSync,
+  episodeId: string,
+  input: {
+    faithfulParagraphs: ScriptVersionInput["paragraphs"];
+    packagedParagraphs: ScriptVersionInput["paragraphs"];
+  },
+  assertCurrent: () => void,
+  now = Date.now(),
+) {
+  validateParagraphs(input.faithfulParagraphs);
+  validateParagraphs(input.packagedParagraphs);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const assertionResult = assertCurrent() as unknown;
+    if (assertionResult && typeof (assertionResult as { then?: unknown }).then === "function") {
+      throw new ScriptVersionStoreError(500, "原子落稿身份检查必须同步完成");
+    }
+    const faithful = createScriptVersionInTransaction(database, episodeId, {
+      kind: "faithful",
+      paragraphs: input.faithfulParagraphs,
+    }, now);
+    const packaged = createScriptVersionInTransaction(database, episodeId, {
+      kind: "packaged",
+      parentVersionId: faithful.id,
+      paragraphs: input.packagedParagraphs,
+    }, now);
+    database.exec("COMMIT");
+    return { faithful, packaged };
   } catch (error) {
     try { database.exec("ROLLBACK"); } catch { /* 保留原始写入错误。 */ }
     throw error;

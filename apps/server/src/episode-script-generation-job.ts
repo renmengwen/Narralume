@@ -1,0 +1,497 @@
+import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+
+import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
+import { getEpisode } from "./episode-store.js";
+import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
+import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { createScriptVersionPair } from "./script-version-store.js";
+
+export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
+
+export interface EpisodeScriptGenerationRequest {
+  seriesId: string;
+  episodeIndex: number;
+  voice: string;
+  rate: number;
+  charactersPerSecond: number;
+  narrationOccupancy: number;
+  calibration: { identity: "provisional" | "measured"; sampleId?: string };
+}
+
+interface FrozenSource {
+  sourceIndex: number;
+  chapterId: string;
+  sourceEventId: string;
+  byteStart: number;
+  byteEnd: number;
+  sourceHash: string;
+  eventType: string;
+  eventPayloadJson: string;
+}
+
+interface FrozenPayload extends EpisodeScriptGenerationRequest {
+  episodeId: string;
+  targetDurationSeconds: number;
+  storyArc: string;
+  recap: string | null;
+  nextHook: string | null;
+  sources: FrozenSource[];
+  providerId: string;
+  model: string;
+  requestHash: string;
+}
+
+export interface ScriptBeat {
+  intent: string;
+  sourceIndexes: number[];
+  targetDurationSeconds?: number;
+}
+
+interface SkeletonInput {
+  stage: "skeleton";
+  episode: {
+    id: string;
+    storyArc: string;
+    recap: string | null;
+    nextHook: string | null;
+    targetDurationSeconds: number;
+  };
+  characterBudget: number;
+  calibration: FrozenPayload["calibration"];
+  sources: Array<{
+    sourceIndex: number;
+    chapterId: string;
+    sourceEventId: string;
+    eventType: string;
+    event: Record<string, string>;
+  }>;
+  signal: AbortSignal;
+}
+
+interface FaithfulInput {
+  stage: "faithful";
+  beat: ScriptBeat;
+  characterBudget: number;
+  sources: Array<{ sourceIndex: number; sourceText: string }>;
+  signal: AbortSignal;
+}
+
+interface PackagedInput {
+  stage: "packaged";
+  targetDurationSeconds: number;
+  characterBudget: number;
+  paragraphs: Array<{ text: string; sourceIndexes: number[] }>;
+  signal: AbortSignal;
+}
+
+export type GenerateEpisodeScript = (
+  input: SkeletonInput | FaithfulInput | PackagedInput,
+) => Promise<{ beats: ScriptBeat[] } | { text: string } | { paragraphs: Array<{ text: string; sourceIndexes: number[] }> }>;
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function text(value: unknown, label: string, max = 255) {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > max) throw new Error(`${label}无效`);
+  return value.trim();
+}
+
+function validateRequest(input: EpisodeScriptGenerationRequest) {
+  const seriesId = text(input.seriesId, "系列 ID");
+  const voice = text(input.voice, "音色", 500);
+  if (!Number.isSafeInteger(input.episodeIndex) || input.episodeIndex < 1) throw new Error("分集序号必须从 1 开始");
+  if (!Number.isFinite(input.rate) || input.rate < -10 || input.rate > 10) throw new Error("语速必须在 -10 至 10 之间");
+  if (!Number.isFinite(input.charactersPerSecond) || input.charactersPerSecond <= 0 || input.charactersPerSecond > 20) {
+    throw new Error("每秒字数必须大于 0 且不超过 20");
+  }
+  if (!Number.isFinite(input.narrationOccupancy) || input.narrationOccupancy <= 0 || input.narrationOccupancy > 1) {
+    throw new Error("旁白占用率必须大于 0 且不超过 1");
+  }
+  if (!input.calibration || (input.calibration.identity !== "provisional" && input.calibration.identity !== "measured")) {
+    throw new Error("语速校准身份无效");
+  }
+  if (input.calibration.identity === "measured" && !input.calibration.sampleId?.trim()) {
+    throw new Error("实测语速校准必须引用短样");
+  }
+  return {
+    seriesId,
+    episodeIndex: input.episodeIndex,
+    voice,
+    rate: input.rate,
+    charactersPerSecond: input.charactersPerSecond,
+    narrationOccupancy: input.narrationOccupancy,
+    calibration: {
+      identity: input.calibration.identity,
+      ...(input.calibration.sampleId?.trim() ? { sampleId: input.calibration.sampleId.trim() } : {}),
+    },
+  };
+}
+
+function sourceIdentity(source: {
+  sourceIndex: number; chapterId: string; sourceEventId: string;
+  byteStart: number; byteEnd: number; sourceHash: string;
+  eventType: string; eventPayloadJson: string;
+}): FrozenSource {
+  if (!Number.isSafeInteger(source.sourceIndex) || source.sourceIndex < 0 ||
+      !Number.isSafeInteger(source.byteStart) || !Number.isSafeInteger(source.byteEnd) ||
+      source.byteStart < 0 || source.byteEnd <= source.byteStart || !/^[0-9a-f]{64}$/u.test(source.sourceHash)) {
+    throw new Error("长稿生成任务冻结来源无效");
+  }
+  const eventPayloadJson = text(source.eventPayloadJson, "结构化事件摘要", 1_000_000);
+  if (canonicalJson(JSON.parse(eventPayloadJson) as unknown) !== eventPayloadJson) {
+    throw new Error("结构化事件摘要必须使用 canonical JSON");
+  }
+  return {
+    sourceIndex: source.sourceIndex,
+    chapterId: text(source.chapterId, "来源章节 ID"),
+    sourceEventId: text(source.sourceEventId, "来源事件 ID"),
+    byteStart: source.byteStart,
+    byteEnd: source.byteEnd,
+    sourceHash: source.sourceHash,
+    eventType: text(source.eventType, "事件类型"),
+    eventPayloadJson,
+  };
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`).join(",")}}`;
+  }
+  throw new Error("结构化事件摘要必须是可序列化 JSON");
+}
+
+function sourcesWithEvents(database: DatabaseSync, sources: Array<{
+  sourceIndex: number; chapterId: string; sourceEventId: string;
+  byteStart: number; byteEnd: number; sourceHash: string;
+}>) {
+  const rows = database.prepare(
+    `SELECT id, event_type, payload_json FROM chapter_events
+     WHERE id IN (${sources.map(() => "?").join(",")})`,
+  ).all(...sources.map((source) => source.sourceEventId)) as unknown as Array<{
+    id: string; event_type: string; payload_json: string;
+  }>;
+  const events = new Map(rows.map((row) => [row.id, row]));
+  return sources.map((source) => {
+    const event = events.get(source.sourceEventId);
+    if (!event) throw new Error("分集来源对应的结构化事件已不存在");
+    return sourceIdentity({
+      ...source,
+      eventType: event.event_type,
+      eventPayloadJson: canonicalJson(JSON.parse(event.payload_json) as unknown),
+    });
+  });
+}
+
+function frozenIdentity(database: DatabaseSync, episode: Awaited<ReturnType<typeof getEpisode>>) {
+  return {
+    episodeId: episode.id,
+    targetDurationSeconds: episode.targetDurationSeconds,
+    storyArc: episode.storyArc,
+    recap: episode.recap,
+    nextHook: episode.nextHook,
+    sources: sourcesWithEvents(database, episode.sources),
+  };
+}
+
+function requestHash(input: Omit<FrozenPayload, "requestHash">) {
+  return sha256(JSON.stringify({ contract: "episode-scripts-generate-v2", ...input }));
+}
+
+function parseFrozenPayload(value: unknown): FrozenPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("长稿生成任务冻结参数无效");
+  const input = value as FrozenPayload;
+  const request = validateRequest(input);
+  const episodeId = text(input.episodeId, "分集 ID");
+  const providerId = text(input.providerId, "模型提供方", 100);
+  const model = text(input.model, "模型", 150);
+  const hash = text(input.requestHash, "请求哈希", 64).toLowerCase();
+  if (!/^[0-9a-f]{64}$/u.test(hash) || !Array.isArray(input.sources) || input.sources.length === 0) {
+    throw new Error("长稿生成任务冻结参数无效");
+  }
+  const payload: FrozenPayload = {
+    ...request,
+    episodeId,
+    targetDurationSeconds: input.targetDurationSeconds,
+    storyArc: text(input.storyArc, "故事弧", 100_000),
+    recap: input.recap === null ? null : text(input.recap, "前情回顾", 100_000),
+    nextHook: input.nextHook === null ? null : text(input.nextHook, "下集钩子", 100_000),
+    sources: input.sources.map(sourceIdentity),
+    providerId,
+    model,
+    requestHash: hash,
+  };
+  const { requestHash: _ignored, ...identity } = payload;
+  if (requestHash(identity) !== hash) {
+    throw new Error("长稿生成任务冻结身份不一致");
+  }
+  return payload;
+}
+
+async function requireCurrentEpisode(
+  database: DatabaseSync,
+  dataRoot: string,
+  task: FrozenPayload,
+) {
+  const current = await getEpisode(database, dataRoot, task.seriesId, task.episodeIndex);
+  if (JSON.stringify(frozenIdentity(database, current)) !== JSON.stringify({
+    episodeId: task.episodeId,
+    targetDurationSeconds: task.targetDurationSeconds,
+    storyArc: task.storyArc,
+    recap: task.recap,
+    nextHook: task.nextHook,
+    sources: task.sources,
+  })) throw new Error("分集、目标时长或来源在任务排队后已变化，请重新生成");
+  return current;
+}
+
+function assertCurrentDatabaseIdentity(database: DatabaseSync, task: FrozenPayload) {
+  const row = database.prepare(
+    `SELECT id, story_arc, target_duration_seconds, recap, next_hook
+     FROM episodes WHERE series_project_id = ? AND episode_index = ?`,
+  ).get(task.seriesId, task.episodeIndex) as {
+    id: string; story_arc: string; target_duration_seconds: number;
+    recap: string | null; next_hook: string | null;
+  } | undefined;
+  if (!row) throw new Error("分集在任务排队后已不存在");
+  const sources = database.prepare(
+    `SELECT source_index, chapter_id, source_event_id, source_byte_start, source_byte_end, source_hash
+     FROM episode_sources WHERE episode_id = ? ORDER BY source_index`,
+  ).all(row.id) as unknown as Array<{
+    source_index: number; chapter_id: string; source_event_id: string;
+    source_byte_start: number; source_byte_end: number; source_hash: string;
+  }>;
+  const current = {
+    episodeId: row.id,
+    targetDurationSeconds: row.target_duration_seconds,
+    storyArc: row.story_arc,
+    recap: row.recap,
+    nextHook: row.next_hook,
+    sources: sourcesWithEvents(database, sources.map((source) => ({
+      sourceIndex: source.source_index,
+      chapterId: source.chapter_id,
+      sourceEventId: source.source_event_id,
+      byteStart: source.source_byte_start,
+      byteEnd: source.source_byte_end,
+      sourceHash: source.source_hash,
+    }))),
+  };
+  if (JSON.stringify(current) !== JSON.stringify({
+    episodeId: task.episodeId,
+    targetDurationSeconds: task.targetDurationSeconds,
+    storyArc: task.storyArc,
+    recap: task.recap,
+    nextHook: task.nextHook,
+    sources: task.sources,
+  })) throw new Error("分集、目标时长、来源或事件摘要在任务排队后已变化，请重新生成");
+}
+
+function validateBeats(value: unknown, sources: readonly FrozenSource[], targetDurationSeconds: number): ScriptBeat[] {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("骨架必须包含至少一个故事 beat");
+  const available = new Set(sources.map((source) => source.sourceIndex));
+  const used = new Set<number>();
+  let previous = -1;
+  let allocatedDuration = 0;
+  const beats = value.map((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("故事 beat 无效");
+    const beat = candidate as ScriptBeat;
+    const intent = text(beat.intent, "故事 beat 意图", 10_000);
+    if (!Array.isArray(beat.sourceIndexes) || beat.sourceIndexes.length === 0 ||
+        new Set(beat.sourceIndexes).size !== beat.sourceIndexes.length) {
+      throw new Error("故事 beat 必须引用非空且不重复的来源序号");
+    }
+    for (const index of beat.sourceIndexes) {
+      if (!Number.isSafeInteger(index) || !available.has(index) || used.has(index)) {
+        throw new Error("故事 beat 返回了伪造、越界或重复的来源序号");
+      }
+      if (index <= previous) throw new Error("故事 beat 来源顺序无效");
+      previous = index;
+      used.add(index);
+    }
+    if (beat.targetDurationSeconds !== undefined) {
+      if (!Number.isFinite(beat.targetDurationSeconds) || beat.targetDurationSeconds <= 0 ||
+          beat.targetDurationSeconds > targetDurationSeconds) throw new Error("故事 beat 时长预算无效");
+      allocatedDuration += beat.targetDurationSeconds;
+      if (allocatedDuration > targetDurationSeconds) throw new Error("故事 beat 总时长超过分集目标时长");
+    }
+    return {
+      intent,
+      sourceIndexes: [...beat.sourceIndexes],
+      ...(beat.targetDurationSeconds === undefined ? {} : { targetDurationSeconds: beat.targetDurationSeconds }),
+    };
+  });
+  if (used.size !== sources.length) throw new Error("故事骨架必须明确覆盖全部冻结来源");
+  return beats;
+}
+
+function validateTextResult(value: unknown, label: string) {
+  const textValue = (value as { text?: unknown })?.text;
+  return text(textValue, label, 1_000_000);
+}
+
+function validatePackagedResult(value: unknown, allowed: ReadonlySet<number>) {
+  const paragraphs = (value as { paragraphs?: unknown })?.paragraphs;
+  if (!Array.isArray(paragraphs) || paragraphs.length === 0) throw new Error("包装稿必须包含至少一个段落");
+  return paragraphs.map((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("包装稿段落无效");
+    const paragraph = candidate as { text?: unknown; sourceIndexes?: unknown };
+    if (!Array.isArray(paragraph.sourceIndexes) || paragraph.sourceIndexes.length === 0 ||
+        new Set(paragraph.sourceIndexes).size !== paragraph.sourceIndexes.length ||
+        paragraph.sourceIndexes.some((index) => !Number.isSafeInteger(index) || !allowed.has(index))) {
+      throw new Error("包装稿引用了忠实父稿之外的来源");
+    }
+    return { text: text(paragraph.text, "包装稿正文", 1_000_000), sourceIndexes: paragraph.sourceIndexes as number[] };
+  });
+}
+
+async function callWithCancellation<T>(
+  context: Parameters<JobHandler>[0],
+  call: (signal: AbortSignal) => Promise<T>,
+) {
+  context.throwIfCancellationRequested();
+  const controller = new AbortController();
+  const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
+  try {
+    return await call(AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]));
+  } catch (error) {
+    if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
+    if (error instanceof Error && error.name === "TimeoutError") throw new Error("长稿生成模型请求超时");
+    throw error;
+  } finally {
+    clearInterval(poll);
+  }
+}
+
+export async function enqueueEpisodeScriptGenerationJob(
+  database: DatabaseSync,
+  dataRoot: string,
+  config: ChapterTextModelConfig,
+  input: Omit<CreateJobInput, "id" | "type">,
+): Promise<{ job: JobRecord; created: boolean }> {
+  const request = validateRequest(input.payload as EpisodeScriptGenerationRequest);
+  const episode = await getEpisode(database, dataRoot, request.seriesId, request.episodeIndex);
+  if (episode.sources.length === 0) throw new Error("分集没有可用于生成长稿的冻结来源");
+  const payloadWithoutHash = {
+    ...request,
+    ...frozenIdentity(database, episode),
+    providerId: text(config.providerId, "模型提供方", 100),
+    model: text(config.model, "模型", 150),
+  };
+  const hash = requestHash(payloadWithoutHash);
+  const payload: FrozenPayload = { ...payloadWithoutHash, requestHash: hash };
+  const id = `job_episode_scripts_${hash}`;
+  const existing = getJob(database, id);
+  if (existing) {
+    if (existing.type !== EPISODE_SCRIPT_GENERATION_JOB_TYPE || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
+      throw new Error("长稿生成任务身份冲突");
+    }
+    return { job: existing, created: false };
+  }
+  try {
+    return {
+      job: createJob(database, { ...input, id, type: EPISODE_SCRIPT_GENERATION_JOB_TYPE, payload }),
+      created: true,
+    };
+  } catch (error) {
+    const raced = getJob(database, id);
+    if (!raced || raced.type !== EPISODE_SCRIPT_GENERATION_JOB_TYPE ||
+        JSON.stringify(raced.payload) !== JSON.stringify(payload)) throw error;
+    return { job: raced, created: false };
+  }
+}
+
+export function createEpisodeScriptGenerationJobHandler(
+  database: DatabaseSync,
+  dataRoot: string,
+  config: ChapterTextModelConfig,
+  generate: GenerateEpisodeScript,
+): JobHandler {
+  return async (context) => {
+    const task = parseFrozenPayload(context.job.payload);
+    if (context.job.id !== `job_episode_scripts_${task.requestHash}` ||
+        task.providerId !== config.providerId.trim() || task.model !== config.model.trim()) {
+      throw new Error("长稿生成任务或模型冻结身份不一致");
+    }
+    const episode = await requireCurrentEpisode(database, dataRoot, task);
+    const characterBudget = Math.floor(task.targetDurationSeconds * task.charactersPerSecond * task.narrationOccupancy);
+    const skeletonResult = await callWithCancellation(context, (signal) => generate({
+      stage: "skeleton",
+      episode: {
+        id: task.episodeId,
+        storyArc: task.storyArc,
+        recap: task.recap,
+        nextHook: task.nextHook,
+        targetDurationSeconds: task.targetDurationSeconds,
+      },
+      characterBudget,
+      calibration: task.calibration,
+      sources: task.sources.map((source) => ({
+        sourceIndex: source.sourceIndex,
+        chapterId: source.chapterId,
+        sourceEventId: source.sourceEventId,
+        eventType: source.eventType,
+        event: JSON.parse(source.eventPayloadJson) as Record<string, string>,
+      })),
+      signal,
+    }));
+    const beats = validateBeats((skeletonResult as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
+    context.reportProgress(0.2);
+
+    const sourceMap = new Map(episode.sources.map((source) => [source.sourceIndex, source]));
+    const faithfulParagraphs = [] as Array<{ text: string; sourceIndexes: number[] }>;
+    for (const [index, beat] of beats.entries()) {
+      const result = await callWithCancellation(context, (signal) => generate({
+        stage: "faithful",
+        beat,
+        characterBudget: Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
+          task.targetDurationSeconds / beats.length) / task.targetDurationSeconds))),
+        sources: beat.sourceIndexes.map((sourceIndex) => ({
+          sourceIndex,
+          sourceText: sourceMap.get(sourceIndex)!.sourceText,
+        })),
+        signal,
+      }));
+      faithfulParagraphs.push({ text: validateTextResult(result, "忠实稿正文"), sourceIndexes: beat.sourceIndexes });
+      context.reportProgress(0.2 + ((index + 1) / beats.length) * 0.4);
+    }
+
+    const faithfulSources = new Set(faithfulParagraphs.flatMap((paragraph) => paragraph.sourceIndexes));
+    const packagedResult = await callWithCancellation(context, (signal) => generate({
+      stage: "packaged",
+      targetDurationSeconds: task.targetDurationSeconds,
+      characterBudget,
+      paragraphs: faithfulParagraphs,
+      signal,
+    }));
+    const packagedParagraphs = validatePackagedResult(packagedResult, faithfulSources);
+    context.reportProgress(0.9);
+
+    await requireCurrentEpisode(database, dataRoot, task);
+    context.throwIfCancellationRequested();
+    const versions = createScriptVersionPair(database, task.episodeId, {
+      faithfulParagraphs,
+      packagedParagraphs,
+    }, () => {
+      context.throwIfCancellationRequested();
+      assertCurrentDatabaseIdentity(database, task);
+    });
+    const actualCharacterCount = packagedParagraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0);
+    context.reportProgress(1);
+    return {
+      episodeId: task.episodeId,
+      beats,
+      characterBudget,
+      calibration: task.calibration,
+      faithfulVersionId: versions.faithful.id,
+      packagedVersionId: versions.packaged.id,
+      actualCharacterCount,
+      compressionSuggested: actualCharacterCount > characterBudget,
+    };
+  };
+}

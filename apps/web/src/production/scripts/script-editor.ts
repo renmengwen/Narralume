@@ -1,4 +1,4 @@
-import type { ScriptApproval, ScriptVersion, ScriptVersionKind } from "../types";
+import type { JobRecord, ScriptApproval, ScriptVersion, ScriptVersionKind } from "../types";
 
 export interface ScriptParagraphDraft { key: string; text: string; sourceIndexes: number[] }
 
@@ -47,4 +47,48 @@ export function approvalPutPayload(action: "approve" | "withdraw", approval: Scr
     expectedRevision: approval.revision,
     ...(action === "approve" ? { scriptVersionId } : {}),
   };
+}
+
+export function episodeScriptJobMatchesIdentity(
+  job: JobRecord | undefined,
+  seriesId: string,
+  episodeIndex: number,
+  episodeId?: string,
+) {
+  if (job?.type !== "episode_scripts_generate" || !job.payload) return false;
+  const payload = job.payload as { seriesId?: unknown; episodeIndex?: unknown; episodeId?: unknown };
+  return payload.seriesId === seriesId && payload.episodeIndex === episodeIndex &&
+    (episodeId === undefined || payload.episodeId === episodeId);
+}
+
+export function completedEpisodeScriptVersions(
+  job: JobRecord | undefined,
+  seriesId: string,
+  episodeIndex: number,
+  episodeId?: string,
+) {
+  if (job?.status !== "succeeded" || !episodeScriptJobMatchesIdentity(job, seriesId, episodeIndex, episodeId)) {
+    return undefined;
+  }
+  const result = job.result as { faithfulVersionId?: unknown; packagedVersionId?: unknown } | null | undefined;
+  return typeof result?.faithfulVersionId === "string" && typeof result.packagedVersionId === "string"
+    ? { faithfulVersionId: result.faithfulVersionId, packagedVersionId: result.packagedVersionId }
+    : undefined;
+}
+
+export function canStartEpisodeScriptGeneration(busy: boolean, jobActive: boolean, episodeId?: string) {
+  return Boolean(episodeId) && !busy && !jobActive;
+}
+
+export function resolveEpisodeScriptWorkspaceStatus(
+  baseStatus: string,
+  job: JobRecord | undefined,
+  seriesId: string,
+  episodeIndex: number,
+  episodeId?: string,
+) {
+  if (!episodeId || !episodeScriptJobMatchesIdentity(job, seriesId, episodeIndex, episodeId)) return baseStatus;
+  if (job?.status === "cancelled") return "跨章骨架与长稿任务已取消";
+  if (job?.status === "failed") return `跨章骨架与长稿任务失败${job.errorMessage ? `：${job.errorMessage}` : ""}`;
+  return baseStatus;
 }

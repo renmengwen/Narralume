@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { responseJson } from "../../client-logic";
-import type { Episode, ScriptApproval, ScriptVersion, ScriptVersionKind } from "../types";
+import type { Episode, JobRecord, ScriptApproval, ScriptVersion, ScriptVersionKind } from "../types";
 import {
   approvalPutPayload,
+  canStartEpisodeScriptGeneration,
+  completedEpisodeScriptVersions,
   emptyScriptParagraph,
   scriptDraft,
   scriptPostPayload,
+  resolveEpisodeScriptWorkspaceStatus,
   type ScriptParagraphDraft,
 } from "./script-editor";
 
@@ -16,11 +19,47 @@ interface WorkspaceSnapshot {
   approval: ScriptApproval;
 }
 
-export function useScriptWorkspace({ seriesId, episodeIndex, setBusy, setStatus }: {
+export function useCommittedScriptWorkspaceRefs(
+  routeRef: { current: string },
+  jobRef: { current: JobRecord | undefined },
+  routeKey: string,
+  currentJob: JobRecord | undefined,
+  mountedRef?: { current: boolean },
+) {
+  useLayoutEffect(() => {
+    if (mountedRef) mountedRef.current = true;
+    routeRef.current = routeKey;
+    jobRef.current = currentJob;
+    return () => {
+      if (routeRef.current !== routeKey) return;
+      routeRef.current = "";
+      jobRef.current = undefined;
+      if (mountedRef) mountedRef.current = false;
+    };
+  }, [routeRef, jobRef, routeKey, currentJob, mountedRef]);
+}
+
+export function applyIfCurrentScriptRoute(
+  mounted: boolean,
+  routeRef: { current: string },
+  expectedRoute: string,
+  apply: () => void,
+) {
+  if (!mounted || routeRef.current !== expectedRoute) return false;
+  apply();
+  return true;
+}
+
+export function useScriptWorkspace({
+  seriesId, episodeIndex, currentJob, jobActive, setBusy, setStatus, onJobCreated,
+}: {
   seriesId: string;
   episodeIndex: number;
+  currentJob?: JobRecord;
+  jobActive: boolean;
   setBusy: (busy: boolean) => void;
   setStatus: (message: string) => void;
+  onJobCreated: (id: string) => void;
 }) {
   const [episode, setEpisode] = useState<Episode>();
   const [scripts, setScripts] = useState<ScriptVersion[]>([]);
@@ -29,16 +68,17 @@ export function useScriptWorkspace({ seriesId, episodeIndex, setBusy, setStatus 
   const [parentVersionId, setParentVersionId] = useState("");
   const [paragraphs, setParagraphs] = useState<ScriptParagraphDraft[]>(() => [emptyScriptParagraph()]);
   const [selectedPackagedId, setSelectedPackagedId] = useState("");
+  const [voice, setVoice] = useState("Microsoft Huihui Desktop");
+  const [rate, setRate] = useState(0);
+  const [charactersPerSecond, setCharactersPerSecond] = useState(4.5);
+  const [narrationOccupancy, setNarrationOccupancy] = useState(0.8);
   const writing = useRef(false);
+  const consumedJobId = useRef("");
+  const currentJobRef = useRef(currentJob);
   const mounted = useRef(true);
   const routeKey = `${seriesId}:${episodeIndex}`;
   const currentRoute = useRef(routeKey);
-  currentRoute.current = routeKey;
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; currentRoute.current = ""; setBusy(false); };
-  }, []);
+  useCommittedScriptWorkspaceRefs(currentRoute, currentJobRef, routeKey, currentJob, mounted);
 
   const baseUrl = `/api/series/${encodeURIComponent(seriesId)}/episodes/${episodeIndex}`;
 
@@ -82,7 +122,12 @@ export function useScriptWorkspace({ seriesId, episodeIndex, setBusy, setStatus 
     void readWorkspace(expectedRoute).then((snapshot) => {
       if (!mounted.current || currentRoute.current !== expectedRoute) return;
       applySnapshot(snapshot, "faithful");
-      setStatus(snapshot ? `第 ${episodeIndex} 集稿件与批准状态已从服务端恢复` : `第 ${episodeIndex} 集尚未创建，请先保存故事弧`);
+      const baseStatus = snapshot
+        ? `第 ${episodeIndex} 集稿件与批准状态已从服务端恢复`
+        : `第 ${episodeIndex} 集尚未创建，请先保存故事弧`;
+      setStatus(resolveEpisodeScriptWorkspaceStatus(
+        baseStatus, currentJobRef.current, seriesId, episodeIndex, snapshot?.episode.id,
+      ));
     }).catch((error) => {
       if (mounted.current && currentRoute.current === expectedRoute) setStatus(`稿件工作区恢复失败：${(error as Error).message}`);
     }).finally(() => {
@@ -116,6 +161,66 @@ export function useScriptWorkspace({ seriesId, episodeIndex, setBusy, setStatus 
   async function refreshAfterWrite(expectedRoute: string) {
     const snapshot = await readWorkspace(expectedRoute);
     if (mounted.current && currentRoute.current === expectedRoute) applySnapshot(snapshot);
+  }
+
+  useEffect(() => {
+    if (!episode || consumedJobId.current === currentJob?.id ||
+        !completedEpisodeScriptVersions(currentJob, seriesId, episodeIndex, episode.id)) return;
+    const expectedRoute = routeKey;
+    setBusy(true); setStatus("跨章骨架与长稿已生成，正在回读不可变稿件版本…");
+    void refreshAfterWrite(expectedRoute).then(() => {
+      if (!mounted.current || currentRoute.current !== expectedRoute) return;
+      consumedJobId.current = currentJob!.id;
+      setStatus("忠实稿与包装稿已生成并从持久层回读；仍需人工批准包装稿");
+    }).catch((error) => {
+      if (mounted.current && currentRoute.current === expectedRoute) setStatus(`长稿生成成功，但稿件回读失败：${(error as Error).message}`);
+    }).finally(() => {
+      if (mounted.current && currentRoute.current === expectedRoute) setBusy(false);
+    });
+  }, [currentJob?.id, currentJob?.status, episode?.id, seriesId, episodeIndex]);
+
+  useEffect(() => {
+    if (!episode) return;
+    const terminalStatus = resolveEpisodeScriptWorkspaceStatus(
+      "", currentJob, seriesId, episodeIndex, episode.id,
+    );
+    if (terminalStatus) setStatus(terminalStatus);
+  }, [currentJob?.id, currentJob?.status, currentJob?.errorMessage, episode?.id, seriesId, episodeIndex]);
+
+  async function generateScripts() {
+    if (writing.current || !canStartEpisodeScriptGeneration(false, jobActive, episode?.id)) return;
+    const expectedRoute = currentRoute.current;
+    writing.current = true;
+    setBusy(true); setStatus("正在创建跨章骨架与长稿持久任务…");
+    try {
+      const body = await responseJson<{ message: string; job: JobRecord }>(await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "episode_scripts_generate",
+          payload: {
+            seriesId,
+            episodeIndex,
+            voice: voice.trim(),
+            rate,
+            charactersPerSecond,
+            narrationOccupancy,
+            calibration: { identity: "provisional" },
+          },
+        }),
+      }));
+      applyIfCurrentScriptRoute(mounted.current, currentRoute, expectedRoute, () => {
+        onJobCreated(body.job.id);
+        setStatus(`${body.message}；生成完成后仍需人工批准包装稿`);
+      });
+    } catch (error) {
+      applyIfCurrentScriptRoute(mounted.current, currentRoute, expectedRoute, () => {
+        setStatus(`跨章骨架与长稿任务创建失败：${(error as Error).message}`);
+      });
+    } finally {
+      writing.current = false;
+      applyIfCurrentScriptRoute(mounted.current, currentRoute, expectedRoute, () => setBusy(false));
+    }
   }
 
   async function saveVersion() {
@@ -169,9 +274,11 @@ export function useScriptWorkspace({ seriesId, episodeIndex, setBusy, setStatus 
 
   return {
     episode, scripts, approval, kind, parentVersionId, paragraphs, selectedPackagedId,
+    voice, rate, charactersPerSecond, narrationOccupancy,
+    setVoice, setRate, setCharactersPerSecond, setNarrationOccupancy,
     setParentVersionId: chooseParent, setSelectedPackagedId, changeKind, loadVersion, updateParagraph,
     addParagraph: () => setParagraphs((current) => [...current, emptyScriptParagraph()]),
     removeParagraph: (key: string) => setParagraphs((current) => current.length === 1 ? current : current.filter((item) => item.key !== key)),
-    saveVersion, changeApproval,
+    saveVersion, changeApproval, generateScripts,
   };
 }

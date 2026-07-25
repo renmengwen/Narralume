@@ -1,26 +1,43 @@
-import type { EpisodeSourceSnapshot, ScriptVersion } from "../types";
-import { allowedSourceIndexes } from "./script-editor";
+import type { EpisodeSourceSnapshot, JobRecord, ScriptVersion } from "../types";
+import { allowedSourceIndexes, canStartEpisodeScriptGeneration } from "./script-editor";
 import { useScriptWorkspace } from "./use-script-workspace";
 
-export function ScriptStage({ seriesId, episodeIndex, busy, setBusy, setStatus, onEpisodeChange }: {
+export function ScriptStage({
+  seriesId, episodeIndex, busy, jobActive, currentJob, setBusy, setStatus, onEpisodeChange, onJobCreated,
+}: {
   seriesId: string;
   episodeIndex: number;
   busy: boolean;
+  jobActive: boolean;
+  currentJob?: JobRecord;
   setBusy: (busy: boolean) => void;
   setStatus: (message: string) => void;
   onEpisodeChange: (index: number) => void;
+  onJobCreated: (id: string) => void;
 }) {
-  const state = useScriptWorkspace({ seriesId, episodeIndex, setBusy, setStatus });
+  const state = useScriptWorkspace({
+    seriesId, episodeIndex, currentJob, jobActive, setBusy, setStatus, onJobCreated,
+  });
   const faithful = state.scripts.filter((item) => item.kind === "faithful");
   const packaged = state.scripts.filter((item) => item.kind === "packaged");
   const parent = faithful.find((item) => item.id === state.parentVersionId);
   const allowed = new Set(allowedSourceIndexes(state.kind, state.episode?.sources.map((source) => source.sourceIndex) ?? [], parent));
   const sources = (state.episode?.sources ?? []).filter((source) => allowed.has(source.sourceIndex));
+  const canGenerate = canStartEpisodeScriptGeneration(busy, jobActive, state.episode?.id);
 
   return <div className="grid grid-cols-[260px_minmax(0,1fr)_340px] border-t border-[var(--border-subtle)] max-xl:grid-cols-1">
     <aside className="border-r border-[var(--border-subtle)] p-5 max-xl:border-r-0 max-xl:border-b">
       <label className="text-xs text-[var(--fg-secondary)]">分集序号<input type="number" min={1} disabled={busy} value={episodeIndex} onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value > 0) onEpisodeChange(value); }} className="mt-2 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
-      <p className="mt-5 text-xs leading-6 text-[var(--fg-tertiary)]">本入口只保存人工整理稿，不冒充自动生成。每次保存创建不可变新版本。</p>
+      <div className="mt-5 space-y-3 rounded border border-[var(--border-subtle)] p-3">
+        <p className="text-xs font-semibold">跨章骨架与长稿</p>
+        <label className="block text-xs text-[var(--fg-secondary)]">音色<input value={state.voice} disabled={busy || jobActive} onChange={(event) => state.setVoice(event.target.value)} className="mt-1 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
+        <label className="block text-xs text-[var(--fg-secondary)]">语速<input type="number" min={-10} max={10} step={1} value={state.rate} disabled={busy || jobActive} onChange={(event) => state.setRate(Number(event.target.value))} className="mt-1 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
+        <label className="block text-xs text-[var(--fg-secondary)]">暂定字/秒<input type="number" min={0.1} max={20} step={0.1} value={state.charactersPerSecond} disabled={busy || jobActive} onChange={(event) => state.setCharactersPerSecond(Number(event.target.value))} className="mt-1 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
+        <label className="block text-xs text-[var(--fg-secondary)]">旁白占用率<input type="number" min={0.1} max={1} step={0.05} value={state.narrationOccupancy} disabled={busy || jobActive} onChange={(event) => state.setNarrationOccupancy(Number(event.target.value))} className="mt-1 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
+        <button type="button" disabled={!canGenerate} onClick={() => void state.generateScripts()} className="w-full rounded bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{jobActive ? "生成任务处理中…" : "生成骨架、忠实稿与包装稿"}</button>
+        <p className="text-xs leading-5 text-[var(--fg-tertiary)]">当前为短样校准前的暂定语速；生成后不会自动批准。</p>
+      </div>
+      <p className="mt-5 text-xs leading-6 text-[var(--fg-tertiary)]">也可继续人工整理；每次保存都会创建不可变新版本。</p>
       <VersionList title="忠实稿版本" items={faithful} onLoad={state.loadVersion} />
       <VersionList title="包装稿版本" items={packaged} onLoad={state.loadVersion} />
     </aside>

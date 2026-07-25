@@ -56,6 +56,13 @@ import {
   EPISODE_RECOMMENDATION_JOB_TYPE,
   type RecommendEpisodeSources,
 } from "./episode-recommendation-job.js";
+import {
+  createEpisodeScriptGenerationJobHandler,
+  enqueueEpisodeScriptGenerationJob,
+  EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+  type GenerateEpisodeScript,
+} from "./episode-script-generation-job.js";
+import { createOpenAiEpisodeScriptGenerator } from "./episode-script-provider.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
 import {
@@ -110,6 +117,7 @@ interface BuildAppOptions {
   chapterTextProvider?: ChapterTextModelConfig | null;
   chapterAnalyzer?: AnalyzeChapterEvents;
   episodeRecommender?: RecommendEpisodeSources;
+  episodeScriptGenerator?: GenerateEpisodeScript;
 }
 
 interface CreateJobBody {
@@ -244,6 +252,9 @@ export function buildApp(options: BuildAppOptions = {}) {
   const episodeRecommender = options.episodeRecommender ?? (chapterTextProvider
     ? createOpenAiEpisodeRecommender(chapterTextProvider)
     : undefined);
+  const episodeScriptGenerator = options.episodeScriptGenerator ?? (chapterTextProvider
+    ? createOpenAiEpisodeScriptGenerator(chapterTextProvider)
+    : undefined);
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
     ...(chapterTextProvider ? {
@@ -259,6 +270,11 @@ export function buildApp(options: BuildAppOptions = {}) {
         connection.database, episodeRecommender,
       ),
     } : {}),
+    ...(episodeScriptGenerator && chapterTextProvider ? {
+      [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
+        connection.database, dataRoot, chapterTextProvider, episodeScriptGenerator,
+      ),
+    } : {}),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
@@ -272,6 +288,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(IMAGE_CANDIDATE_JOB_TYPE);
   supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
   supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
+  supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
   let worker: JobWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
@@ -819,6 +836,9 @@ export function buildApp(options: BuildAppOptions = {}) {
     if (type === EPISODE_RECOMMENDATION_JOB_TYPE && !episodeRecommender) {
       return reply.code(409).send({ ok: false, message: "Narralume 选材推荐模型尚未配置" });
     }
+    if (type === EPISODE_SCRIPT_GENERATION_JOB_TYPE && (!chapterTextProvider || !episodeScriptGenerator)) {
+      return reply.code(409).send({ ok: false, message: "Narralume 长稿生成模型尚未配置" });
+    }
     if (type === TTS_TIMELINE_JOB_TYPE) {
       const episodeId = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? (body.payload as { episodeId?: unknown }).episodeId
@@ -912,6 +932,29 @@ export function buildApp(options: BuildAppOptions = {}) {
         });
       } catch {
         return reply.code(400).send({ ok: false, message: "跨章选材推荐参数无效" });
+      }
+    }
+    if (type === EPISODE_SCRIPT_GENERATION_JOB_TYPE) {
+      try {
+        const result = await enqueueEpisodeScriptGenerationJob(
+          connection.database,
+          dataRoot,
+          chapterTextProvider!,
+          { payload: body.payload ?? {}, priority, maxAttempts, runAfter },
+        );
+        return reply.code(result.created ? 201 : 200).send({
+          ok: true,
+          message: result.created ? "跨章骨架与长稿任务已创建并持久化" : "已恢复相同跨章骨架与长稿任务",
+          job: result.job,
+        });
+      } catch (error) {
+        if (error instanceof EpisodeStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        return reply.code(400).send({
+          ok: false,
+          message: error instanceof Error ? error.message : "跨章骨架与长稿任务参数无效",
+        });
       }
     }
     const job = createJob(connection.database, {

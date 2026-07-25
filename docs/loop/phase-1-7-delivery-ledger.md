@@ -30,11 +30,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`7c73a80`（PC-02B 已完成并推送；PC-02C 来源登记、启动与 Writer 换租控制提交均在本地）。
+- 当前 HEAD：`114c03d`（PC-02C 首版 Review findings 已登记；第二版业务 candidate 已冻结在 index）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`docs/research/2026-07-24-north-tomb-video-project-summary.md`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：第三轮 PC-02B 根 `npm run typecheck`、`npm test`、`npm run build`、cached/unstaged `git diff --check` 串行 GREEN；server 181 项中 180 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 39/39 PASS，Vite 58 modules。真实 v12 包 `166d37c...` 恢复到 `data/gates/pc02b-v12-package-restore-badf433-v3`：源包不变，目标 schema `1..13`，21 张业务表逐表 count/hash 相同，integrity ok、FK=0，3 个稿件版本、批准 r3、2 chunks 的 duration/身份完整。隔离真实浏览器 Gate：既有 succeeded Job 两事件取消一项后明确保存，URL `job` 清除，冷刷新只恢复 1 条持久证据且旧推荐不回灌；首集不传 `startChapterId` 的 Job payload 为 `requestedStartChapterId=null`、解析首章一致、result `needs_analysis`，带 `job` 无 `chapter` 冷刷新恢复；两条 console error/warning 均 0。默认分支使用注入的非网络 recommender 仅放行路由并证明 handler 未调用模型，不冒充外部模型成功；既有真实 provider 推荐成功证据继续有效。
-- 当前 Task：`PC-02C` changes_requested；首版 candidate 综合 Review FAIL，旧 revision 失效；PC-02B 业务 `ece2ac301e07fd7373336e88a1a188109a1aee72` 与完成登记 `cc294e705fd0637badb56a430c71e45ab435c34d` 已推送 `origin/dev`。
-- 下一动作：同一 Worker 最小根修四项 finding：冻结真实事件摘要、生成完成后原子落一组 faithful/package、只在 React commit 阶段维护 route identity、分离 provider adapter；重跑定向/根门禁/受影响真实 Gate 后生成新 candidate，旧 Review 不继承。
+- 当前 Task：`PC-02C` frozen_for_review；四项 finding 已根修并通过定向、根三门和第二轮真实 API/UI Gate；PC-02B 业务 `ece2ac301e07fd7373336e88a1a188109a1aee72` 与完成登记 `cc294e705fd0637badb56a430c71e45ab435c34d` 已推送 `origin/dev`。
+- 下一动作：在第二版 candidate `git-index-tree-v1:114c03d225f7a6b41d4677e7402315103f82d42c:70dedb655fba9994ea73252c48f903d8c5f8dff4` 上执行一次独立综合复审；PASS 后中文业务提交、完成登记并推送 `origin/dev`，随即进入已完成五仓研究的 TTS 短样校准。
 
 ## 2026-07-25 产品闭环复开
 
@@ -54,7 +54,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 第三版根门禁、v12 恢复、隔离真实 UI Gate与同一 candidate 双 Review全部 PASS；业务 `ece2ac3` |
-| PC-02C 跨章骨架与长稿 | `changes_requested` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 首版综合 Review 发现原子落稿、事件摘要冻结、React route identity 与 provider 模块边界四项 finding，根修后重验重冻 |
+| PC-02C 跨章骨架与长稿 | `frozen_for_review` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 四项首版 finding 已根修；第二版 candidate、根门禁与真实成功/取消/失败 Gate 已冻结，等待综合复审 |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
@@ -101,7 +101,7 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02C | `pc02c_worker` | 共享工作区 `dev@b8cd4fc`；首版 candidate `6111f5c` 已失效 | 原 8 个业务路径；可最小新增 provider 模块并修改既有 `script-version-store.ts` 及测试以实现同事务原子写；排除本 Ledger、来源文档与全部用户本地改动 | Coordinator | 单写业务路径；不启动共享真实数据 Gate | `implementing` |
+| PC-02C | Coordinator / Writer 已释放 | `dev@114c03d`；第二版 candidate `70dedb6` | 冻结的 10 个业务路径；Review 期间只读，排除本 Ledger、来源文档与全部用户本地改动 | Coordinator | 默认产品 3101/5174 已恢复；隔离 Gate 与 Writer 均释放 | `frozen_for_review` |
 | PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3`；业务 `ece2ac3`，完成登记 `cc294e7` | 无 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `complete` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
@@ -114,7 +114,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PC-02C 跨章骨架与长稿 | `changes_requested` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | `pc02c_worker` / 单写租约 | 首版 `git-index-tree-v1:7c73a80606cf11b9e26782444f39ccde2c1599cd:6111f5cb24fa87d1884d95b312e0f83f8d4c73a4` 已失效 | `b8cd4fc5e88ed7db35a56aae6a036c2fb6f7037f` | FAIL：同一次综合 Review，2×P1、2×P2 | 同一次综合 Review | 首版定向 61/61、根三门/diff 与真实 Gate GREEN，但未覆盖原子落稿、摘要漂移和 hook lifecycle；旧证据只保留未失效范围 | 待提交 | 根修：事件摘要冻结/requestHash/漂移；全部模型生成后同事务原子落 faithful/package；commit route identity 与异步 stale；provider adapter 最小分离。无新表、依赖或通用框架 |
+| PC-02C 跨章骨架与长稿 | `frozen_for_review` | PC-02B complete；现有 Episode sources、Job/provider、稿件版本和批准门 | Coordinator / Writer 已释放 | 第二版 `git-index-tree-v1:114c03d225f7a6b41d4677e7402315103f82d42c:70dedb655fba9994ea73252c48f903d8c5f8dff4`；恰好 10 个业务路径 | 由 Git 历史定位本次冻结控制提交 | 待一次独立综合复审 | 同一次综合复审 | 定向 server24/24、web38/38；根 typecheck/test/build/diff GREEN，server200 PASS/1权限SKIP、web45/45、Vite58；第二轮成功/取消/失败及冷恢复、零部分稿、未批准与 console0 均 GREEN | 待提交 | 首版四项 finding 已进入第二版：canonical event summary 冻结/漂移拒绝、同事务原子 pair、commit route identity、独立最小 provider 模块；无新表、migration、依赖或框架 |
 | PC-02B 可配置时长与跨章自动选材 | `complete` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a` | `c38d990ca0d782d680684f9fa3c498d825b2e351` | PASS：chunk duration、隐式原始/解析起点、历史跳章同值 PUT 均关闭；95 项 94 PASS/1权限SKIP | PASS：封存稿件/父链/source/批准身份、推荐消费、React commit identity 均关闭；project-package 47 PASS/1 SKIP、web32/32 | 根三门/diff GREEN，server 180 PASS/1权限SKIP、web39/39；v12 21表恢复完整；默认空起点 `requestedStartChapterId=null`/needs_analysis 冷恢复与推荐子集消费冷恢复均 GREEN，console 0 | `ece2ac301e07fd7373336e88a1a188109a1aee72` | 外部 provider 重启映射受执行策略限制；默认 identity Gate 使用非网络注入且未调用模型，不影响既有真实推荐成功证据；进入 PC-02C |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
@@ -304,6 +304,7 @@ PC-02 当前 checkpoint：
 | 2026-07-26 PC-02C Writer 换租 | 原 `pc02b_worker` 两轮运行仅完成只读核验，未产生业务文件、index 或 Ledger 修改，Coordinator 中断后释放；同一允许路径改租给 `pc02c_worker`，保证任一时点仍只有一个业务写者。 |
 | 2026-07-26 PC-02C candidate | `pc02c_worker` 已释放且未提交/push。冻结 revision `git-index-tree-v1:7c73a80606cf11b9e26782444f39ccde2c1599cd:6111f5cb24fa87d1884d95b312e0f83f8d4c73a4`，恰好 8 个 staged 业务路径、用户本地启动配置 0 staged。骨架请求仅含结构化事件摘要与来源 identity，faithful 逐 beat 读取对应原文，packaged 仅引用 faithful 冻结来源；三阶段 Episode/时长/source identity 漂移复核，重试幂等、取消不落稿、失败恢复、不自动批准。定向 61/61；根 typecheck/test/build/diff GREEN，server 196 PASS/1 Windows symlink 权限 SKIP、web43/43、Vite 58 modules。隔离 API/UI Gate 成功、取消、失败及冷刷新恢复均 GREEN，批准保持 withdrawn，console 0 error/0 warning；默认产品 3101/5174 已恢复。首次取消冷恢复终态被基础稿 hydrate 覆盖，已在共享状态解析根修并以 job-first/base-first、stale identity 回归关闭。 |
 | 2026-07-26 PC-02C 首版综合 Review | FAIL，绑定冻结 Ledger `b8cd4fc5e88ed7db35a56aae6a036c2fb6f7037f` 与首版 revision，8/8 candidate blob 一致，Review 前后 HEAD/index/status 不变。P1：faithful 在 packaged 生成/校验前先落库，后续失败、取消、漂移或写失败会留下部分稿，重试的非确定文本还会产生孤立版本；必须全部生成校验后在短事务中原子创建/复用一组 faithful/package。P1：Skeleton 实际消费的 event type/canonical payload 未冻结进 payload/requestHash，同 event ID 摘要修改会静默改变请求；必须冻结摘要身份、handler 使用冻结值并在执行/落库门拒绝漂移。P2：Script hook 在 render 阶段改 route/currentJob refs，延迟 POST 可把旧 Job 写入新路由；改为 commit 阶段 identity 与 expectedRoute 异步写回。P2：458 行模块混合领域 Job 与 OpenAI adapter；只做 provider 模块最小分离，不造框架。16/16 server、36/36 web 测试虽 GREEN，但未覆盖 findings；旧 candidate 失效。 |
+| 2026-07-26 PC-02C 第二版 candidate | `git-index-tree-v1:114c03d225f7a6b41d4677e7402315103f82d42c:70dedb655fba9994ea73252c48f903d8c5f8dff4`，恰好 10 个 staged 业务路径、保护路径 0 staged。`episode-scripts-generate-v2` 冻结 eventType/canonical payload 并进入 requestHash，执行与原子提交边界拒绝漂移；全部模型调用/校验完成后，Script Version Store 在一个短 `BEGIN IMMEDIATE` 事务中同步复核当前 Episode/source/event summary 并原子创建/复用 faithful+packaged，第二次写失败整体 rollback；OpenAI Responses adapter 独立为最小 provider 模块。前端 route/currentJob 只在 layout commit 更新，异步 POST/status/busy 绑定 expectedRoute；StrictMode 未提交 render、延迟 POST 切路由与卸载均有回归。定向 server24/24、web38/38；根 typecheck/test/build/diff GREEN，server 200 PASS/1 Windows symlink 权限 SKIP、web45/45、Vite58 modules。隔离 Gate：成功 `job_episode_scripts_3a98c05e…` 冻结 canonical summary；取消 `388818e…` 与失败 `8fa0d0fd…` 即时/冷刷新终态 GREEN，稿件始终 4 条（2 faithful/2 packaged）、批准 withdrawn r4、console 0；默认产品 3101/5174 与 545 章《盗墓笔记》已恢复。 |
 
 ## 决策与剩余风险
 

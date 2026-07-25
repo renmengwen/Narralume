@@ -30,7 +30,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`9315d3b`（PC-02 已接通显式视觉段绑定与联系表首版；PC-03 字幕短句与安全区真实媒体 Gate 保持有效）。
+- 当前 HEAD：`579a3de`（PC-02B 产品合同与写租约已登记；PC-02 视觉段/联系表和 PC-03 字幕安全区证据保持有效）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：`9315d3b` 根 `typecheck/test/build/diff-check` GREEN；server 152 项中 151 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 31/31 PASS，Vite 58 modules。真实浏览器按 `timeline=f90182…` 显示 cue 文本/时间，保存 approved 候选绑定后 GET 回读 `productionReady=true/r1`；刷新与真实进程重启后 URL、视觉段和 9:16 预览恢复，console 0/0。候选 reject 后 `productionReady=false` 且联系表 HTTP 409；重新批准并按新 revision 更新绑定后恢复为 r2，稳定态重复导出 JSON/HTML hash 一致。当前批准包装稿仅 12.165s/1 cue，UI 正确禁止 1 段冒充 8～15 段联系表；完整多段 UI 导出进入 PC-04/PC-06 真实长稿和多图验收。PC-03 的 54 cue/295.462s 媒体 Gate 继续有效。
 - 当前 Task：`PC-02B` implementing；先接通可配置目标时长、Agent 推荐章节范围、用户确认和跨章事件汇总，暂停基于 12.165 秒单章短稿继续生产图片。
@@ -100,7 +100,7 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B | Coordinator | `dev@b0e26c4` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
+| PC-02B | PC-02B 单写 Worker | `dev@579a3de` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

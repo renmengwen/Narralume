@@ -6,7 +6,7 @@
 
 - Goal ID：`NARRALUME-P1-P7`
 - 根目标状态：`active`（2026-07-25 产品闭环复开；既有工程基线保留）
-- 根目标：持续完成 Narralume Phase 1-7，直到用户可从前端走通真实《北派盗墓笔记》生产流程，并完成一条通过内容、听感、画面、字幕与恢复验收的 3～5 分钟 9:16 样片。
+- 根目标：持续完成 Narralume Phase 1-7，直到用户可从前端走通真实《北派盗墓笔记》生产流程，并按系统可配置的目标时长完成一条通过内容、听感、画面、字幕与恢复验收的 9:16 产品视频；20 分钟仅为当前参考目标，不得硬编码。
 - 仓库：`D:\code3\Narralume`
 - 不可变基线：`main@e75b1c33140f92703cce07c89673ec06b8393f92`
 - 集成分支：`dev`；默认只推送 `origin/dev`，未经用户明确授权不合并 `main`。
@@ -25,14 +25,16 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 2026-07-25 用户进一步明确为首版硬约束：当前产品闭环大部分复用既有 API、Job、恢复与媒体核心，先完成可用首版，不以严格 Review 阻塞连续实现。此类前端编排/接线只保留 Worker 最小测试、Coordinator 边界核对和真实工作流验收；只有实际新增数据库迁移、耐久写核心、恢复原语、TTS/FFmpeg 等高风险核心时才恢复严格独立 Review。
 
+2026-07-25 用户修正长篇改编合同：目标时长必须由系统配置并保存到 Episode，20 分钟只作参考；Agent 基于逐章事件摘要、目标时长和真实语速推荐连续原著范围，用户确认或调整后才冻结到结构化 `episode_sources`。不得把多章全文一次拼入模型，也不得复制 Toonflow 的短漫剧时长、字数、固定章数或付费节奏。视觉段数量由真实故事 beat、时间轴和画面驻留策略派生，旧 8～15 段只保留为 3～5 分钟首版 Gate，不得成为全局门禁。
+
 ## 当前恢复入口
 
 - 当前分支：`dev`
 - 当前 HEAD：`9315d3b`（PC-02 已接通显式视觉段绑定与联系表首版；PC-03 字幕短句与安全区真实媒体 Gate 保持有效）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
 - 最近验证：`9315d3b` 根 `typecheck/test/build/diff-check` GREEN；server 152 项中 151 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 31/31 PASS，Vite 58 modules。真实浏览器按 `timeline=f90182…` 显示 cue 文本/时间，保存 approved 候选绑定后 GET 回读 `productionReady=true/r1`；刷新与真实进程重启后 URL、视觉段和 9:16 预览恢复，console 0/0。候选 reject 后 `productionReady=false` 且联系表 HTTP 409；重新批准并按新 revision 更新绑定后恢复为 r2，稳定态重复导出 JSON/HTML hash 一致。当前批准包装稿仅 12.165s/1 cue，UI 正确禁止 1 段冒充 8～15 段联系表；完整多段 UI 导出进入 PC-04/PC-06 真实长稿和多图验收。PC-03 的 54 cue/295.462s 媒体 Gate 继续有效。
-- 当前 Task：`PC-02` implementing；按冻结顺序 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 复用已验证逻辑，接通固定阶段创作工作区。
-- 下一动作：进入 PC-04，由单写 Worker 基于真实北派长稿规划 8～15 个连续视觉段、补齐语义资产和不同图片，完成开头 15 秒 3～4 个有效画面与完整联系表 UI 导出；随后完成 PC-05 真实说书 TTS 与 PC-06 北派样片。自动章节分析的 provider 内容门禁作为外部残余风险保留。复用型首版不以严格独立 Review 阻塞。
+- 当前 Task：`PC-02B` implementing；先接通可配置目标时长、Agent 推荐章节范围、用户确认和跨章事件汇总，暂停基于 12.165 秒单章短稿继续生产图片。
+- 下一动作：由单写 Worker 复用现有单章分析 Job、章节分页、跨章 Episode sources 与当前 Episode 表单，完成 PC-02B 最小闭包；随后 PC-02C 生成可审核的跨章故事骨架和长稿，再恢复 PC-04 多图生产。自动章节分析的 provider 内容门禁作为外部残余风险保留。复用型首版不以严格独立 Review 阻塞。
 
 ## 2026-07-25 产品闭环复开
 
@@ -51,10 +53,12 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- |
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
+| PC-02B 可配置时长与跨章自动选材 | `implementing` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 不拼接多章全文；推荐范围、事件证据、预计字数/时长可见；保存后逐章证据和 hash 可恢复 |
+| PC-02C 跨章骨架与长稿 | `queued` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 不新增第二套稿件存储；目标时长和真实 TTS 语速驱动字数预算；批准后才能进入媒体生产 |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
-| PC-04 视觉语义与多图生产 | `queued` | 补视觉描述/提示词、资产匹配、8～15 张不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面，正文节奏不机械 |
+| PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
 | PC-05 真实 TTS 与听音 | `queued` | 复用本机已授权配置接入可用说书 TTS；保留本地 fallback | 音色/语速/专名经真实短样与全片听音验收 |
-| PC-06 北派真实样片与最终复验 | `queued` | 真实北派原文、第一人称故事弧、人工稿件/图片/整片批准、项目包恢复 | 内容、声音、字幕、画面、媒体与恢复全部通过后才恢复根目标 `complete` |
+| PC-06 北派真实样片与最终复验 | `queued` | 真实北派原文、第一人称跨章故事弧、人工稿件/图片/整片批准、项目包恢复 | 按系统配置的目标时长完成；内容、声音、字幕、画面、媒体与恢复全部通过后才恢复根目标 `complete` |
 
 PC-01 完成证据：
 
@@ -89,13 +93,14 @@ PC-02 当前 checkpoint：
 - AudioStage 验收：真实当前批准包装稿只有 1 段，System.Speech 产物真值为 12,165ms（独立 P4-02 Gate 的 20,506ms 属另一数据集）；页面显示 1 segment/1 cue、逐段 audio controls、SRT/ASS，WAV GET 200 `audio/wav` 且 ffprobe 为 PCM s16le/22050Hz/mono；刷新、episode 2 空态、回 1、真实 restart 后保持；后台章节 hydrate 不再覆盖 audio/scripts 阶段 status。
 - PC-03 验收：初版逗号一律拆分产生 104 cue/318,913ms，超过 5 分钟；修正为强标点必拆、仅超长句以弱标点回退后，真实 54 cue/295,462ms 通过。最终视频严格 ffprobe/full media chain GREEN；亮场单行与暗场双行抽帧目检无横裁、不超两行、未进入底部风险区；数据库 `max_lines=2`。
 - 视觉段验收：真实 1 cue 时间轴创建 1 段，绑定 900×1600 approved 候选后 PUT/GET 回读 `productionReady=true/r1`；刷新与真实 restart 后 URL、段和预览恢复。reject 后 productionReady false、联系表 409；重新 approve 并更新绑定后 r2 恢复。稳定态重复导出 JSON `a2d732…414a`、HTML `12553c…77fd` 均一致。当前短稿不足 8～15 段，UI 导出按产品门禁保持禁用，不冒充 PC-04 完成。
-- 尚未接通：PC-04 真实北派 8～15 段/不同图片及完整 UI 联系表、PC-05 真实说书 TTS、北派 render chunks/final video 和所有阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-03 `complete`。
+- 长篇合同核验：当前前端和 `chapter_events_analyze` 是单章入口，但 Episode/faithful/package/TTS 后端已经支持跨 `chapterId`；单元测试覆盖两章，P3 真实 Gate 覆盖三章。Toonflow 真实做法是逐章摘要、Agent 推荐范围、用户确认、骨架自动分配，不能复制其短漫剧常量或把章节映射藏在文本骨架。当前 `180～300` 秒和视觉 8～15 段硬门禁必须改为配置/派生合同。
+- 尚未接通：PC-02B 可配置时长/跨章自动选材、PC-02C 长稿、PC-04 动态多图生产及完整 UI 联系表、PC-05 真实说书 TTS、北派 render chunks/final video 和所有阶段连续真实工作流验收。PC-02 保持 `implementing`，PC-03 `complete`。
 
 ## 当前写租约
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02/PC-04 | Coordinator | `dev@9315d3b` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
+| PC-02B | Coordinator | `dev@b0e26c4` | `apps/web/src/**`、`apps/web/test/**`、`apps/server/src/**`、`apps/server/test/**`、`docs/reuse/**`、`docs/source-provenance.md`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、现有数据根；同批路径单写 Worker | `implementing` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 

@@ -73,6 +73,7 @@ export interface JobRecord {
   attempts: number;
   maxAttempts: number;
   cancelRequested: boolean;
+  payload?: unknown;
   result?: unknown | null;
   errorMessage: string | null;
 }

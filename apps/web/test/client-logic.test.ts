@@ -19,7 +19,7 @@ import {
   resolveProductionStage,
 } from "../src/production-logic.ts";
 import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
-import { assetGapCounts, canApplyCandidateRefresh, candidateUploadRequest, generatedCandidateAssetId } from "../src/production/assets/asset-candidate-editor.ts";
+import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "../src/production/assets/asset-candidate-editor.ts";
 import type { AssetRecord, CandidateRecord } from "../src/production/assets/types.ts";
 import { episodeDraft, episodePutPayload } from "../src/production/episode/episode-editor.ts";
 import { allowedSourceIndexes, approvalPutPayload, scriptDraft, scriptPostPayload } from "../src/production/scripts/script-editor.ts";
@@ -139,6 +139,22 @@ test("候选刷新拒绝旧请求与跨资产响应", () => {
   assert.equal(canApplyCandidateRefresh("asset_a", 2, 1, [candidate]), false);
   assert.equal(canApplyCandidateRefresh("asset_a", 2, 2, [{ assetId: "asset_b" } as CandidateRecord]), false);
   assert.equal(canApplyCandidateRefresh("asset_a", 2, 2, [candidate]), true);
+});
+
+test("生成候选从冻结任务无损恢复完整 prompt，上传候选不冒充版本", () => {
+  const candidate = { id: "candidate_1", assetId: "asset_a", source: {
+    kind: "generation", requestHash: "a".repeat(64), revisedPrompt: "模型修订词",
+  } } as CandidateRecord;
+  const prompt = "旧格式：保留全部文本\n包括未知字段";
+  const job = {
+    id: `job_image_${"a".repeat(64)}`, type: "image_candidate_generate", status: "succeeded" as const,
+    progress: 1, attempts: 1, maxAttempts: 3, cancelRequested: false, errorMessage: null,
+    payload: { assetId: "asset_a", requestHash: "a".repeat(64), prompt },
+  };
+  assert.equal(candidatePromptJobId(candidate), job.id);
+  assert.equal(promptFromCandidateJob(candidate, job), prompt);
+  assert.equal(promptFromCandidateJob(candidate, { ...job, payload: { ...job.payload, assetId: "asset_b" } }), undefined);
+  assert.equal(candidatePromptJobId({ ...candidate, source: { kind: "upload", originalName: "原图.png" } }), undefined);
 });
 
 test("人工章节事件沿用现有持久任务合同并限制证据范围", () => {

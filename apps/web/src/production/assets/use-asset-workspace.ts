@@ -3,8 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { responseJson } from "../../client-logic";
 import { assembleImagePrompt } from "../../production-logic";
 import type { JobRecord } from "../types";
-import { assetGapCounts, canApplyCandidateRefresh, candidateUploadRequest, generatedCandidateAssetId } from "./asset-candidate-editor";
-import type { AssetGroup, AssetRecord, AssetType, CandidateRecord, EpisodeRecord, PromptParts } from "./types";
+import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "./asset-candidate-editor";
+import type { AssetGroup, AssetRecord, AssetType, CandidateRecord, CandidateReviewEvent, EpisodeRecord, PromptParts } from "./types";
 import { flattenAssets } from "./types";
 
 type CandidateMap = Record<string, CandidateRecord[]>;
@@ -13,6 +13,7 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
   const [assets, setAssets] = useState<AssetGroup[]>([]);
   const [episode, setEpisode] = useState<EpisodeRecord>();
   const [selectedAssetId, setSelectedAssetId] = useState(initialAssetId);
+  const selectedAssetIdRef = useRef(initialAssetId);
   const [candidatesByAsset, setCandidatesByAsset] = useState<CandidateMap>({});
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
@@ -25,11 +26,15 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
   const [stateLabel, setStateLabel] = useState("");
   const [aliasDraft, setAliasDraft] = useState("");
   const [promptParts, setPromptParts] = useState<PromptParts>({ evidence: "", sceneIntent: "", subjectAction: "", environment: "", lightingComposition: "", styleConstraints: "写实悬疑，人物与年代细节一致，不虚构原文没有的品牌和文字" });
+  const [promptOverride, setPromptOverride] = useState<string>();
+  const [derivedFromCandidateId, setDerivedFromCandidateId] = useState<string>();
+  const [reviewHistory, setReviewHistory] = useState<Record<string, CandidateReviewEvent[]>>({});
   const allAssets = useMemo(() => flattenAssets(assets), [assets]);
   const selectedAsset = allAssets.find((asset) => asset.id === selectedAssetId);
   const candidates = selectedAssetId ? candidatesByAsset[selectedAssetId] ?? [] : [];
   const gaps = useMemo(() => assetGapCounts(allAssets, candidatesByAsset), [allAssets, candidatesByAsset]);
-  const prompt = selectedAsset ? assembleImagePrompt({ ...promptParts, assetName: selectedAsset.name, assetState: selectedAsset.stateLabel }) : "";
+  const assembledPrompt = selectedAsset ? assembleImagePrompt({ ...promptParts, assetName: selectedAsset.name, assetState: selectedAsset.stateLabel }) : "";
+  const prompt = promptOverride ?? assembledPrompt;
   const busy = externalBusy || loading || mutating;
 
   async function fetchCandidates(assetId: string) {
@@ -49,6 +54,7 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
     setCandidatesByAsset(snapshot.candidates);
     const nextId = snapshot.flattened.some((asset) => asset.id === preferredId) ? preferredId : snapshot.flattened[0]?.id;
     setSelectedAssetId(nextId);
+    selectedAssetIdRef.current = nextId;
     onAssetChange(nextId);
     return snapshot.flattened.length;
   }
@@ -64,6 +70,8 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
 
   useEffect(() => {
     const epoch = ++hydrateEpoch.current;
+    setPromptOverride(undefined);
+    setDerivedFromCandidateId(undefined);
     setLoading(true);
     setStatus("正在恢复系列资产、生产缺口和分集门禁…");
     async function hydrate() {
@@ -110,8 +118,39 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
     setMutating(false);
   }
 
-  function chooseAsset(id: string) { setSelectedAssetId(id); onAssetChange(id); setStatus("已切换资产；候选图按该资产独立显示"); }
-  function updatePromptPart(key: keyof PromptParts, value: string) { setPromptParts((current) => ({ ...current, [key]: value })); }
+  function chooseAsset(id: string) { selectedAssetIdRef.current = id; setSelectedAssetId(id); setPromptOverride(undefined); setDerivedFromCandidateId(undefined); onAssetChange(id); setStatus("已切换资产；候选图按该资产独立显示"); }
+  function updatePromptPart(key: keyof PromptParts, value: string) { setPromptOverride(undefined); setDerivedFromCandidateId(undefined); setPromptParts((current) => ({ ...current, [key]: value })); }
+  function updatePrompt(value: string) { setPromptOverride(value); }
+
+  async function restoreCandidatePrompt(candidate: CandidateRecord) {
+    const jobId = candidatePromptJobId(candidate);
+    if (!jobId || !beginMutation("正在恢复生成候选的完整提示词…")) return;
+    try {
+      const body = await responseJson<{ job: JobRecord }>(await fetch(`/api/jobs/${encodeURIComponent(jobId)}`));
+      if (selectedAssetIdRef.current !== candidate.assetId) return;
+      const restored = promptFromCandidateJob(candidate, body.job);
+      if (!restored) throw new Error("生成任务与候选身份不一致");
+      setPromptOverride(restored);
+      setDerivedFromCandidateId(candidate.id);
+      setStatus("完整提示词已从冻结任务恢复，可编辑后生成派生版本");
+    } catch (error) { setStatus(`提示词恢复失败：${(error as Error).message}`); }
+    finally { endMutation(); }
+  }
+
+  async function fetchReviewHistory(candidate: CandidateRecord) {
+    const body = await responseJson<{ items: CandidateReviewEvent[] }>(await fetch(`/api/candidates/${encodeURIComponent(candidate.id)}/reviews`));
+    if (selectedAssetIdRef.current !== candidate.assetId) return;
+    setReviewHistory((current) => ({ ...current, [candidate.id]: body.items }));
+  }
+
+  async function loadReviewHistory(candidate: CandidateRecord) {
+    if (!beginMutation("正在恢复候选审核历史…")) return;
+    try {
+      await fetchReviewHistory(candidate);
+      setStatus("候选审核历史已从持久层恢复");
+    } catch (error) { setStatus(`审核历史恢复失败：${(error as Error).message}`); }
+    finally { endMutation(); }
+  }
 
   async function createAsset() {
     if (!newAssetName.trim() || !beginMutation(parentAssetId ? "正在创建状态资产…" : "正在创建主资产…")) return;
@@ -148,23 +187,33 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
   }
 
   async function generateCandidate() {
-    if (!selectedAsset || !episode || !promptParts.evidence.trim() || !promptParts.sceneIntent.trim() || !promptParts.subjectAction.trim() || !beginMutation("正在创建可恢复的生图任务…")) return;
+    if (!selectedAsset || !episode || !prompt.trim() || (!derivedFromCandidateId && (!promptParts.evidence.trim() || !promptParts.sceneIntent.trim() || !promptParts.subjectAction.trim())) || !beginMutation("正在创建可恢复的生图任务…")) return;
     try {
-      const body = await responseJson<{ message: string; job: { id: string } }>(await fetch("/api/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "image_candidate_generate", payload: { episodeId: episode.id, assetId: selectedAsset.id, prompt } }) }));
+      const body = await responseJson<{ message: string; job: { id: string } }>(await fetch("/api/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "image_candidate_generate", payload: { episodeId: episode.id, assetId: selectedAsset.id, prompt, ...(derivedFromCandidateId ? { derivedFromCandidateId } : {}) } }) }));
       onJobCreated(body.job.id); setStatus(body.message);
     } catch (error) { setStatus(`生图任务创建失败：${(error as Error).message}`); }
     finally { endMutation(); }
   }
 
-  async function reviewCandidate(candidate: CandidateRecord, action: "approve" | "reject") {
-    if (!beginMutation(action === "approve" ? "正在批准候选图…" : "正在淘汰候选图…")) return;
+  async function reviewCandidate(candidate: CandidateRecord, action: "approve" | "reject" | "note", note?: string) {
+    if (!beginMutation(action === "approve" ? "正在批准候选图…" : action === "reject" ? "正在淘汰候选图…" : "正在记录审核备注…")) return false;
     try {
-      await responseJson(await fetch(`/api/candidates/${encodeURIComponent(candidate.id)}/reviews`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: candidate.reviewRevision, action }) }));
+      const response = await fetch(`/api/candidates/${encodeURIComponent(candidate.id)}/reviews`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: candidate.reviewRevision, action, ...(action === "note" ? { note } : {}) }) });
+      try { await responseJson(response); } catch (error) {
+        if (response.status === 409) {
+          await Promise.all([refreshCandidates(candidate.assetId), fetchReviewHistory(candidate)]);
+          setStatus(`审核状态已变化，候选和历史已刷新；未提交备注仍保留：${(error as Error).message}`);
+          return false;
+        }
+        throw error;
+      }
       await refreshCandidates(candidate.assetId);
-      setStatus(action === "approve" ? "候选图已批准，可供视觉段显式绑定" : "候选图已淘汰，历史仍保留");
-    } catch (error) { setStatus(`候选审核失败：${(error as Error).message}`); }
+      await fetchReviewHistory(candidate);
+      setStatus(action === "approve" ? "候选图已批准，可供视觉段显式绑定" : action === "reject" ? "候选图已淘汰，历史仍保留" : "审核备注已记录，批准状态未改变");
+      return true;
+    } catch (error) { setStatus(`候选审核失败：${(error as Error).message}`); return false; }
     finally { endMutation(); }
   }
 
-  return { assets, allAssets, episode, selectedAsset, candidates, gaps, busy, newAssetName, setNewAssetName, newAssetType, setNewAssetType, parentAssetId, setParentAssetId, stateLabel, setStateLabel, aliasDraft, setAliasDraft, promptParts, updatePromptPart, prompt, chooseAsset, createAsset, addAlias, uploadCandidate, generateCandidate, reviewCandidate };
+  return { assets, allAssets, episode, selectedAsset, candidates, gaps, busy, newAssetName, setNewAssetName, newAssetType, setNewAssetType, parentAssetId, setParentAssetId, stateLabel, setStateLabel, aliasDraft, setAliasDraft, promptParts, updatePromptPart, prompt, updatePrompt, derivedFromCandidateId, chooseAsset, createAsset, addAlias, uploadCandidate, generateCandidate, restoreCandidatePrompt, reviewHistory, loadReviewHistory, reviewCandidate };
 }

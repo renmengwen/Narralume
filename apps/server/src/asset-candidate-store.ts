@@ -23,6 +23,7 @@ export type AssetCandidateSource =
       size: string;
       outputIndex: number;
       revisedPrompt?: string;
+      derivedFromCandidateId?: string;
     };
 export type AssetCandidateMime = "image/png" | "image/jpeg" | "image/webp";
 export type AssetCandidateReviewAction = "approve" | "reject" | "note";
@@ -139,6 +140,9 @@ function safeSource(source: AssetCandidateSource): AssetCandidateSource {
       outputIndex: source.outputIndex,
     };
     if (source.revisedPrompt !== undefined) result.revisedPrompt = text(source.revisedPrompt, "修订提示词", 4000);
+    if (source.derivedFromCandidateId !== undefined) {
+      result.derivedFromCandidateId = text(source.derivedFromCandidateId, "父候选 ID");
+    }
     return result;
   }
   throw new AssetCandidateStoreError(400, "候选图来源无效");

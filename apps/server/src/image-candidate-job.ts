@@ -30,6 +30,7 @@ interface ImageCandidateRequest {
   episodeId: string;
   assetId: string;
   prompt: string;
+  derivedFromCandidateId?: string;
 }
 
 interface ImageCandidateJobPayload extends ImageCandidateRequest {
@@ -50,13 +51,17 @@ function text(value: unknown, message: string, max = 255) {
 
 function requestPayload(value: unknown): ImageCandidateRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("图片生成任务参数无效");
-  const input = value as { episodeId?: unknown; assetId?: unknown; prompt?: unknown };
+  const input = value as { episodeId?: unknown; assetId?: unknown; prompt?: unknown; derivedFromCandidateId?: unknown };
   const episodeId = text(input.episodeId, "图片生成任务缺少有效的分集或资产 ID");
   const assetId = text(input.assetId, "图片生成任务缺少有效的分集或资产 ID");
   if (!/^[A-Za-z0-9_-]+$/.test(episodeId) || !/^[A-Za-z0-9_-]+$/.test(assetId)) {
     throw new Error("图片生成任务缺少有效的分集或资产 ID");
   }
-  return { episodeId, assetId, prompt: text(input.prompt, "图片生成提示词无效", 20_000) };
+  const request: ImageCandidateRequest = { episodeId, assetId, prompt: text(input.prompt, "图片生成提示词无效", 20_000) };
+  if (input.derivedFromCandidateId !== undefined) {
+    request.derivedFromCandidateId = text(input.derivedFromCandidateId, "父候选 ID 无效");
+  }
+  return request;
 }
 
 function frozenPayload(value: unknown): ImageCandidateJobPayload {
@@ -90,6 +95,14 @@ function requireSameSeries(database: DatabaseSync, episodeId: string, assetId: s
   if (row.episode_series_id !== row.asset_series_id) throw new Error("图片资产与分集不属于同一系列");
 }
 
+function requireParentCandidate(database: DatabaseSync, assetId: string, candidateId: string | undefined) {
+  if (!candidateId) return;
+  const parent = database.prepare("SELECT asset_id FROM asset_candidates WHERE id = ?").get(candidateId) as
+    { asset_id: string } | undefined;
+  if (!parent) throw new Error("父候选不存在");
+  if (parent.asset_id !== assetId) throw new Error("父候选与目标资产不一致");
+}
+
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -107,9 +120,10 @@ export function imageGenerationRequestHash(input: {
   providerId: string;
   model: string;
   prompt: string;
+  derivedFromCandidateId?: string;
 }) {
   return sha256(JSON.stringify({
-    contract: "image-generation-request-v1",
+    contract: input.derivedFromCandidateId ? "image-generation-request-v2" : "image-generation-request-v1",
     episodeId: input.episodeId,
     assetId: input.assetId,
     scriptVersionId: input.scriptVersionId,
@@ -119,6 +133,7 @@ export function imageGenerationRequestHash(input: {
     model: input.model,
     prompt: input.prompt,
     size: IMAGE_GENERATION_SIZE,
+    ...(input.derivedFromCandidateId ? { derivedFromCandidateId: input.derivedFromCandidateId } : {}),
   }));
 }
 
@@ -140,6 +155,7 @@ function assertFrozenIdentity(
     throw new Error("图片生成任务排队后批准稿已变化");
   }
   requireSameSeries(database, task.episodeId, task.assetId);
+  requireParentCandidate(database, task.assetId, task.derivedFromCandidateId);
 }
 
 export function enqueueImageCandidateJob(
@@ -150,6 +166,7 @@ export function enqueueImageCandidateJob(
   const request = requestPayload(input.payload);
   const permit = requireApprovedScriptForProduction(database, request.episodeId, "image");
   requireSameSeries(database, request.episodeId, request.assetId);
+  requireParentCandidate(database, request.assetId, request.derivedFromCandidateId);
   const identity = {
     ...request,
     scriptVersionId: permit.scriptVersionId,
@@ -224,6 +241,7 @@ export function createImageCandidateJobHandler(
           size: IMAGE_GENERATION_SIZE,
           outputIndex: 0,
           ...(generated.revisedPrompt ? { revisedPrompt: generated.revisedPrompt } : {}),
+          ...(task.derivedFromCandidateId ? { derivedFromCandidateId: task.derivedFromCandidateId } : {}),
         },
         raw: oneChunk(generated.bytes),
         signal: controller.signal,

@@ -51,6 +51,11 @@ function seed(database: ReturnType<typeof openDatabase>["database"]) {
        id, episode_id, kind, version, content_json, content_hash, created_at
      ) VALUES ('script_image', 'episode_a', 'packaged', 1, ?, ?, 1)`,
   ).run(JSON.stringify({ paragraphs: [{ text: "批准包装稿" }] }), "2".repeat(64));
+  database.prepare(
+    `INSERT INTO assets (
+       id, series_project_id, asset_type, asset_role, canonical_name, normalized_name, created_at
+     ) VALUES ('asset_a_peer', 'series_a', 'character', 'master', '同系列另一人物', '同系列另一人物', 1)`,
+  ).run();
 }
 
 function fakePublished(input: RegisterAssetCandidateInput): PublishedAssetCandidate {
@@ -125,9 +130,21 @@ test("图片候选 Job 覆盖批准、同系列、成功、取消、撤回竞态
     assert.equal(source.revisedPrompt, "安全修订词");
     assert.equal(source.baseUrl, undefined);
 
+    const derivedTask = { ...task, prompt: "从首版派生", derivedFromCandidateId: (first.result as { candidate: { id: string } }).candidate.id };
+    const derived = await run(derivedTask);
+    assert.equal((derived.payload as { derivedFromCandidateId: string }).derivedFromCandidateId, derivedTask.derivedFromCandidateId);
+    assert.equal((derived.result as { candidate: { source: { derivedFromCandidateId: string } } }).candidate.source.derivedFromCandidateId, derivedTask.derivedFromCandidateId);
+    assert.notEqual(derived.id, first.id);
+    const repeatedDerived = enqueueImageCandidateJob(connection.database, config, { payload: derivedTask });
+    assert.equal(repeatedDerived.created, false);
+    assert.equal(repeatedDerived.job.id, derived.id);
+    assert.throws(() => enqueueImageCandidateJob(connection.database, config, {
+      payload: { ...derivedTask, assetId: "asset_a_peer" },
+    }), /父候选与目标资产不一致/);
+
     const repeated = await run(task);
     assert.equal(repeated.status, "succeeded");
-    assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM asset_candidates").get()!.count, 1);
+    assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM asset_candidates").get()!.count, 2);
 
     let uniqueCalls = 0;
     const uniqueHandler = createImageCandidateJobHandler(connection.database, dataRoot, config, {
@@ -222,6 +239,18 @@ test("图片候选 Job 覆盖批准、同系列、成功、取消、撤回竞态
       episodeId: "episode_a", assetId: "asset_a", scriptVersionId: "script_image", approvalRevision: 1,
       contentHash: "2".repeat(64), providerId: "test-provider", model: "test-image", prompt: "竖屏人物肖像",
     }), /^[0-9a-f]{64}$/);
+    assert.notEqual(
+      imageGenerationRequestHash({
+        episodeId: "episode_a", assetId: "asset_a", scriptVersionId: "script_image", approvalRevision: 1,
+        contentHash: "2".repeat(64), providerId: "test-provider", model: "test-image", prompt: "相同提示词",
+        derivedFromCandidateId: "candidate_parent_a",
+      }),
+      imageGenerationRequestHash({
+        episodeId: "episode_a", assetId: "asset_a", scriptVersionId: "script_image", approvalRevision: 1,
+        contentHash: "2".repeat(64), providerId: "test-provider", model: "test-image", prompt: "相同提示词",
+        derivedFromCandidateId: "candidate_parent_b",
+      }),
+    );
   } finally {
     connection.close();
     await rm(dataRoot, { recursive: true, force: true });

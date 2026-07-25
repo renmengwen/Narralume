@@ -13,6 +13,7 @@ import {
   appendAssetCandidateReview,
   AssetCandidateStoreError,
   listAssetCandidates,
+  listAssetCandidateReviewEvents,
   registerAssetCandidate,
   type AssetCandidateReviewAction,
 } from "./asset-candidate-store.js";
@@ -453,6 +454,17 @@ export function buildApp(options: BuildAppOptions = {}) {
   );
 
   app.get<{ Params: { candidateId: string } }>(
+    "/api/candidates/:candidateId/reviews",
+    async (request, reply) => {
+      if (!connection.database.prepare("SELECT id FROM asset_candidates WHERE id = ?").get(request.params.candidateId)) {
+        return reply.code(404).send({ ok: false, message: "候选图不存在" });
+      }
+      const items = listAssetCandidateReviewEvents(connection.database, request.params.candidateId);
+      return { ok: true, items, total: items.length };
+    },
+  );
+
+  app.get<{ Params: { candidateId: string } }>(
     "/api/candidates/:candidateId/image",
     async (request, reply) => {
       try {
@@ -694,12 +706,14 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
     if (type === IMAGE_CANDIDATE_JOB_TYPE) {
       const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
-        ? body.payload as { episodeId?: unknown; assetId?: unknown; prompt?: unknown }
+        ? body.payload as { episodeId?: unknown; assetId?: unknown; prompt?: unknown; derivedFromCandidateId?: unknown }
         : {};
       if (typeof payload.episodeId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.episodeId) ||
           typeof payload.assetId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.assetId) ||
           typeof payload.prompt !== "string" || !payload.prompt.normalize("NFKC").trim() ||
-          payload.prompt.normalize("NFKC").trim().length > 20_000) {
+          payload.prompt.normalize("NFKC").trim().length > 20_000 ||
+          (payload.derivedFromCandidateId !== undefined &&
+            (typeof payload.derivedFromCandidateId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.derivedFromCandidateId)))) {
         return reply.code(400).send({ ok: false, message: "图片生成任务缺少有效的分集、资产或提示词" });
       }
       if (!imageProvider) {
@@ -716,6 +730,12 @@ export function buildApp(options: BuildAppOptions = {}) {
         if (!relation) throw new AssetCandidateStoreError(404, "分集或资产不存在");
         if (relation.episode_series_id !== relation.asset_series_id) {
           throw new AssetCandidateStoreError(409, "图片资产与分集不属于同一系列");
+        }
+        if (payload.derivedFromCandidateId) {
+          const parent = connection.database.prepare("SELECT asset_id FROM asset_candidates WHERE id = ?")
+            .get(payload.derivedFromCandidateId) as { asset_id: string } | undefined;
+          if (!parent) throw new AssetCandidateStoreError(404, "父候选不存在");
+          if (parent.asset_id !== payload.assetId) throw new AssetCandidateStoreError(409, "父候选与目标资产不一致");
         }
       } catch (error) {
         if (error instanceof ScriptApprovalStoreError || error instanceof AssetCandidateStoreError) {

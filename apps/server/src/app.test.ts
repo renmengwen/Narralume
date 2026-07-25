@@ -798,6 +798,17 @@ test("候选图 API 覆盖原始上传、列表、追加审核和生图任务门
     assert.equal((await app.inject({
       method: "POST", url: `/api/candidates/${candidateId}/reviews`, payload: { expectedRevision: 0, action: "approve" },
     })).statusCode, 201);
+    const reviewHistory = await app.inject({ method: "GET", url: `/api/candidates/${candidateId}/reviews` });
+    assert.equal(reviewHistory.statusCode, 200);
+    assert.deepEqual(reviewHistory.json().items.map((item: { action: string }) => item.action), ["approve"]);
+    assert.equal((await app.inject({ method: "GET", url: "/api/candidates/candidate_missing/reviews" })).statusCode, 404);
+    assert.equal((await app.inject({
+      method: "POST", url: `/api/candidates/${candidateId}/reviews`,
+      payload: { expectedRevision: 1, action: "note", note: "批准后补充构图说明" },
+    })).statusCode, 201);
+    const afterNote = await app.inject({ method: "GET", url: "/api/assets/asset_one/candidates" });
+    assert.equal(afterNote.json().items[0].reviewStatus, "approved");
+    assert.equal(afterNote.json().items[0].reviewRevision, 2);
     assert.equal((await app.inject({
       method: "POST", url: `/api/candidates/${candidateId}/reviews`, payload: { expectedRevision: 0, action: "reject" },
     })).statusCode, 409);
@@ -827,6 +838,22 @@ test("候选图 API 覆盖原始上传、列表、追加审核和生图任务门
     });
     assert.equal(repeated.statusCode, 200, repeated.body);
     assert.equal(repeated.json().job.id, accepted.json().job.id);
+    const derived = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: {
+        episodeId: "episode_one", assetId: "asset_one", prompt: "竖屏人物", derivedFromCandidateId: candidateId,
+      } },
+    });
+    assert.equal(derived.statusCode, 201, derived.body);
+    assert.notEqual(derived.json().job.id, accepted.json().job.id);
+    assert.equal(derived.json().job.payload.derivedFromCandidateId, candidateId);
+    const missingParent = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: IMAGE_CANDIDATE_JOB_TYPE, payload: {
+        episodeId: "episode_one", assetId: "asset_one", prompt: "派生", derivedFromCandidateId: "candidate_missing",
+      } },
+    });
+    assert.equal(missingParent.statusCode, 404);
 
     await app.close();
     app = buildApp({ dataRoot, logger: false, imageProvider: null });

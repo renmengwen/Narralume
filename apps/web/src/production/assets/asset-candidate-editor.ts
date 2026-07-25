@@ -33,3 +33,19 @@ export function generatedCandidateAssetId(job: JobRecord | undefined) {
 export function canApplyCandidateRefresh(requestedAssetId: string, currentEpoch: number, responseEpoch: number, candidates: CandidateRecord[]) {
   return currentEpoch === responseEpoch && candidates.every((candidate) => candidate.assetId === requestedAssetId);
 }
+
+export function candidatePromptJobId(candidate: CandidateRecord) {
+  return candidate.source.kind === "generation" && candidate.source.requestHash
+    ? `job_image_${candidate.source.requestHash}`
+    : undefined;
+}
+
+export function promptFromCandidateJob(candidate: CandidateRecord, job: JobRecord) {
+  const jobId = candidatePromptJobId(candidate);
+  if (!jobId || job.id !== jobId || job.type !== "image_candidate_generate" ||
+      !job.payload || typeof job.payload !== "object") return undefined;
+  const payload = job.payload as { assetId?: unknown; requestHash?: unknown; prompt?: unknown };
+  if (payload.assetId !== candidate.assetId || payload.requestHash !== candidate.source.requestHash ||
+      typeof payload.prompt !== "string" || !payload.prompt.trim()) return undefined;
+  return payload.prompt;
+}

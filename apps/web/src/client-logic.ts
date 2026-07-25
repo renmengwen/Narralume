@@ -15,6 +15,17 @@ export function chapterPagePath(bookId: string, offset: number) {
   return `/api/books/${encodeURIComponent(bookId)}/chapters?limit=${CHAPTER_PAGE_SIZE}&offset=${offset}`;
 }
 
+export function seriesWorkspacePath(bookId: string, seriesId: string) {
+  return `?book=${encodeURIComponent(bookId)}&series=${encodeURIComponent(seriesId)}`;
+}
+
+export function seriesWorkspaceFromSearch(search: string) {
+  const parameters = new URLSearchParams(search);
+  const bookId = parameters.get("book")?.trim();
+  const seriesId = parameters.get("series")?.trim();
+  return bookId && seriesId ? { bookId, seriesId } : undefined;
+}
+
 export async function responseJson<T>(response: Response): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
   const body = contentType.includes("application/json")

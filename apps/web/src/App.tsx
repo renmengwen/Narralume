@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
-import { chapterPagePath, resolveTheme, resolveThemePreference, responseJson, type ThemePreference } from "./client-logic";
+import {
+  chapterPagePath,
+  resolveTheme,
+  resolveThemePreference,
+  responseJson,
+  seriesWorkspaceFromSearch,
+  seriesWorkspacePath,
+  type ThemePreference,
+} from "./client-logic";
 
 interface Book {
   id: string;
@@ -18,6 +26,12 @@ interface Chapter {
   char_count: number;
 }
 
+interface SeriesProject {
+  id: string;
+  bookId: string;
+  title: string;
+}
+
 export function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
     resolveThemePreference(localStorage.getItem("narralume-theme")),
@@ -26,6 +40,7 @@ export function App() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [chapterTotal, setChapterTotal] = useState(0);
   const [selectedBook, setSelectedBook] = useState<string>();
+  const [activeSeries, setActiveSeries] = useState<SeriesProject>();
   const [chapterText, setChapterText] = useState("");
   const [status, setStatus] = useState("正在加载书库…");
   const [busy, setBusy] = useState(false);
@@ -35,10 +50,27 @@ export function App() {
     const body = await responseJson<{ items: Book[] }>(await fetch("/api/books"));
     setBooks(body.items);
     if (announce) setStatus(body.items.length ? `已加载 ${body.items.length} 本书` : "书库为空，请导入 TXT");
+    return body.items;
   }
 
   useEffect(() => {
-    loadBooks().catch((error: Error) => setStatus(`加载失败：${error.message}`));
+    async function initialize() {
+      const loadedBooks = await loadBooks(false);
+      const location = seriesWorkspaceFromSearch(window.location.search);
+      if (!location) {
+        setStatus(loadedBooks.length ? `已加载 ${loadedBooks.length} 本书` : "书库为空，请导入 TXT");
+        return;
+      }
+      if (!loadedBooks.some((book) => book.id === location.bookId)) throw new Error("工作台关联书籍不存在");
+      const body = await responseJson<{ items: SeriesProject[] }>(
+        await fetch(`/api/books/${encodeURIComponent(location.bookId)}/series`),
+      );
+      const series = body.items.find((item) => item.id === location.seriesId);
+      if (!series) throw new Error("系列项目不存在");
+      setActiveSeries(series);
+      setStatus(`已恢复系列项目：${series.title}`);
+    }
+    initialize().catch((error: Error) => setStatus(`加载失败：${error.message}`));
   }, []);
 
   useEffect(() => {
@@ -140,6 +172,77 @@ export function App() {
     }
   }
 
+  async function enterSeriesWorkspace() {
+    if (!selectedBook || busy) return;
+    const book = books.find((item) => item.id === selectedBook);
+    if (!book) return;
+    setBusy(true);
+    setStatus("正在准备系列项目…");
+    try {
+      const existing = await responseJson<{ items: SeriesProject[] }>(
+        await fetch(`/api/books/${encodeURIComponent(book.id)}/series`),
+      );
+      const series = existing.items[0] ?? (await responseJson<{ series: SeriesProject }>(
+        await fetch(`/api/books/${encodeURIComponent(book.id)}/series`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: `${book.title}视觉说书` }),
+        }),
+      )).series;
+      setActiveSeries(series);
+      window.history.pushState(null, "", seriesWorkspacePath(book.id, series.id));
+      setStatus(existing.items.length ? `已进入系列项目：${series.title}` : `系列项目已创建：${series.title}`);
+    } catch (error) {
+      setStatus(`进入下一步失败：${(error as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function leaveSeriesWorkspace() {
+    setActiveSeries(undefined);
+    window.history.pushState(null, "", window.location.pathname);
+    setStatus("已返回书库");
+  }
+
+  if (activeSeries) return (
+    <main className="workspace-shell">
+      <div className="workspace-frame">
+        <header className="topbar">
+          <div className="brand-block">
+            <p className="eyebrow">NARRALUME / 叙影</p>
+            <div className="title-row">
+              <h1>{activeSeries.title}</h1>
+              <span className="phase-tag">SERIES</span>
+            </div>
+            <p className="subtitle">从章节证据开始，依次完成改编、资产、音频、视觉和成片。</p>
+          </div>
+          <div className="toolbar">
+            <button className="button-secondary" type="button" onClick={leaveSeriesWorkspace}>返回书库</button>
+          </div>
+        </header>
+        <div className="status-strip" role="status" aria-live="polite">
+          <span className={busy ? "status-dot is-active" : "status-dot"} aria-hidden="true" />
+          <span>{status}</span>
+        </div>
+        <section className="series-workspace" aria-labelledby="workflow-heading">
+          <div className="series-intro">
+            <p className="eyebrow">当前下一步</p>
+            <h2 id="workflow-heading">选择章节并生成结构化事件</h2>
+            <p>系列项目已就绪。后续工作区将在这里接通章节事件、故事弧、稿件审核、资产、音频、视觉与渲染。</p>
+          </div>
+          <ol className="stage-list" aria-label="系列生产阶段">
+            {["章节事件", "故事弧与分集", "忠实稿与包装稿", "资产与候选图", "TTS 与字幕", "视觉段与渲染", "审核与导出"].map((stage, index) => (
+              <li key={stage} className={index === 0 ? "is-current" : ""}>
+                <span>{String(index + 1).padStart(2, "0")}</span>{stage}
+              </li>
+            ))}
+          </ol>
+        </section>
+      </div>
+    </main>
+  );
+
   return (
     <main className="workspace-shell">
       <div className="workspace-frame">
@@ -180,6 +283,14 @@ export function App() {
                 }}
               />
             </label>
+            <button
+              className="button-primary"
+              type="button"
+              disabled={!selectedBook || busy}
+              onClick={() => void enterSeriesWorkspace()}
+            >
+              {busy && selectedBook ? "正在准备…" : "下一步：系列工作台"}
+            </button>
             {busy && abortRef.current ? (
               <button className="button-secondary" type="button" onClick={() => abortRef.current?.abort()}>
                 中断导入

@@ -30,11 +30,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`91c8e8a`（PC-02B 第二版冻结控制提交；该 candidate 已因双 Review findings 失效并解除冻结）。
+- 当前 HEAD：`badf433`（已登记 PC-02B 第二轮双 Review findings；第三轮业务 candidate 已冻结待审）。
 - 工作区：存在用户本地启动改动 `README.md`、`apps/server/src/server.ts`、`apps/web/vite.config.ts`、`package.json`、`scripts/`，产品任务不得覆盖或混入；本 Ledger 由 Coordinator 独立维护。
-- 最近验证：第二版 PC-02B 根 `npm run typecheck`、`npm test`、`npm run build`、unstaged/cached `git diff --check` 串行 GREEN；server 169 项中 168 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 36/36 PASS，Vite 58 modules。真实 v12 包 `166d37c...` 恢复到 `data/gates/pc02b-v12-package-restore-a2fbd2f`：源包不变，目标 schema `1..13`，21 张业务表逐表 count/hash 相同，integrity ok、FK=0，批准 r3、2 chunks 与 final 清单完整。真实浏览器冷打开并刷新 succeeded Job URL 后两章/两事件仍勾选，1200 秒与 60/3600/30 策略、两条证据和缺分析提示恢复，console error/warning 0；首版真实推荐/确认/幂等/取消与 v12 用户库迁移证据继续有效。
-- 当前 Task：`PC-02B` implementing；第二版 candidate `git-index-tree-v1:a2fbd2fd9b67b13315b4c7a8aa250afefbb4d30b:1fe0624f754033b5fe1a196be935a9a3808c9438` 双 Review FAIL，旧 candidate/证据树不得提交，只开放已合并 findings。
-- 下一动作：单写 Worker 最小修复六点：v12 封存稿件/父链/source snapshot/批准确定性身份；chunk `duration_ms`；隐式起点 Job identity；历史跳章同值 PUT；保存推荐子集后消费旧 Job；identity transition 移到 React commit 阶段并补实际生命周期测试。随后重验、生成第三版 candidate 并重做双 Review。
+- 最近验证：第三轮 PC-02B 根 `npm run typecheck`、`npm test`、`npm run build`、cached/unstaged `git diff --check` 串行 GREEN；server 181 项中 180 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 39/39 PASS，Vite 58 modules。真实 v12 包 `166d37c...` 恢复到 `data/gates/pc02b-v12-package-restore-badf433-v3`：源包不变，目标 schema `1..13`，21 张业务表逐表 count/hash 相同，integrity ok、FK=0，3 个稿件版本、批准 r3、2 chunks 的 duration/身份完整。隔离真实浏览器 Gate：既有 succeeded Job 两事件取消一项后明确保存，URL `job` 清除，冷刷新只恢复 1 条持久证据且旧推荐不回灌；首集不传 `startChapterId` 的 Job payload 为 `requestedStartChapterId=null`、解析首章一致、result `needs_analysis`，带 `job` 无 `chapter` 冷刷新恢复；两条 console error/warning 均 0。默认分支使用注入的非网络 recommender 仅放行路由并证明 handler 未调用模型，不冒充外部模型成功；既有真实 provider 推荐成功证据继续有效。
+- 当前 Task：`PC-02B` frozen_for_review；第三版 candidate `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a`，22 个业务路径，用户本地启动配置 0 暂存。
+- 下一动作：在同一第三版 candidate 与冻结 Ledger commit 上执行独立 Spec Review、Code Quality Review；双 PASS 后中文业务提交、登记总账并 push `origin/dev`，随后进入 PC-02C。
 
 ## 2026-07-25 产品闭环复开
 
@@ -53,7 +53,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | --- | --- | --- | --- |
 | PC-01 前端下一步与系列工作台 | `complete` | 复用现有 series API；选中书籍后创建或复用系列并进入工作台；中文四态、防重复、刷新可恢复 | 最小前端测试、typecheck/test/build、真实浏览器创建/复用 |
 | PC-02 固定阶段创作工作区 | `implementing` | 优先复用 Narralume 现有 API 与参考项目已验证的前端逻辑，接通章节事件、故事弧、稿件版本、批准、资产、视觉、音频、渲染；只补必需缺口 | 用户可从 UI 连续推进且每步可恢复，不以 Gate 脚本替代；抽取前登记来源，不形成运行时依赖 |
-| PC-02B 可配置时长与跨章自动选材 | `implementing` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 首版 candidate `332a223:e633142` 双 Review FAIL；只修 v12 包兼容与 hydrate 竞态 |
+| PC-02B 可配置时长与跨章自动选材 | `frozen_for_review` | 复用单章事件 Job 和现有跨章 `episode_sources`；系统提供时长策略，Agent 推荐连续章节范围，用户确认/调整 | 第三版已关闭两轮合并 findings，根门禁、v12 恢复和隔离真实 UI Gate GREEN；等待同一 candidate 双 Review |
 | PC-02C 跨章骨架与长稿 | `queued` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 不新增第二套稿件存储；目标时长和真实 TTS 语速驱动字数预算；批准后才能进入媒体生产 |
 | PC-03 字幕短句与可读性 | `complete` | 在共享时间轴根修短句 cue、最多两行、安全区与截图门禁 | 54 WAV/54 cue、295.462s；1080×1920 亮/暗抽帧无裁切、最多两行，SRT/ASS 与真实音频一致 |
 | PC-04 视觉语义与多图生产 | `queued` | 依赖 PC-02C 真实长稿和 TTS 时间轴；按故事 beat 补视觉描述、资产匹配、不同图片、开头快速换图与联系表审核 | 开头 15 秒 3～4 个有效画面；总段数由可配置时长、beat 和画面驻留策略派生，不硬编码 8～15 |
@@ -101,7 +101,7 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B | PC-02B 修复单写 Worker | `dev@97db7be`，首版 candidate 已失效 | `apps/server/src/project-package.ts`、对应最小测试；`apps/web/src/production/episode/**`、`apps/web/test/**`；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、项目包真实恢复数据根；同批路径单写 | `implementing` |
+| PC-02B | Coordinator / Writer 已释放 | 第三版 `badf433:e428fc3` | 冻结 candidate 只读；排除本 Ledger 与用户本地启动改动 | Coordinator | 本地 3101/5174、项目包恢复与隔离 UI Gate 已释放 | `frozen_for_review` |
 | P7-04/Final | Coordinator / 已释放 | `ff7baa8:f7d509e`，已集成到 `35aa60b` | 无 | Finding A/C 已关闭 | 无 | `complete` |
 | P7-04/Package | Coordinator / 已释放 | `911d045:49024f2`，已集成 `a784d43` | 无 | Finding B 已关闭 | 无 | `complete` |
 
@@ -113,7 +113,7 @@ PC-02 当前 checkpoint：
 
 | Task | 状态 | 依赖 | Owner / 写租约 | Candidate revision / tree | 冻结控制提交 | Spec Review | Code Quality Review | 验证证据 | 业务提交 SHA | 剩余风险 / 恢复动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PC-02B 可配置时长与跨章自动选材 | `implementing` | PC-02 既有 Episode/Job/批准合同 | PC-02B findings 单写 Worker | 第二版 `git-index-tree-v1:a2fbd2fd9b67b13315b4c7a8aa250afefbb4d30b:1fe0624f754033b5fe1a196be935a9a3808c9438` 已失效 | `91c8e8a4413b4363e833e3043edd6520b1df1327` | FAIL：P1 漏 chunk duration；P1 隐式起点 Job 被丢弃；P2 历史跳章同值 PUT 绕过连续检查 | FAIL：P1 封存稿件/source/批准身份不足；P1 同 duration；P2 保存子集后旧 Job 回灌；P2 render 阶段 ref transition | 第二版根门禁与真实旧包/浏览器显式起点证据继续有效，修复后重验受影响范围 | - | 只开放合并后的 6 项 finding；修复后必须生成第三版 candidate，旧 verdict 不继承 |
+| PC-02B 可配置时长与跨章自动选材 | `frozen_for_review` | PC-02 既有 Episode/Job/批准合同 | Coordinator / Writer 已释放 | 第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a` | 待本次控制提交 | 待第三版独立 Review | 待第三版独立 Review | 根三门/diff GREEN，server 180 PASS/1权限SKIP、web39/39；v12 21表恢复完整；默认空起点 `requestedStartChapterId=null`/needs_analysis 冷恢复与推荐子集消费冷恢复均 GREEN，console 0 | - | 外部 provider 重启映射受执行策略限制；默认 identity Gate 使用非网络注入且未调用模型，不影响既有真实推荐成功证据 |
 | CTRL-01 控制面初始化 | `complete` | Phase 0 | Coordinator / 已释放 | `git-commit-tree-v1:428af35a9e015a2f39431f12ab7709074fc5f5cb:1f9ac40cd2c35557cbeedb46fe13d3a436695000` | bootstrap candidate 即 `428af35` | PASS，绑定同一 revision | PASS，绑定同一 revision | Phase 0 三门通过；commit/tree 复算；`git diff --check` 通过 | `428af35a9e015a2f39431f12ab7709074fc5f5cb` | 无；进入 P1-01 |
 | P1-01 数据根与 SQLite 基线 | `complete` | CTRL-01 | Coordinator / 已释放 | `git-index-tree-v1:e6452d35788543cadd5908da60061e851a3a7dc7:15b1cb4f3667a1afaf8b9c3d3712c06f35d42447` | `72438d0` | PASS，绑定 `72438d0`/第二版 revision | PASS，绑定 `72438d0`/第二版 revision | 集成态全量 `typecheck/test/build` GREEN；3 项 server tests；Windows 失败后文件删除 GREEN | `154a391` | Node 22 SQLite 实验性警告；进入 P1-02 |
 | P1-02 TXT 流式导入 | `complete` | P1-01 | Coordinator / 已释放 | `git-index-tree-v1:154a391eb1795aeebff2260f5e6a1eae2b0ea3de:2a74235c0e3c98d26ad3c65a46068564123730d5` | `eeced89` | PASS，绑定第三版 revision | PASS，绑定第三版 revision | 集成态 8 项 server tests；全量三门 GREEN；并发/失败清理/fsync | `8884491` | Node SQLite 实验性警告；进入 P1-03 |
@@ -295,6 +295,7 @@ PC-02 当前 checkpoint：
 | 2026-07-25 P7-04 Final 第二至四版最小复审 | 第二版 `12d0e12:9c6dfcc` 因最终字符串路径操作入口仍可替换而 Quality FAIL；第三版 `5fcc298:afc5da1` 以随机 quarantine 原子捕获、隔离重验、同步提交关闭竞态，但 cleanup failure 回归证据缺口使 Quality FAIL；第四版 `ff7baa8:f7d509e` 增加仅作用 backupQuarantine 的同步 cleanup seam，确定性覆盖删除前 EACCES 与部分删除+回滚竞争，Spec + Quality 均 PASS。所有旧 candidate 失效，只继承第四版结论。 |
 | 2026-07-25 P7-04 修复集成与最终 Gate | Package `a784d43`；Final `b20bf5f`、`82a0f91`、`3e9ae86`、`35aa60b`。最终产品 `35aa60bb316704b6a0c7c727af59fe650e36cd89:338b55664f8c51c068ec84845551ba80071552d6`。全量 typecheck/test/build/diff GREEN，server142项141PASS/1文件symlink权限SKIP、web6/6；真实样片 Gate 123,298ms，项目包/恢复 Gate 6,113ms。新包 `D:\code3\Narralume\data\gates\p7-project-package\166d37c417d1b62b29235b67a4d060226b871e87db848b7123be59e988a0ff6e`，17 files/53,929,675 bytes；恢复根不变。源样片与恢复重导出均 SHA `82b6e294…`、18,536,549 bytes、287,236ms，独立1080×1920@25/H.264/yuv420p/tv/AAC probe及full decode PASS；总Gate墙钟129,411ms。 |
 | 2026-07-25 P7-04 最终确认与根目标完成 | 完成性未退化确认 PASS、三 findings 集成关闭确认 PASS，均绑定 Ledger `4e22ecff9db208bb8670f589e480ae24f779dc87` 与产品 `35aa60b:338b556`。Package/Final 已审 candidates 与产品四个业务文件 blobs 零差异；新包独立复算17/17 bytes+SHA/packageHash，无extra/missing；源与恢复视频复算同 SHA/bytes/媒体合同。`REQ-P6-01`、`REQ-P7-03` satisfied，P7-04 complete，根目标 complete；`main@e75b1c3` 未合并。 |
+| 2026-07-26 PC-02B 第三版 candidate | 第二轮合并的 6 项 finding 已完成最小根修并释放 Writer。第三版 `git-index-tree-v1:badf43326e637c94410efdf6b70a29f0fa211384:e428fc33a9c7687a017277bc10dbc5f20220af9a`，22 个业务路径，用户本地启动配置 0 暂存。根 typecheck/test/build/diff GREEN，server 181 项中 180 PASS/1权限SKIP、web39/39；v12 包 21 表 count/hash、integrity/FK、稿件父链/source snapshot/批准身份/chunk duration 恢复 GREEN。隔离 UI Gate 中默认空起点 payload `requestedStartChapterId=null`、resolved/result 首章一致且 needs_analysis 冷刷新恢复；既有 succeeded Job 两事件取消一项保存后 URL 清 job，刷新只恢复 1 条持久证据；console 0。外部 provider 映射被本机执行策略拦截，默认分支以非网络注入只放行路由，handler 未调用模型，不冒充外部模型成功。 |
 
 ## 决策与剩余风险
 

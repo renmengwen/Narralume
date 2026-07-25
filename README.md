@@ -37,9 +37,9 @@ npm install
 npm run dev
 ```
 
-- 前端默认地址：`http://localhost:5173`
-- 后端默认地址：`http://localhost:3100`
-- 健康检查：`http://localhost:3100/api/health`
+- 前端默认地址：`http://localhost:5174`
+- 后端默认地址：`http://localhost:3101`
+- 健康检查：`http://localhost:3101/api/health`
 
 ## 验证
 

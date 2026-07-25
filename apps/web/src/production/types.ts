@@ -73,5 +73,6 @@ export interface JobRecord {
   attempts: number;
   maxAttempts: number;
   cancelRequested: boolean;
+  result?: unknown | null;
   errorMessage: string | null;
 }

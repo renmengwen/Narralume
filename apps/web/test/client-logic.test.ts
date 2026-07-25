@@ -19,6 +19,8 @@ import {
   resolveProductionStage,
 } from "../src/production-logic.ts";
 import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
+import { assetGapCounts, canApplyCandidateRefresh, candidateUploadRequest, generatedCandidateAssetId } from "../src/production/assets/asset-candidate-editor.ts";
+import type { AssetRecord, CandidateRecord } from "../src/production/assets/types.ts";
 import { episodeDraft, episodePutPayload } from "../src/production/episode/episode-editor.ts";
 import { allowedSourceIndexes, approvalPutPayload, scriptDraft, scriptPostPayload } from "../src/production/scripts/script-editor.ts";
 
@@ -100,6 +102,43 @@ test("生图提示词按事实、资产、画幅和风格分段组装", () => {
   assert.match(prompt, /主角（下墓装束）/);
   assert.match(prompt, /9:16 竖幅短视频构图/);
   assert.doesNotMatch(prompt, /undefined|null/);
+});
+
+test("系列资产生产缺口只按候选与批准状态分类", () => {
+  const assets = ["asset_empty", "asset_pending", "asset_approved"].map((id) => ({ id })) as AssetRecord[];
+  const candidate = (assetId: string, reviewStatus: CandidateRecord["reviewStatus"]) => ({ assetId, reviewStatus }) as CandidateRecord;
+  assert.deepEqual(assetGapCounts(assets, {
+    asset_pending: [candidate("asset_pending", "pending"), candidate("asset_pending", "rejected")],
+    asset_approved: [candidate("asset_approved", "approved")],
+  }), { noCandidates: 1, awaitingApproval: 1, approved: 1 });
+});
+
+test("原图上传使用二进制正文与安全编码文件名", () => {
+  const file = new File(["png"], "北派 原图.png", { type: "image/png" });
+  const request = candidateUploadRequest(file);
+  assert.equal(request.method, "POST");
+  assert.equal((request.headers as Record<string, string>)["content-type"], "application/octet-stream");
+  assert.equal((request.headers as Record<string, string>)["x-file-name"], encodeURIComponent(file.name));
+  assert.equal(request.body, file);
+  assert.throws(() => candidateUploadRequest(new File(["gif"], "bad.gif", { type: "image/gif" })), /PNG、JPEG 或 WebP/);
+});
+
+test("生图成功只定向刷新结果所属资产", () => {
+  const job = {
+    id: "job_1", type: "image_candidate_generate", status: "succeeded" as const, progress: 1,
+    attempts: 1, maxAttempts: 3, cancelRequested: false, errorMessage: null,
+    result: { candidate: { id: "candidate_1", assetId: "asset_a" } },
+  };
+  assert.equal(generatedCandidateAssetId(job), "asset_a");
+  assert.equal(generatedCandidateAssetId({ ...job, status: "running" }), undefined);
+  assert.equal(generatedCandidateAssetId({ ...job, type: "other" }), undefined);
+});
+
+test("候选刷新拒绝旧请求与跨资产响应", () => {
+  const candidate = { assetId: "asset_a" } as CandidateRecord;
+  assert.equal(canApplyCandidateRefresh("asset_a", 2, 1, [candidate]), false);
+  assert.equal(canApplyCandidateRefresh("asset_a", 2, 2, [{ assetId: "asset_b" } as CandidateRecord]), false);
+  assert.equal(canApplyCandidateRefresh("asset_a", 2, 2, [candidate]), true);
 });
 
 test("人工章节事件沿用现有持久任务合同并限制证据范围", () => {

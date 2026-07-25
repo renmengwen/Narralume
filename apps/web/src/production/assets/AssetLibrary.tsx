@@ -1,12 +1,14 @@
-import type { AssetGroup, AssetType } from "./types";
+import { AssetGapSummary } from "./AssetGapSummary";
+import type { AssetGapCounts, AssetGroup, AssetType } from "./types";
 import { ASSET_TYPE_LABEL } from "./types";
 
 const control = "min-h-10 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-2.5 text-sm text-[var(--fg-primary)]";
 
-export function AssetLibrary({ assets, count, selectedId, busy, draft, onDraft, onSelect, onCreate }: { assets: AssetGroup[]; count: number; selectedId?: string; busy: boolean; draft: { name: string; type: AssetType; parentId: string; stateLabel: string }; onDraft: (next: Partial<typeof draft>) => void; onSelect: (id: string) => void; onCreate: () => void }) {
+export function AssetLibrary({ assets, count, gaps, selectedId, busy, draft, onDraft, onSelect, onCreate }: { assets: AssetGroup[]; count: number; gaps: AssetGapCounts; selectedId?: string; busy: boolean; draft: { name: string; type: AssetType; parentId: string; stateLabel: string }; onDraft: (next: Partial<typeof draft>) => void; onSelect: (id: string) => void; onCreate: () => void }) {
   const masters = assets.filter((asset) => asset.type === draft.type);
   return <aside className="min-w-0 border-r border-[var(--border-subtle)] max-md:border-r-0 max-md:border-b" aria-labelledby="asset-library-heading">
     <div className="flex h-12 items-center justify-between border-b border-[var(--border-subtle)] px-4"><h2 id="asset-library-heading" className="text-xs font-bold tracking-wider">系列资产</h2><span className="font-mono text-[10px] text-[var(--fg-tertiary)]">{count}</span></div>
+    <AssetGapSummary counts={gaps} />
     <div className="grid gap-2 border-b border-[var(--border-subtle)] p-3.5">
       <select className={control} value={draft.type} disabled={busy} onChange={(event) => onDraft({ type: event.target.value as AssetType, parentId: "" })} aria-label="资产类型">{Object.entries(ASSET_TYPE_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
       <input className={control} value={draft.name} disabled={busy} onChange={(event) => onDraft({ name: event.target.value })} placeholder="资产名称" aria-label="资产名称" />

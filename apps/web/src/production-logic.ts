@@ -16,6 +16,7 @@ export interface ProductionWorkspaceLocation {
   chapterId?: string;
   episodeIndex?: number;
   assetId?: string;
+  timelineHash?: string;
   jobId?: string;
 }
 
@@ -42,6 +43,9 @@ export function mergeProductionWorkspaceLocation(
     assetId: Object.prototype.hasOwnProperty.call(next, "assetId")
       ? next.assetId
       : current.assetId,
+    ...((Object.prototype.hasOwnProperty.call(next, "timelineHash") ? next.timelineHash : current.timelineHash)
+      ? { timelineHash: Object.prototype.hasOwnProperty.call(next, "timelineHash") ? next.timelineHash : current.timelineHash }
+      : {}),
     jobId: Object.prototype.hasOwnProperty.call(next, "jobId")
       ? next.jobId
       : current.jobId,
@@ -55,6 +59,7 @@ export function productionWorkspacePath(input: {
   chapterId?: string;
   episodeIndex?: number;
   assetId?: string;
+  timelineHash?: string;
   jobId?: string;
 }) {
   const parameters = new URLSearchParams({ book: input.bookId, series: input.seriesId });
@@ -64,6 +69,7 @@ export function productionWorkspacePath(input: {
     parameters.set("episode", String(input.episodeIndex));
   }
   if (input.assetId) parameters.set("asset", input.assetId);
+  if (input.timelineHash && /^[0-9a-f]{64}$/.test(input.timelineHash)) parameters.set("timeline", input.timelineHash);
   if (input.jobId) parameters.set("job", input.jobId);
   return `?${parameters.toString()}`;
 }
@@ -81,6 +87,7 @@ export function productionWorkspaceFromSearch(search: string) {
     ...(parameters.get("chapter")?.trim() ? { chapterId: parameters.get("chapter")!.trim() } : {}),
     ...(Number.isSafeInteger(rawEpisode) && rawEpisode > 0 ? { episodeIndex: rawEpisode } : {}),
     ...(parameters.get("asset")?.trim() ? { assetId: parameters.get("asset")!.trim() } : {}),
+    ...(/^[0-9a-f]{64}$/.test(parameters.get("timeline") ?? "") ? { timelineHash: parameters.get("timeline")! } : {}),
     ...(parameters.get("job")?.trim() ? { jobId: parameters.get("job")!.trim() } : {}),
   };
 }
@@ -94,6 +101,10 @@ export function normalizeJobProgress(status: JobStatus, progress: unknown) {
 
 export function isTerminalJobStatus(status: JobStatus) {
   return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+export function usesChapterWorkspaceStatus(stage: ProductionStageId) {
+  return stage === "events" || stage === "episode";
 }
 
 export function jobStatusText(status: JobStatus) {

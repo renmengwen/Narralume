@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { chapterPagePath, responseJson } from "./client-logic";
 import {
@@ -8,9 +8,11 @@ import {
   productionWorkspacePath,
   PRODUCTION_STAGES,
   resolveProductionStage,
+  usesChapterWorkspaceStatus,
   type ProductionStageId,
 } from "./production-logic";
 import { AssetStage } from "./production/assets/AssetStage";
+import { AudioStage } from "./production/audio/AudioStage";
 import { chapterAnalysisJobPayload, chapterEventsJobPayload, remainingChapterEventPageOffsets, type ChapterEventDraft } from "./production/chapter-event-editor";
 import { ChapterEventsStage } from "./production/ChapterEventsStage";
 import { EpisodeStage } from "./production/episode/EpisodeStage";
@@ -29,31 +31,34 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
   const [selectedChapter, setSelectedChapter] = useState(restored?.chapterId);
   const [episodeIndex, setEpisodeIndex] = useState(restored?.episodeIndex ?? 1);
   const [selectedAssetId, setSelectedAssetId] = useState(restored?.assetId);
+  const [timelineHash, setTimelineHash] = useState(restored?.timelineHash);
   const [chapterText, setChapterText] = useState("");
   const [events, setEvents] = useState<ChapterEvent[]>([]);
   const [status, setStatus] = useState(initialStatus);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState(restored?.jobId);
+  const currentStage = useRef(stage);
+  currentStage.current = stage;
   const job = useJobPolling(jobId, setStatus);
   const currentJob = job?.id === jobId ? job : undefined;
   const completedChapterJobId = (currentJob?.type === "chapter_events_replace" || currentJob?.type === "chapter_events_analyze") && currentJob.status === "succeeded" ? currentJob.id : undefined;
   const jobActive = !!jobId && (!currentJob || !isTerminalJobStatus(currentJob.status));
   const selectedChapterRecord = chapters.find((chapter) => chapter.id === selectedChapter);
 
-  const replaceLocation = useCallback((next: { stage?: ProductionStageId; chapterId?: string; episodeIndex?: number; assetId?: string; jobId?: string }) => {
-    const location = mergeProductionWorkspaceLocation({ stage, chapterId: selectedChapter, episodeIndex, assetId: selectedAssetId, jobId }, next);
+  const replaceLocation = useCallback((next: { stage?: ProductionStageId; chapterId?: string; episodeIndex?: number; assetId?: string; timelineHash?: string; jobId?: string }) => {
+    const location = mergeProductionWorkspaceLocation({ stage, chapterId: selectedChapter, episodeIndex, assetId: selectedAssetId, timelineHash, jobId }, next);
     window.history.replaceState(null, "", productionWorkspacePath({ bookId, seriesId: series.id, ...location }));
-  }, [bookId, episodeIndex, jobId, selectedAssetId, selectedChapter, series.id, stage]);
+  }, [bookId, episodeIndex, jobId, selectedAssetId, selectedChapter, series.id, stage, timelineHash]);
 
   useEffect(() => {
     let cancelled = false;
     async function loadChapters() {
-      setBusy(true); setStatus("正在加载章节工作区…");
+      if (usesChapterWorkspaceStatus(currentStage.current)) { setBusy(true); setStatus("正在加载章节工作区…"); }
       try {
         const body = await responseJson<{ items: Chapter[]; total: number }>(await fetch(chapterPagePath(bookId, 0)));
-        if (!cancelled) { setChapters(body.items); setChapterTotal(body.total); setStatus(`章节工作区已就绪，共 ${body.total} 章`); }
-      } catch (error) { if (!cancelled) setStatus(`章节工作区加载失败：${(error as Error).message}`); }
-      finally { if (!cancelled) setBusy(false); }
+        if (!cancelled) { setChapters(body.items); setChapterTotal(body.total); if (usesChapterWorkspaceStatus(currentStage.current)) setStatus(`章节工作区已就绪，共 ${body.total} 章`); }
+      } catch (error) { if (!cancelled && usesChapterWorkspaceStatus(currentStage.current)) setStatus(`章节工作区加载失败：${(error as Error).message}`); }
+      finally { if (!cancelled && usesChapterWorkspaceStatus(currentStage.current)) setBusy(false); }
     }
     void loadChapters(); return () => { cancelled = true; };
   }, [bookId]);
@@ -62,7 +67,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
     if (!selectedChapter || !selectedChapterRecord) return;
     let cancelled = false;
     async function loadChapter() {
-      setBusy(true); setStatus("正在读取原文与结构化事件…");
+      if (usesChapterWorkspaceStatus(currentStage.current)) { setBusy(true); setStatus("正在读取原文与结构化事件…"); }
       try {
         const [textBody, firstEventsBody] = await Promise.all([
           responseJson<{ text: string }>(await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${encodeURIComponent(selectedChapter!)}/text`)),
@@ -73,9 +78,9 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
         ));
         const loadedEvents = [firstEventsBody.items, ...remainingPages.map((page) => page.items)].flat();
         if (loadedEvents.length !== firstEventsBody.total) throw new Error("章节事件分页读取不完整，请刷新后重试");
-        if (!cancelled) { setChapterText(textBody.text); setEvents(loadedEvents); setStatus(firstEventsBody.total ? `已加载 ${firstEventsBody.total} 个结构化事件` : "本章尚未生成结构化事件"); }
-      } catch (error) { if (!cancelled) setStatus(`章节证据加载失败：${(error as Error).message}`); }
-      finally { if (!cancelled) setBusy(false); }
+        if (!cancelled) { setChapterText(textBody.text); setEvents(loadedEvents); if (usesChapterWorkspaceStatus(currentStage.current)) setStatus(firstEventsBody.total ? `已加载 ${firstEventsBody.total} 个结构化事件` : "本章尚未生成结构化事件"); }
+      } catch (error) { if (!cancelled && usesChapterWorkspaceStatus(currentStage.current)) setStatus(`章节证据加载失败：${(error as Error).message}`); }
+      finally { if (!cancelled && usesChapterWorkspaceStatus(currentStage.current)) setBusy(false); }
     }
     void loadChapter(); return () => { cancelled = true; };
   }, [bookId, completedChapterJobId, selectedChapter, selectedChapterRecord]);
@@ -126,7 +131,8 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
     setBusy(true); setSelectedChapter(id); setChapterText(""); setEvents([]); replaceLocation({ chapterId: id });
   }
   function selectAsset(id: string | undefined) { setSelectedAssetId(id); replaceLocation({ assetId: id }); }
-  function selectEpisode(index: number) { if (index === episodeIndex) return; setEpisodeIndex(index); replaceLocation({ episodeIndex: index }); }
+  function selectEpisode(index: number) { if (index === episodeIndex) return; setEpisodeIndex(index); setTimelineHash(undefined); replaceLocation({ episodeIndex: index, timelineHash: undefined }); }
+  function selectTimeline(hash: string | undefined) { setTimelineHash(hash); replaceLocation({ timelineHash: hash }); }
   function trackJob(id: string) { setJobId(id); replaceLocation({ jobId: id }); }
 
   return <main className="min-h-screen bg-[var(--bg-canvas)] p-7 text-[var(--fg-primary)] max-md:p-0">
@@ -134,7 +140,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
       <ProductionHeader series={series} onLeave={onLeave} />
       <StageNavigation stage={stage} onChange={selectStage} />
       <ProductionStatus status={status} busy={busy} job={currentJob} onCancel={() => void cancelJob()} />
-      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage seriesId={series.id} episodeIndex={episodeIndex} chapter={selectedChapterRecord} events={events} chapterCount={chapters.length} chapterTotal={chapterTotal} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : <StagePlaceholder stage={stage} />}
+      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage seriesId={series.id} episodeIndex={episodeIndex} chapter={selectedChapterRecord} events={events} chapterCount={chapters.length} chapterTotal={chapterTotal} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : stage === "audio" ? <AudioStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} onJobCreated={trackJob} /> : <StagePlaceholder stage={stage} />}
     </div>
   </main>;
 }

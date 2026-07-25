@@ -73,7 +73,16 @@ export interface JobRecord {
   attempts: number;
   maxAttempts: number;
   cancelRequested: boolean;
-  payload?: unknown;
-  result?: unknown | null;
+  payload?: { episodeId?: string; voice?: string; rate?: number } | Record<string, unknown>;
+  result?: { episodeId?: string; timelineHash?: string; durationMs?: number; segmentCount?: number; cueCount?: number; reusedSegments?: number } | Record<string, unknown> | null;
   errorMessage: string | null;
+}
+export interface TtsTimelineSummary {
+  episodeId: string; scriptVersionId: string; timelineHash: string; providerId: string; voice: string; rate: number;
+  durationMs: number; segmentCount: number; cueCount: number; reusedSegments: number | null; createdAt: number;
+  srtIdentity: string; assIdentity: string;
+}
+export interface TtsTimeline extends TtsTimelineSummary {
+  segments: Array<{ index: number; text: string; inputHash: string; fileHash: string; bytes: number; durationMs: number }>;
+  cues: Array<{ index: number; segmentIndex: number; startMs: number; endMs: number; text: string }>;
 }

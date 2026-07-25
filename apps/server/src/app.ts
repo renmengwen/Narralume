@@ -65,6 +65,12 @@ import {
   type ScriptApprovalInput,
 } from "./script-approval-store.js";
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
+import {
+  getTtsTimeline,
+  listTtsTimelines,
+  readVerifiedTtsSegment,
+  TtsTimelineStoreError,
+} from "./tts-timeline-store.js";
 import { createPlaceholderVideoJobHandler, PLACEHOLDER_VIDEO_JOB_TYPE } from "./placeholder-video-job.js";
 import { createRenderChunksJobHandler, RENDER_CHUNKS_JOB_TYPE } from "./render-chunk-job.js";
 import { createFinalVideoJobHandler, FINAL_VIDEO_JOB_TYPE } from "./final-video.js";
@@ -694,6 +700,49 @@ export function buildApp(options: BuildAppOptions = {}) {
       throw error;
     }
   });
+
+  app.get<{ Params: { episodeId: string } }>("/api/episodes/:episodeId/tts-timelines", async (request, reply) => {
+    try {
+      return { ok: true, items: listTtsTimelines(connection.database, request.params.episodeId) };
+    } catch (error) {
+      if (error instanceof TtsTimelineStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { episodeId: string; timelineHash: string } }>(
+    "/api/episodes/:episodeId/tts-timelines/:timelineHash",
+    async (request, reply) => {
+      try {
+        return { ok: true, timeline: getTtsTimeline(connection.database, request.params.episodeId, request.params.timelineHash) };
+      } catch (error) {
+        if (error instanceof TtsTimelineStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { episodeId: string; timelineHash: string; segmentIndex: string } }>(
+    "/api/episodes/:episodeId/tts-timelines/:timelineHash/audio/:segmentIndex",
+    async (request, reply) => {
+      try {
+        const segmentIndex = Number(request.params.segmentIndex);
+        const bytes = await readVerifiedTtsSegment(
+          connection.database, dataRoot, request.params.episodeId, request.params.timelineHash, segmentIndex,
+        );
+        return reply.type("audio/wav").header("cache-control", "no-store").send(bytes);
+      } catch (error) {
+        if (error instanceof TtsTimelineStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
 
   app.post<{ Body: CreateJobBody }>("/api/jobs", async (request, reply) => {
     const body = request.body;

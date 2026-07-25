@@ -3,6 +3,9 @@ import { open } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
+import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
+import { withdrawScriptApprovalForEpisodeChange } from "./script-approval-store.js";
+
 export interface SeriesProjectInput { id?: string; bookId: string; title: string }
 export interface EpisodeInput {
   index: number;
@@ -96,8 +99,9 @@ export function replaceEpisode(
   if (!project) throw new EpisodeStoreError(404, "系列项目不存在");
   if (!Number.isSafeInteger(input.index) || input.index < 1) throw new EpisodeStoreError(400, "分集序号必须从 1 开始");
   if (!Number.isSafeInteger(input.targetDurationSeconds) ||
-      input.targetDurationSeconds < 180 || input.targetDurationSeconds > 300) {
-    throw new EpisodeStoreError(400, "目标时长必须为 180 至 300 秒");
+      input.targetDurationSeconds < EPISODE_DURATION_POLICY.minimumSeconds ||
+      input.targetDurationSeconds > EPISODE_DURATION_POLICY.maximumSeconds) {
+    throw new EpisodeStoreError(400, `目标时长必须为 ${EPISODE_DURATION_POLICY.minimumSeconds} 至 ${EPISODE_DURATION_POLICY.maximumSeconds} 秒`);
   }
   const title = requiredText(input.title, "分集标题");
   const storyArc = requiredText(input.storyArc, "故事弧");
@@ -109,23 +113,25 @@ export function replaceEpisode(
   }
 
   const snapshots: SourceSnapshot[] = [];
+  const chapterIndexes = new Set<number>();
   for (const sourceEventId of input.sourceEventIds) {
     const rows = database.prepare(
       `SELECT chapter_events.id AS source_event_id, chapters.id AS chapter_id, chapters.book_id,
               chapter_event_sources.source_byte_start, chapter_event_sources.source_byte_end,
-              chapter_event_sources.source_hash
+              chapter_event_sources.source_hash, chapters.chapter_index
        FROM chapter_events
        JOIN chapters ON chapters.id = chapter_events.chapter_id
        JOIN chapter_event_sources ON chapter_event_sources.event_id = chapter_events.id
        WHERE chapter_events.id = ? ORDER BY chapter_event_sources.source_index`,
     ).all(requiredText(sourceEventId, "原文事件 ID")) as unknown as Array<{
       source_event_id: string; chapter_id: string; book_id: string;
-      source_byte_start: number; source_byte_end: number; source_hash: string;
+      source_byte_start: number; source_byte_end: number; source_hash: string; chapter_index: number;
     }>;
     if (rows.length === 0) throw new EpisodeStoreError(404, "原文事件不存在");
     if (rows.some((row) => row.book_id !== project.book_id)) {
       throw new EpisodeStoreError(409, "分集不能引用其他书籍的事件");
     }
+    rows.forEach((row) => chapterIndexes.add(row.chapter_index));
     snapshots.push(...rows.map((row) => ({
       chapterId: row.chapter_id, sourceEventId: row.source_event_id,
       byteStart: row.source_byte_start, byteEnd: row.source_byte_end, sourceHash: row.source_hash,
@@ -134,6 +140,30 @@ export function replaceEpisode(
 
   const id = `episode_${createHash("sha256")
     .update(`episode-v1\0${seriesProjectId}\0${input.index}`).digest("hex")}`;
+  const existing = database.prepare(
+    `SELECT id, series_project_id, episode_index, title, story_arc, target_duration_seconds,
+            recap, next_hook, created_at, updated_at FROM episodes WHERE id = ?`,
+  ).get(id) as EpisodeRow | undefined;
+  const stored = existing ? database.prepare(
+    `SELECT chapter_id, source_event_id, source_byte_start, source_byte_end, source_hash
+     FROM episode_sources WHERE episode_id = ? ORDER BY source_index`,
+  ).all(id) as unknown as Array<{
+    chapter_id: string; source_event_id: string; source_byte_start: number;
+    source_byte_end: number; source_hash: string;
+  }> : [];
+  const sourcesMatch = stored.length === snapshots.length && stored.every((source, index) => {
+    const next = snapshots[index]!;
+    return source.chapter_id === next.chapterId && source.source_event_id === next.sourceEventId &&
+      source.source_byte_start === next.byteStart && source.source_byte_end === next.byteEnd &&
+      source.source_hash === next.sourceHash;
+  });
+  const orderedChapterIndexes = [...chapterIndexes].sort((left, right) => left - right);
+  if (orderedChapterIndexes.some((value, index) => index > 0 && value !== orderedChapterIndexes[index - 1]! + 1)) {
+    throw new EpisodeStoreError(409, "分集来源必须覆盖连续章节范围");
+  }
+  if (existing && existing.title === title && existing.story_arc === storyArc &&
+      existing.target_duration_seconds === input.targetDurationSeconds && existing.recap === recap &&
+      existing.next_hook === nextHook && sourcesMatch) return episodeResult(existing);
   database.exec("BEGIN IMMEDIATE");
   try {
     database.prepare(
@@ -146,7 +176,7 @@ export function replaceEpisode(
          target_duration_seconds = excluded.target_duration_seconds,
          recap = excluded.recap, next_hook = excluded.next_hook, updated_at = excluded.updated_at`,
     ).run(id, seriesProjectId, input.index, title, storyArc, input.targetDurationSeconds,
-      recap, nextHook, now, now);
+      recap, nextHook, now, existing ? Math.max(now, existing.updated_at + 1) : now);
     database.prepare("DELETE FROM episode_sources WHERE episode_id = ?").run(id);
     const insertSource = database.prepare(
       `INSERT INTO episode_sources (
@@ -158,6 +188,9 @@ export function replaceEpisode(
       id, sourceIndex, source.chapterId, source.sourceEventId,
       source.byteStart, source.byteEnd, source.sourceHash,
     ));
+    if (existing && (existing.target_duration_seconds !== input.targetDurationSeconds || !sourcesMatch)) {
+      withdrawScriptApprovalForEpisodeChange(database, id, now);
+    }
     database.exec("COMMIT");
   } catch (error) {
     try { database.exec("ROLLBACK"); } catch { /* 保留原始写入错误。 */ }

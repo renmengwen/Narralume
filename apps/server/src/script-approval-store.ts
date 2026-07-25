@@ -22,6 +22,17 @@ export class ScriptApprovalStoreError extends Error {
   constructor(readonly statusCode: number, message: string) { super(message); }
 }
 
+export function scriptApprovalEventId(input: {
+  episodeId: string;
+  revision: number;
+  action: ScriptApprovalAction;
+  scriptVersionId: string;
+}) {
+  return `approval_${createHash("sha256")
+    .update(`script-approval-v1\0${input.episodeId}\0${input.revision}\0${input.action}\0${input.scriptVersionId}`)
+    .digest("hex")}`;
+}
+
 function latestApprovalRow(database: DatabaseSync, episodeId: string) {
   return database.prepare(
     `SELECT episode_id, revision, action, script_version_id, created_at
@@ -97,9 +108,7 @@ export function changeScriptApproval(
     }
 
     const revision = current.revision + 1;
-    const id = `approval_${createHash("sha256")
-      .update(`script-approval-v1\0${episodeId}\0${revision}\0${input.action}\0${scriptVersionId}`)
-      .digest("hex")}`;
+    const id = scriptApprovalEventId({ episodeId, revision, action: input.action, scriptVersionId });
     database.prepare(
       `INSERT INTO script_approval_events (
          id, episode_id, revision, action, script_version_id, created_at
@@ -111,6 +120,21 @@ export function changeScriptApproval(
     try { database.exec("ROLLBACK"); } catch { /* 保留原始批准错误。 */ }
     throw error;
   }
+}
+
+export function withdrawScriptApprovalForEpisodeChange(database: DatabaseSync, episodeId: string, now = Date.now()) {
+  const latest = latestApprovalRow(database, episodeId);
+  if (latest?.action !== "approve") return false;
+  const revision = latest.revision + 1;
+  const id = scriptApprovalEventId({
+    episodeId, revision, action: "withdraw", scriptVersionId: latest.script_version_id,
+  });
+  database.prepare(
+    `INSERT INTO script_approval_events (
+       id, episode_id, revision, action, script_version_id, created_at
+     ) VALUES (?, ?, ?, 'withdraw', ?, ?)`,
+  ).run(id, episodeId, revision, latest.script_version_id, now);
+  return true;
 }
 
 export function requireApprovedScriptForProduction(

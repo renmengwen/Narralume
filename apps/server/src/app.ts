@@ -48,6 +48,14 @@ import {
   replaceEpisode,
   type EpisodeInput,
 } from "./episode-store.js";
+import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
+import {
+  createEpisodeRecommendationJobHandler,
+  createOpenAiEpisodeRecommender,
+  enqueueEpisodeRecommendationJob,
+  EPISODE_RECOMMENDATION_JOB_TYPE,
+  type RecommendEpisodeSources,
+} from "./episode-recommendation-job.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
 import {
@@ -101,6 +109,7 @@ interface BuildAppOptions {
   imageProvider?: OpenAiImageConfig | null;
   chapterTextProvider?: ChapterTextModelConfig | null;
   chapterAnalyzer?: AnalyzeChapterEvents;
+  episodeRecommender?: RecommendEpisodeSources;
 }
 
 interface CreateJobBody {
@@ -232,6 +241,9 @@ export function buildApp(options: BuildAppOptions = {}) {
   const chapterTextProvider = options.chapterTextProvider === undefined
     ? chapterTextProviderFromEnvironment()
     : options.chapterTextProvider;
+  const episodeRecommender = options.episodeRecommender ?? (chapterTextProvider
+    ? createOpenAiEpisodeRecommender(chapterTextProvider)
+    : undefined);
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
     ...(chapterTextProvider ? {
@@ -240,6 +252,11 @@ export function buildApp(options: BuildAppOptions = {}) {
         dataRoot,
         chapterTextProvider,
         options.chapterAnalyzer ?? createOpenAiResponsesChapterAnalyzer(chapterTextProvider),
+      ),
+    } : {}),
+    ...(episodeRecommender ? {
+      [EPISODE_RECOMMENDATION_JOB_TYPE]: createEpisodeRecommendationJobHandler(
+        connection.database, episodeRecommender,
       ),
     } : {}),
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
@@ -254,6 +271,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
   supportedJobTypes.add(IMAGE_CANDIDATE_JOB_TYPE);
   supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
+  supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
   let worker: JobWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
@@ -284,6 +302,8 @@ export function buildApp(options: BuildAppOptions = {}) {
     ok: true,
     service: "narralume",
   }));
+
+  app.get("/api/episode-policy", async () => ({ ok: true, duration: EPISODE_DURATION_POLICY }));
 
   app.post("/api/books/import", async (request, reply) => {
     try {
@@ -796,6 +816,9 @@ export function buildApp(options: BuildAppOptions = {}) {
     if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE && !chapterTextProvider) {
       return reply.code(409).send({ ok: false, message: "Narralume 章节分析模型尚未配置，仍可使用人工事件入口" });
     }
+    if (type === EPISODE_RECOMMENDATION_JOB_TYPE && !episodeRecommender) {
+      return reply.code(409).send({ ok: false, message: "Narralume 选材推荐模型尚未配置" });
+    }
     if (type === TTS_TIMELINE_JOB_TYPE) {
       const episodeId = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? (body.payload as { episodeId?: unknown }).episodeId
@@ -873,6 +896,22 @@ export function buildApp(options: BuildAppOptions = {}) {
           ok: false,
           message: error instanceof Error ? error.message : "章节自动分析任务参数无效",
         });
+      }
+    }
+    if (type === EPISODE_RECOMMENDATION_JOB_TYPE) {
+      try {
+        const payload = body.payload as {
+          seriesId: string; episodeIndex: number; startChapterId?: string;
+          targetDurationSeconds: number; endingPreference?: string;
+        };
+        const result = enqueueEpisodeRecommendationJob(connection.database, payload, { priority, maxAttempts, runAfter });
+        return reply.code(result.created ? 201 : 200).send({
+          ok: true,
+          message: result.created ? "跨章选材推荐任务已创建并持久化" : "已恢复相同跨章选材推荐任务",
+          job: result.job,
+        });
+      } catch {
+        return reply.code(400).send({ ok: false, message: "跨章选材推荐参数无效" });
       }
     }
     const job = createJob(connection.database, {

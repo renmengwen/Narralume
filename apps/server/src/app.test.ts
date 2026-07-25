@@ -26,9 +26,14 @@ test("健康检查返回服务状态", async () => {
 
   try {
     const response = await app.inject({ method: "GET", url: "/api/health" });
+    const policy = await app.inject({ method: "GET", url: "/api/episode-policy" });
 
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json(), { ok: true, service: "narralume" });
+    assert.deepEqual(policy.json(), {
+      ok: true,
+      duration: { minimumSeconds: 60, defaultSeconds: 1200, maximumSeconds: 3600, stepSeconds: 30 },
+    });
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

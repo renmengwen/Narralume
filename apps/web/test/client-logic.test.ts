@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement, StrictMode } from "react";
+import { renderToString } from "react-dom/server";
 
 import {
   chapterPagePath,
@@ -21,7 +23,13 @@ import {
 import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
 import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "../src/production/assets/asset-candidate-editor.ts";
 import type { AssetRecord, CandidateRecord } from "../src/production/assets/types.ts";
-import { episodeDraft, episodePutPayload } from "../src/production/episode/episode-editor.ts";
+import {
+  consumeEpisodeRecommendation, createEpisodeHydrationCoordinator, emptyEpisodeDraft, episodeDraft,
+  episodePutPayload, episodeRecommendationJobMatchesIdentity,
+  type EpisodeDraft,
+} from "../src/production/episode/episode-editor.ts";
+import { useCommittedEpisodeIdentity } from "../src/production/episode/use-episode-workspace.ts";
+import type { EpisodeRecommendation } from "../src/production/types.ts";
 import { allowedSourceIndexes, approvalPutPayload, scriptDraft, scriptPostPayload } from "../src/production/scripts/script-editor.ts";
 
 test("保存的主题优先于系统偏好", () => {
@@ -227,13 +235,119 @@ test("分集编辑恢复时按事件 ID 去重，保存时裁剪并保留空可�
   });
 });
 
-test("分集编辑拒绝空字段、越界时长和空证据", () => {
+test("分集编辑使用可读技术策略并拒绝越界时长和空证据", () => {
   const valid = { title: "第一集", storyArc: "故事弧", targetDurationSeconds: 240, recap: "", nextHook: "", sourceEventIds: ["event_1"] };
   assert.throws(() => episodePutPayload({ ...valid, title: " " }), /标题不能为空/);
   assert.throws(() => episodePutPayload({ ...valid, storyArc: " " }), /故事弧不能为空/);
-  assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 179 }), /180 至 300/);
-  assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 301 }), /180 至 300/);
+  assert.equal(emptyEpisodeDraft().targetDurationSeconds, 1200);
+  assert.equal(episodePutPayload({ ...valid, targetDurationSeconds: 1200 }).targetDurationSeconds, 1200);
+  assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 59 }), /60 至 3600/);
+  assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 3601 }), /60 至 3600/);
   assert.throws(() => episodePutPayload({ ...valid, sourceEventIds: [] }), /至少选择一个/);
+});
+
+test("分集基础恢复与推荐任务无论返回顺序都保留推荐结果", async (t) => {
+  const baseDraft: EpisodeDraft = {
+    title: "已恢复分集", storyArc: "故事弧", targetDurationSeconds: 1200,
+    recap: "", nextHook: "", sourceEventIds: ["episode_event"],
+  };
+  const recommendation: EpisodeRecommendation = {
+    status: "recommended", startChapterId: "chapter_1", endChapterId: "chapter_2",
+    chapterIds: ["chapter_1", "chapter_2"], eventIds: ["recommended_1", "recommended_2"], missingChapters: [],
+  };
+  for (const order of ["job-first", "base-first"] as const) await t.test(order, async () => {
+    const identity = ["series_1", "1", "chapter_1"].join("\0");
+    const coordinator = createEpisodeHydrationCoordinator(identity);
+    let state = coordinator.resolve(identity, emptyEpisodeDraft(), "正在恢复")!;
+    const base = Promise.withResolvers<EpisodeDraft>();
+    const job = Promise.withResolvers<EpisodeRecommendation>();
+    const baseApplied = base.promise.then((restored) => {
+      state = coordinator.resolve(identity, restored, "分集已恢复")!;
+    });
+    const jobApplied = job.promise.then((result) => {
+      assert.ok(coordinator.acceptRecommendation(identity, result));
+      state = coordinator.resolve(identity, state.draft, state.status)!;
+    });
+    if (order === "job-first") {
+      job.resolve(recommendation); await jobApplied;
+      base.resolve(baseDraft); await baseApplied;
+    } else {
+      base.resolve(baseDraft); await baseApplied;
+      job.resolve(recommendation); await jobApplied;
+    }
+    assert.deepEqual(state.draft.sourceEventIds, recommendation.eventIds);
+    assert.equal(state.recommendation, recommendation);
+    assert.equal(state.status, "推荐完成：2 章、2 个事件，等待明确确认");
+  });
+});
+
+test("缺分析推荐状态不会被稍后完成的基础恢复覆盖", () => {
+  const result: EpisodeRecommendation = {
+    status: "needs_analysis", startChapterId: "chapter_1",
+    missingChapters: [{ id: "chapter_1", title: "第一章" }],
+  };
+  const identity = ["series_1", "1", "chapter_1"].join("\0");
+  const coordinator = createEpisodeHydrationCoordinator(identity);
+  assert.ok(coordinator.acceptRecommendation(identity, result));
+  const resolved = coordinator.resolve(identity, emptyEpisodeDraft(), "分集已恢复")!;
+  assert.deepEqual(resolved.draft.sourceEventIds, []);
+  assert.equal(resolved.recommendation, result);
+  assert.equal(resolved.status, "起始章节缺少结构化分析，请先补齐后重新推荐");
+});
+
+test("分集恢复协调器切换 identity 后拒绝旧 Job 与基础响应", async () => {
+  const oldIdentity = ["series_1", "1", "chapter_1"].join("\0");
+  const newIdentity = ["series_1", "1", "chapter_2"].join("\0");
+  const coordinator = createEpisodeHydrationCoordinator(oldIdentity);
+  const base = Promise.withResolvers<EpisodeDraft>();
+  const job = Promise.withResolvers<EpisodeRecommendation>();
+  const oldBase = base.promise.then((draft) => coordinator.resolve(oldIdentity, draft, "旧分集已恢复"));
+  const oldJob = job.promise.then((result) => coordinator.acceptRecommendation(oldIdentity, result));
+  assert.equal(coordinator.transitionIdentity(newIdentity), true);
+  job.resolve({ status: "recommended", startChapterId: "chapter_1", eventIds: ["old_event"], missingChapters: [] });
+  base.resolve({ ...emptyEpisodeDraft(), sourceEventIds: ["old_episode_event"] });
+  assert.equal(await oldJob, undefined);
+  assert.equal(await oldBase, undefined);
+  const current = coordinator.resolve(newIdentity, emptyEpisodeDraft(), "新分集待恢复")!;
+  assert.equal(current.recommendation, undefined);
+  assert.deepEqual(current.draft.sourceEventIds, []);
+  assert.equal(current.status, "新分集待恢复");
+});
+
+test("隐式起点 Job 只归属原始空起点 identity，显式解析后章节仍保持隔离", () => {
+  const implicit = { seriesId: "series_1", episodeIndex: 1, requestedStartChapterId: null };
+  assert.equal(episodeRecommendationJobMatchesIdentity(implicit, "series_1", 1), true);
+  assert.equal(episodeRecommendationJobMatchesIdentity(implicit, "series_1", 1, "chapter_1"), false);
+  const explicit = { ...implicit, requestedStartChapterId: "chapter_1" };
+  assert.equal(episodeRecommendationJobMatchesIdentity(explicit, "series_1", 1, "chapter_1"), true);
+  assert.equal(episodeRecommendationJobMatchesIdentity(explicit, "series_1", 1), false);
+});
+
+test("保存调整后的推荐会消费协调器状态并清除 URL Job", () => {
+  const identity = ["series_1", "1", ""].join("\0");
+  const coordinator = createEpisodeHydrationCoordinator(identity);
+  coordinator.acceptRecommendation(identity, {
+    status: "recommended", startChapterId: "chapter_1", endChapterId: "chapter_2",
+    chapterIds: ["chapter_1", "chapter_2"], eventIds: ["event_1", "event_2"], missingChapters: [],
+  });
+  const cleared: Array<string | undefined> = [];
+  assert.equal(consumeEpisodeRecommendation(coordinator, identity, (id) => cleared.push(id)), true);
+  assert.deepEqual(cleared, [undefined]);
+  const persisted = { ...emptyEpisodeDraft(), sourceEventIds: ["event_1"] };
+  const restored = coordinator.resolve(identity, persisted, "已保存")!;
+  assert.equal(restored.recommendation, undefined);
+  assert.deepEqual(restored.draft.sourceEventIds, ["event_1"]);
+});
+
+test("StrictMode 中未提交的 render 不得提前切换 hydration identity", () => {
+  const coordinator = createEpisodeHydrationCoordinator("committed");
+  function Probe() {
+    useCommittedEpisodeIdentity(coordinator, "aborted");
+    return createElement("span", null, "probe");
+  }
+  renderToString(createElement(StrictMode, null, createElement(Probe)));
+  assert.equal(coordinator.isCurrent("committed"), true);
+  assert.equal(coordinator.isCurrent("aborted"), false);
 });
 
 test("忠实稿裁剪正文、来源去重并拒绝空段落或空来源", () => {

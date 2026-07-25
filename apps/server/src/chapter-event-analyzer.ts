@@ -136,7 +136,7 @@ function prompt(atoms: readonly ChapterEvidenceAtom[]) {
   ].join("\n");
 }
 
-async function limitedJson(response: Response) {
+export async function limitedJson(response: Response) {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
     await response.body?.cancel();
@@ -165,7 +165,7 @@ async function limitedJson(response: Response) {
   catch { throw new Error("章节分析模型返回了无效 JSON"); }
 }
 
-function responseText(body: unknown) {
+export function responseText(body: unknown) {
   const value = body as {
     output_text?: unknown;
     output?: Array<{ content?: Array<{ text?: unknown }> }>;

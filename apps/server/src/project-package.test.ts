@@ -10,6 +10,8 @@ import { openDatabase } from "./database.js";
 import { FINAL_VIDEO_MANIFEST_VERSION, type FinalVideoManifest } from "./final-video.js";
 import { createProjectPackage, restoreProjectPackage, type ProjectPackageManifest } from "./project-package.js";
 import { loadRenderPlanSnapshot, RENDER_CONTRACT } from "./render-chunk-job.js";
+import { changeScriptApproval } from "./script-approval-store.js";
+import { createScriptVersion } from "./script-version-store.js";
 
 const TIMELINE = "a".repeat(64);
 const hash = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
@@ -29,10 +31,23 @@ async function fixture() {
   const original = await put(dataRoot, "books/book/source.txt", "真实原文");
   db.prepare("INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status) VALUES ('book','书',?,?, 'UTF-8','ready')")
     .run(original.relativePath, original.fileHash);
+  db.prepare(`INSERT INTO chapters (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
+    VALUES ('chapter','book',0,'第一章',0,?,4,?)`).run(original.bytes, original.fileHash);
+  db.prepare(`INSERT INTO chapter_events (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+    VALUES ('event','chapter',0,0,'revelation','{"summary":"发现真实线索"}',1)`).run();
+  db.prepare(`INSERT INTO chapter_event_sources (event_id,source_index,source_byte_start,source_byte_end,source_hash)
+    VALUES ('event',0,0,?,?)`).run(original.bytes, original.fileHash);
   db.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series','book','系列',1,1)").run();
   db.prepare("INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at) VALUES ('episode','series',1,'集','弧',180,1,1)").run();
-  db.prepare("INSERT INTO script_versions (id,episode_id,kind,version,content_json,content_hash,created_at) VALUES ('script','episode','packaged',1,'{}',?,1)").run("2".repeat(64));
-  db.prepare("INSERT INTO script_approval_events (id,episode_id,revision,action,script_version_id,created_at) VALUES ('approval','episode',1,'approve','script',1)").run();
+  db.prepare(`INSERT INTO episode_sources (episode_id,source_index,chapter_id,source_event_id,source_byte_start,source_byte_end,source_hash)
+    VALUES ('episode',0,'chapter','event',0,?,?)`).run(original.bytes, original.fileHash);
+  const faithful = createScriptVersion(db, "episode", {
+    kind: "faithful", paragraphs: [{ text: "忠实旁白", sourceIndexes: [0] }],
+  }, 1);
+  const packaged = createScriptVersion(db, "episode", {
+    kind: "packaged", parentVersionId: faithful.id, paragraphs: [{ text: "包装旁白", sourceIndexes: [0] }],
+  }, 1);
+  changeScriptApproval(db, "episode", { action: "approve", expectedRevision: 0, scriptVersionId: packaged.id }, 1);
   db.prepare("INSERT INTO assets (id,series_project_id,asset_type,asset_role,canonical_name,normalized_name,created_at) VALUES ('asset','series','scene','master','场景','场景',1)").run();
   const image = await put(dataRoot, "assets/candidates/aa/image.png", "image");
   db.prepare(`INSERT INTO asset_candidates (id,asset_id,source_kind,source_identity_hash,source_json,file_hash,mime,width,height,bytes,relative_path,created_at)
@@ -41,11 +56,11 @@ async function fixture() {
   db.prepare("INSERT INTO asset_candidate_review_events (candidate_id,revision,action,created_at) VALUES ('candidate',1,'approve',1)").run();
   const audio = await put(dataRoot, "episodes/episode/audio/segments/audio.wav", "audio");
   db.prepare(`INSERT INTO audio_segments (timeline_hash,segment_index,episode_id,script_version_id,text,provider_id,voice,rate,input_hash,relative_path,file_hash,bytes,duration_ms,created_at)
-    VALUES (?,0,'episode','script','旁白','test','voice',0,?,?,?, ?,60000,1)`)
-    .run(TIMELINE, "4".repeat(64), audio.relativePath, audio.fileHash, audio.bytes);
-  db.prepare("INSERT INTO subtitle_cues (timeline_hash,cue_index,segment_index,episode_id,script_version_id,start_ms,end_ms,text) VALUES (?,0,0,'episode','script',0,60000,'旁白')").run(TIMELINE);
+    VALUES (?,0,'episode',?,'旁白','test','voice',0,?,?,?, ?,60000,1)`)
+    .run(TIMELINE, packaged.id, "4".repeat(64), audio.relativePath, audio.fileHash, audio.bytes);
+  db.prepare("INSERT INTO subtitle_cues (timeline_hash,cue_index,segment_index,episode_id,script_version_id,start_ms,end_ms,text) VALUES (?,0,0,'episode',?,0,60000,'旁白')").run(TIMELINE, packaged.id);
   db.prepare(`INSERT INTO visual_segments (id,episode_id,segment_index,script_version_id,approval_revision,timeline_hash,cue_start_index,cue_end_index,start_ms,end_ms,motion_kind,motion_amount_ppm,fade_ms,revision,created_at,updated_at)
-    VALUES ('visual','episode',0,'script',1,?,0,0,0,60000,'none',0,0,1,1,1)`).run(TIMELINE);
+    VALUES ('visual','episode',0,?,1,?,0,0,0,60000,'none',0,0,1,1,1)`).run(packaged.id, TIMELINE);
   db.prepare("INSERT INTO visual_segment_assets (visual_segment_id,asset_index,asset_id,selected_candidate_id,candidate_review_revision) VALUES ('visual',0,'asset','candidate',1)").run();
   await put(dataRoot, `episodes/episode/audio/${TIMELINE}.srt`, "1\n00:00:00,000 --> 00:01:00,000\n旁白\n");
   await put(dataRoot, `episodes/episode/audio/${TIMELINE}.ass`, "[Script Info]\nPlayResX: 1080\nPlayResY: 1920\n");
@@ -53,10 +68,10 @@ async function fixture() {
   const chunkRelativePath = `episodes/episode/renders/chunks/${planned.renderHash.slice(0, 2)}/${planned.renderHash}.mp4`;
   const chunk = await put(dataRoot, chunkRelativePath, "chunk");
   db.prepare(`INSERT INTO render_chunks (render_hash,episode_id,timeline_hash,chunk_index,script_version_id,approval_revision,start_ms,end_ms,relative_path,file_hash,bytes,duration_ms,created_at)
-    VALUES (?,'episode',?,0,'script',1,0,60000,?,?,?,60000,1)`)
-    .run(planned.renderHash, TIMELINE, chunk.relativePath, chunk.fileHash, chunk.bytes);
+    VALUES (?,'episode',?,0,?,1,0,60000,?,?,?,60000,1)`)
+    .run(planned.renderHash, TIMELINE, packaged.id, chunk.relativePath, chunk.fileHash, chunk.bytes);
   const identity = {
-    version: FINAL_VIDEO_MANIFEST_VERSION, contract: RENDER_CONTRACT, episodeId: "episode", scriptVersionId: "script",
+    version: FINAL_VIDEO_MANIFEST_VERSION, contract: RENDER_CONTRACT, episodeId: "episode", scriptVersionId: packaged.id,
     approvalRevision: 1, timelineHash: TIMELINE,
     chunks: [{ index: 0, startMs: 0, endMs: 60000, renderHash: planned.renderHash,
       fileHash: chunk.fileHash, bytes: chunk.bytes, durationMs: 60000 }],
@@ -72,7 +87,7 @@ async function fixture() {
   };
   const finalManifestRelativePath = `${exportDirectory}/manifest.json`;
   await put(dataRoot, finalManifestRelativePath, `${JSON.stringify(finalManifest, null, 2)}\n`);
-  return { root, dataRoot, connection, finalManifestRelativePath };
+  return { root, dataRoot, connection, finalManifestRelativePath, faithfulScriptId: faithful.id, packagedScriptId: packaged.id };
 }
 
 async function cleanup(value: Awaited<ReturnType<typeof fixture>>) {
@@ -87,6 +102,63 @@ async function mutateManifest(packagePath: string, mutate: (manifest: any) => vo
   const { packageHash: _old, ...identity } = manifest;
   manifest.packageHash = hash(JSON.stringify(identity));
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function downgradeDatabaseToV12(database: DatabaseSync) {
+  database.exec(`PRAGMA foreign_keys=OFF;
+    DROP TRIGGER visual_segment_assets_same_series;
+    DROP TRIGGER visual_segment_assets_same_series_on_update;
+    CREATE TABLE episodes_v12 (
+      id TEXT PRIMARY KEY, series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+      episode_index INTEGER NOT NULL CHECK (episode_index >= 1), title TEXT NOT NULL CHECK(length(title)>0),
+      story_arc TEXT NOT NULL CHECK(length(story_arc)>0),
+      target_duration_seconds INTEGER NOT NULL CHECK(target_duration_seconds BETWEEN 180 AND 300),
+      recap TEXT, next_hook TEXT, created_at INTEGER NOT NULL CHECK(created_at>=0),
+      updated_at INTEGER NOT NULL CHECK(updated_at>=0), UNIQUE(series_project_id,episode_index)
+    ) STRICT;
+    INSERT INTO episodes_v12 SELECT * FROM episodes;
+    DROP TABLE episodes;
+    ALTER TABLE episodes_v12 RENAME TO episodes;
+    CREATE TRIGGER visual_segment_assets_same_series BEFORE INSERT ON visual_segment_assets BEGIN
+      SELECT RAISE(ABORT, 'visual segment asset must belong to episode series') WHERE NOT EXISTS (
+        SELECT 1 FROM visual_segments segment JOIN episodes episode ON episode.id=segment.episode_id
+        JOIN assets asset ON asset.id=NEW.asset_id WHERE segment.id=NEW.visual_segment_id
+        AND asset.series_project_id=episode.series_project_id);
+    END;
+    CREATE TRIGGER visual_segment_assets_same_series_on_update BEFORE UPDATE ON visual_segment_assets BEGIN
+      SELECT RAISE(ABORT, 'visual segment asset must belong to episode series') WHERE NOT EXISTS (
+        SELECT 1 FROM visual_segments segment JOIN episodes episode ON episode.id=segment.episode_id
+        JOIN assets asset ON asset.id=NEW.asset_id WHERE segment.id=NEW.visual_segment_id
+        AND asset.series_project_id=episode.series_project_id);
+    END;
+    DELETE FROM schema_migrations WHERE version=13;
+    PRAGMA foreign_keys=ON;`);
+}
+
+async function refreshPackagedDatabaseIdentity(packagePath: string) {
+  const databaseContent = await readFile(join(packagePath, "payload", "narralume.sqlite3"));
+  await mutateManifest(packagePath, (manifest: ProjectPackageManifest) => {
+    const databaseFile = manifest.files.find((file) => file.path === "narralume.sqlite3");
+    assert.ok(databaseFile);
+    databaseFile.bytes = databaseContent.length;
+    databaseFile.sha256 = hash(databaseContent);
+  });
+}
+
+async function createHistoricalV12Package(
+  current: Awaited<ReturnType<typeof fixture>>,
+  packagePath: string,
+  mutate?: (database: DatabaseSync) => void,
+) {
+  await createProjectPackage(current.connection.database, current.dataRoot,
+    { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+  const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
+  try {
+    downgradeDatabaseToV12(database);
+    database.prepare("UPDATE visual_segments SET motion_kind = 'zoom-in', motion_amount_ppm = 1").run();
+    mutate?.(database);
+  } finally { database.close(); }
+  await refreshPackagedDatabaseIdentity(packagePath);
 }
 
 test("创建 WAL 一致项目包并恢复到不存在的数据根", async () => {
@@ -115,6 +187,136 @@ test("创建 WAL 一致项目包并恢复到不存在的数据根", async () => 
       { packagePath: join(current.root, "project-package-2"), finalManifestRelativePath: current.finalManifestRelativePath });
     assert.equal(second.manifest.packageHash, first.manifest.packageHash, "相同输入的包身份与排序必须稳定");
   } finally { await cleanup(current); }
+});
+
+test("合法 v12 项目包在私有 staging 升级为 v13 并保留完整产品数据", async () => {
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "project-package-v12");
+    await createHistoricalV12Package(current, packagePath);
+    const originalPackagedDatabaseHash = hash(await readFile(join(packagePath, "payload", "narralume.sqlite3")));
+
+    const restored = join(current.root, "restored-v13");
+    await restoreProjectPackage(packagePath, restored);
+    assert.equal(hash(await readFile(join(packagePath, "payload", "narralume.sqlite3"))), originalPackagedDatabaseHash,
+      "恢复不得迁移或改写原项目包 payload");
+    const originalDatabase = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"), { readOnly: true });
+    try { assert.equal(originalDatabase.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 12); }
+    finally { originalDatabase.close(); }
+    const restoredDatabase = new DatabaseSync(join(restored, "narralume.sqlite3"), { readOnly: true });
+    try {
+      assert.deepEqual(
+        (restoredDatabase.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map((row) => row.version),
+        Array.from({ length: 13 }, (_, index) => index + 1),
+      );
+      for (const [table, count] of Object.entries({
+        episodes: 1, episode_sources: 1, script_versions: 2, script_version_sources: 2,
+        script_approval_events: 1, audio_segments: 1, subtitle_cues: 1,
+        visual_segments: 1, visual_segment_assets: 1, assets: 1, asset_candidates: 1,
+        asset_candidate_review_events: 1, render_chunks: 1,
+      })) {
+        assert.equal(restoredDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count, count, table);
+      }
+      assert.equal(restoredDatabase.prepare("PRAGMA foreign_key_check").all().length, 0);
+      assert.equal(restoredDatabase.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+      assert.equal(restoredDatabase.prepare("SELECT target_duration_seconds FROM episodes WHERE id='episode'").get()?.target_duration_seconds, 180);
+    } finally { restoredDatabase.close(); }
+    const manifest = JSON.parse(await readFile(join(packagePath, "manifest.json"), "utf8")) as ProjectPackageManifest;
+    assert.equal(await readFile(join(restored, manifest.project.finalManifestPath), "utf8"),
+      await readFile(join(packagePath, "payload", manifest.project.finalManifestPath), "utf8"));
+    assert.equal(await readFile(join(restored, "episodes", "episode", "exports", manifest.project.finalExportHash.slice(0, 2),
+      manifest.project.finalExportHash, "video.mp4"), "utf8"), "video");
+  } finally { await cleanup(current); }
+});
+
+test("历史 v12 封存模式拒绝批准或持久分片身份漂移，v13 仍要求当前渲染算法", async (t) => {
+  for (const kind of ["approval", "chunk"] as const) await t.test(`v12 ${kind}`, async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, `package-v12-${kind}`);
+      await createHistoricalV12Package(current, packagePath, (database) => {
+        if (kind === "approval") database.prepare(
+          `INSERT INTO script_approval_events (id,episode_id,revision,action,script_version_id,created_at)
+           VALUES ('approval_withdraw','episode',2,'withdraw',?,2)`,
+        ).run(current.packagedScriptId);
+        else database.prepare("UPDATE render_chunks SET approval_revision = 2").run();
+      });
+      await assert.rejects(
+        restoreProjectPackage(packagePath, join(current.root, `restored-${kind}`)),
+        kind === "approval" ? /历史最终清单不是封存时的最新批准包装稿/ : /最终清单分片与当前数据库不一致/,
+      );
+    } finally { await cleanup(current); }
+  });
+
+  await t.test("v13 render plan drift", async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, "package-v13-drift");
+      await createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+      const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
+      try { database.prepare("UPDATE visual_segments SET motion_kind = 'zoom-in', motion_amount_ppm = 1").run(); }
+      finally { database.close(); }
+      await refreshPackagedDatabaseIdentity(packagePath);
+      await assert.rejects(
+        restoreProjectPackage(packagePath, join(current.root, "restored-v13-drift")),
+        /最终清单不是当前批准稿与渲染计划/,
+      );
+    } finally { await cleanup(current); }
+  });
+});
+
+test("历史 v12 sealed restore 拒绝稿件、批准和分片时长的同步伪造", async (t) => {
+  const cases = [
+    ["noncanonical-content", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
+      database.prepare("UPDATE script_versions SET content_json = content_json || ' ' WHERE id = ?").run(current.packagedScriptId), /稿件/],
+    ["deterministic-script-id", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
+      database.prepare("UPDATE script_versions SET version = 7 WHERE id = ?").run(current.packagedScriptId), /稿件/],
+    ["packaged-parent", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
+      database.prepare("UPDATE script_versions SET parent_version_id = NULL WHERE id = ?").run(current.packagedScriptId), /包装稿/],
+    ["frozen-sources", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
+      database.prepare("UPDATE script_version_sources SET source_hash = ? WHERE script_version_id = ?")
+        .run("0".repeat(64), current.packagedScriptId), /冻结来源/],
+    ["approval-id", (database: DatabaseSync) =>
+      database.prepare("UPDATE script_approval_events SET id = 'approval_forged'").run(), /最新批准包装稿/],
+    ["chunk-duration", (database: DatabaseSync) =>
+      database.prepare("UPDATE render_chunks SET duration_ms = duration_ms - 1").run(), /分片与当前数据库不一致/],
+  ] as const;
+  for (const [name, mutate, message] of cases) await t.test(name, async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, `package-v12-forged-${name}`);
+      await createHistoricalV12Package(current, packagePath, (database) => mutate(database, current));
+      await assert.rejects(restoreProjectPackage(packagePath, join(current.root, `restored-${name}`)), message);
+    } finally { await cleanup(current); }
+  });
+});
+
+test("项目包创建仍严格要求 v13，恢复拒绝未来或有缺口的迁移历史", async (t) => {
+  await t.test("创建拒绝 v12", async () => {
+    const current = await fixture();
+    try {
+      downgradeDatabaseToV12(current.connection.database);
+      await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath: join(current.root, "package-v12-create"), finalManifestRelativePath: current.finalManifestRelativePath }),
+      /迁移版本不兼容/);
+    } finally { await cleanup(current); }
+  });
+  for (const kind of ["future", "gap"] as const) await t.test(kind, async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, `package-${kind}`);
+      await createProjectPackage(current.connection.database, current.dataRoot,
+        { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+      const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
+      try {
+        if (kind === "future") database.prepare("INSERT INTO schema_migrations (version) VALUES (14)").run();
+        else database.prepare("DELETE FROM schema_migrations WHERE version=12").run();
+      } finally { database.close(); }
+      await refreshPackagedDatabaseIdentity(packagePath);
+      await assert.rejects(restoreProjectPackage(packagePath, join(current.root, `restored-${kind}`)), /迁移版本不兼容/);
+    } finally { await cleanup(current); }
+  });
 });
 
 test("恢复拒绝不安全、重复、缺失、额外和被篡改的 payload", async (t) => {
@@ -252,16 +454,16 @@ test("首版唯一分集合同拒绝其他 file-backed 数据库行", async (t) 
       try {
         if (kind === "audio") current.connection.database.prepare(`INSERT INTO audio_segments
           (timeline_hash,segment_index,episode_id,script_version_id,text,provider_id,voice,rate,input_hash,relative_path,file_hash,bytes,duration_ms,created_at)
-          VALUES (?,0,'episode','script','旧音频','test','voice',0,?,'old.wav',?,1,60000,2)`)
-          .run("b".repeat(64), "c".repeat(64), "d".repeat(64));
+          VALUES (?,0,'episode',?,'旧音频','test','voice',0,?,'old.wav',?,1,60000,2)`)
+          .run("b".repeat(64), current.packagedScriptId, "c".repeat(64), "d".repeat(64));
         if (kind === "candidate") current.connection.database.prepare(`INSERT INTO asset_candidates
           (id,asset_id,source_kind,source_identity_hash,source_json,file_hash,mime,width,height,bytes,relative_path,created_at)
           VALUES ('unused','asset','upload',?,'{}',?,'image/png',1080,1920,1,'unused.png',2)`)
           .run("e".repeat(64), "f".repeat(64));
         if (kind === "chunk") current.connection.database.prepare(`INSERT INTO render_chunks
           (render_hash,episode_id,timeline_hash,chunk_index,script_version_id,approval_revision,start_ms,end_ms,relative_path,file_hash,bytes,duration_ms,created_at)
-          VALUES (?,'episode',?,9,'script',1,60000,120000,'old.mp4',?,1,60000,2)`)
-          .run("b".repeat(64), TIMELINE, "c".repeat(64));
+          VALUES (?,'episode',?,9,?,1,60000,120000,'old.mp4',?,1,60000,2)`)
+          .run("b".repeat(64), TIMELINE, current.packagedScriptId, "c".repeat(64));
         await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
           { packagePath: join(current.root, `package-${kind}`), finalManifestRelativePath: current.finalManifestRelativePath }),
         /之外的(?:音频|候选图片|分片)/);

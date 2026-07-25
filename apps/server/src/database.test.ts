@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 12);
+    assert.equal(migration?.version, 13);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (13)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (14)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -163,7 +163,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 12);
+    assert.equal(migration?.version, 13);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
@@ -201,7 +201,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      12,
+      13,
     );
     upgraded.database.prepare(
       `INSERT INTO script_versions (
@@ -262,7 +262,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      12,
+      13,
     );
     const audioTables = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'audio_%' ORDER BY name")
@@ -354,7 +354,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      12,
+      13,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
@@ -409,7 +409,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      12,
+      13,
     );
     const tables = upgraded.database.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('assets', 'asset_aliases') ORDER BY name",
@@ -552,7 +552,7 @@ test("既有 migration v10 数据库可升级视觉段与显式资产关系", as
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      12,
+      13,
     );
     const tables = upgraded.database.prepare(
       `SELECT name FROM sqlite_master
@@ -594,12 +594,12 @@ test("既有 migration v11 数据库保留数据升级 render_chunks 并执行�
        VALUES ('script_v11', 'episode_v11', 'packaged', 1, '{}', ?, 1)`,
     ).run("2".repeat(64));
     current.database.exec("DROP TABLE render_chunks");
-    current.database.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
+    current.database.prepare("DELETE FROM schema_migrations WHERE version >= 12").run();
     current.close();
 
     const upgraded = openDatabase(dataRoot);
     const database = upgraded.database;
-    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 12);
+    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 13);
     assert.equal(database.prepare("SELECT title FROM books WHERE id = 'book_v11'").get()?.title, "旧数据");
     assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='render_chunks'").get()?.name, "render_chunks");
     const insert = database.prepare(
@@ -642,4 +642,68 @@ test("既有 migration v11 数据库保留数据升级 render_chunks 并执行�
   } finally {
     await rm(dataRoot, { recursive: true, force: true });
   }
+});
+
+test("既有 migration v12 数据库升级时保留 Episode 与全部下游外键", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v12-upgrade-"));
+  const path = join(dataRoot, "narralume.sqlite3");
+  try {
+    const current = openDatabase(dataRoot);
+    const db = current.database;
+    db.prepare(`INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status)
+      VALUES ('book_v12','书','books/book/source.txt','hash','UTF-8','ready')`).run();
+    db.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_v12','book_v12','系列',1,1)").run();
+    db.prepare(`INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at)
+      VALUES ('episode_v12','series_v12',1,'第一集','弧',240,1,1)`).run();
+    db.prepare(`INSERT INTO script_versions (id,episode_id,kind,version,content_json,content_hash,created_at)
+      VALUES ('script_v12','episode_v12','packaged',1,'{}',?,1)`).run("a".repeat(64));
+    db.prepare(`INSERT INTO script_approval_events (id,episode_id,revision,action,script_version_id,created_at)
+      VALUES ('approval_v12','episode_v12',1,'approve','script_v12',1)`).run();
+    current.close();
+
+    const old = new DatabaseSync(path);
+    old.exec(`PRAGMA foreign_keys=OFF;
+      DROP TRIGGER visual_segment_assets_same_series;
+      DROP TRIGGER visual_segment_assets_same_series_on_update;
+      CREATE TABLE episodes_old (
+        id TEXT PRIMARY KEY, series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+        episode_index INTEGER NOT NULL CHECK (episode_index >= 1), title TEXT NOT NULL CHECK(length(title)>0),
+        story_arc TEXT NOT NULL CHECK(length(story_arc)>0),
+        target_duration_seconds INTEGER NOT NULL CHECK(target_duration_seconds BETWEEN 180 AND 300),
+        recap TEXT, next_hook TEXT, created_at INTEGER NOT NULL CHECK(created_at>=0),
+        updated_at INTEGER NOT NULL CHECK(updated_at>=0), UNIQUE(series_project_id,episode_index)
+      ) STRICT;
+      INSERT INTO episodes_old SELECT * FROM episodes;
+      DROP TABLE episodes;
+      ALTER TABLE episodes_old RENAME TO episodes;
+      CREATE TRIGGER visual_segment_assets_same_series BEFORE INSERT ON visual_segment_assets BEGIN
+        SELECT RAISE(ABORT, 'visual segment asset must belong to episode series') WHERE NOT EXISTS (
+          SELECT 1 FROM visual_segments segment JOIN episodes episode ON episode.id=segment.episode_id
+          JOIN assets asset ON asset.id=NEW.asset_id WHERE segment.id=NEW.visual_segment_id
+          AND asset.series_project_id=episode.series_project_id);
+      END;
+      CREATE TRIGGER visual_segment_assets_same_series_on_update BEFORE UPDATE ON visual_segment_assets BEGIN
+        SELECT RAISE(ABORT, 'visual segment asset must belong to episode series') WHERE NOT EXISTS (
+          SELECT 1 FROM visual_segments segment JOIN episodes episode ON episode.id=segment.episode_id
+          JOIN assets asset ON asset.id=NEW.asset_id WHERE segment.id=NEW.visual_segment_id
+          AND asset.series_project_id=episode.series_project_id);
+      END;
+      DELETE FROM schema_migrations WHERE version=13;
+      PRAGMA foreign_keys=ON;`);
+    old.close();
+
+    const upgraded = openDatabase(dataRoot);
+    const database = upgraded.database;
+    assert.equal(database.prepare("SELECT target_duration_seconds FROM episodes WHERE id='episode_v12'").get()?.target_duration_seconds, 240);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_versions WHERE episode_id='episode_v12'").get()?.count, 1);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_approval_events WHERE episode_id='episode_v12'").get()?.count, 1);
+    assert.equal(database.prepare("PRAGMA foreign_key_check").all().length, 0);
+    database.prepare("UPDATE episodes SET target_duration_seconds=1200 WHERE id='episode_v12'").run();
+    assert.throws(() => database.prepare("UPDATE episodes SET target_duration_seconds=59 WHERE id='episode_v12'").run(), /CHECK constraint failed/);
+    assert.throws(() => database.prepare("UPDATE episodes SET target_duration_seconds=3601 WHERE id='episode_v12'").run(), /CHECK constraint failed/);
+    database.prepare("DELETE FROM episodes WHERE id='episode_v12'").run();
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_versions").get()?.count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_approval_events").get()?.count, 0);
+    upgraded.close();
+  } finally { await rm(dataRoot, { recursive: true, force: true }); }
 });

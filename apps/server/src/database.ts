@@ -491,12 +491,60 @@ const MIGRATION_12 = `
     ON render_chunks(episode_id, timeline_hash, chunk_index);
 `;
 
+const MIGRATION_13 = `
+  DROP TRIGGER visual_segment_assets_same_series;
+  DROP TRIGGER visual_segment_assets_same_series_on_update;
+
+  CREATE TABLE episodes_v13 (
+    id TEXT PRIMARY KEY,
+    series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+    episode_index INTEGER NOT NULL CHECK (episode_index >= 1),
+    title TEXT NOT NULL CHECK (length(title) > 0),
+    story_arc TEXT NOT NULL CHECK (length(story_arc) > 0),
+    target_duration_seconds INTEGER NOT NULL CHECK (target_duration_seconds BETWEEN 60 AND 3600),
+    recap TEXT,
+    next_hook TEXT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+    UNIQUE (series_project_id, episode_index)
+  ) STRICT;
+
+  INSERT INTO episodes_v13 SELECT * FROM episodes;
+  DROP TABLE episodes;
+  ALTER TABLE episodes_v13 RENAME TO episodes;
+
+  CREATE TRIGGER visual_segment_assets_same_series
+  BEFORE INSERT ON visual_segment_assets
+  BEGIN
+    SELECT RAISE(ABORT, 'visual segment asset must belong to episode series')
+    WHERE NOT EXISTS (
+      SELECT 1 FROM visual_segments segment
+      JOIN episodes episode ON episode.id = segment.episode_id
+      JOIN assets asset ON asset.id = NEW.asset_id
+      WHERE segment.id = NEW.visual_segment_id AND asset.series_project_id = episode.series_project_id
+    );
+  END;
+
+  CREATE TRIGGER visual_segment_assets_same_series_on_update
+  BEFORE UPDATE ON visual_segment_assets
+  BEGIN
+    SELECT RAISE(ABORT, 'visual segment asset must belong to episode series')
+    WHERE NOT EXISTS (
+      SELECT 1 FROM visual_segments segment
+      JOIN episodes episode ON episode.id = segment.episode_id
+      JOIN assets asset ON asset.id = NEW.asset_id
+      WHERE segment.id = NEW.visual_segment_id AND asset.series_project_id = episode.series_project_id
+    );
+  END;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
   MIGRATION_10,
   MIGRATION_11,
   MIGRATION_12,
+  MIGRATION_13,
 ];
 
 export interface NarralumeDatabase {
@@ -532,9 +580,14 @@ export function openDatabase(dataRoot?: string): NarralumeDatabase {
     }
 
     for (let index = applied.length; index < MIGRATIONS.length; index += 1) {
+      const rebuildsEpisodes = index === 12;
+      if (rebuildsEpisodes) database.exec("PRAGMA foreign_keys = OFF");
       database.exec("BEGIN IMMEDIATE");
       try {
         database.exec(MIGRATIONS[index]!);
+        if (rebuildsEpisodes && database.prepare("PRAGMA foreign_key_check").all().length) {
+          throw new Error("数据库迁移后外键校验失败");
+        }
         database.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(index + 1);
         database.exec("COMMIT");
       } catch (error) {
@@ -544,6 +597,8 @@ export function openDatabase(dataRoot?: string): NarralumeDatabase {
           // 保留原始迁移错误；外层仍会关闭连接。
         }
         throw error;
+      } finally {
+        if (rebuildsEpisodes) database.exec("PRAGMA foreign_keys = ON");
       }
     }
 

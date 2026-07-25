@@ -77,6 +77,19 @@ export interface JobRecord {
   result?: { episodeId?: string; timelineHash?: string; durationMs?: number; segmentCount?: number; cueCount?: number; reusedSegments?: number } | Record<string, unknown> | null;
   errorMessage: string | null;
 }
+export interface EpisodeRecommendation {
+  status: "recommended" | "needs_analysis";
+  startChapterId: string;
+  endChapterId?: string;
+  chapterIds?: string[];
+  eventIds?: string[];
+  events?: Array<{ id: string; chapterId: string; type: string; payload: Record<string, string> }>;
+  estimatedCharacterCount?: number;
+  estimatedDurationSeconds?: number;
+  targetDurationSeconds?: number;
+  advice?: "保留" | "压缩";
+  missingChapters: Array<{ id: string; title: string }>;
+}
 export interface TtsTimelineSummary {
   episodeId: string; scriptVersionId: string; timelineHash: string; providerId: string; voice: string; rate: number;
   durationMs: number; segmentCount: number; cueCount: number; reusedSegments: number | null; createdAt: number;

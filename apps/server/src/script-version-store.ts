@@ -45,6 +45,28 @@ function canonicalJson(value: unknown): string {
   throw new ScriptVersionStoreError(400, "稿件内容必须是可序列化的 JSON");
 }
 
+function normalizedContent(paragraphs: ScriptVersionInput["paragraphs"]) {
+  validateParagraphs(paragraphs);
+  const contentJson = canonicalJson({
+    paragraphs: paragraphs.map((paragraph) => ({
+      text: paragraph.text.trim(), sourceIndexes: paragraph.sourceIndexes,
+    })),
+  });
+  return { contentJson, contentHash: createHash("sha256").update(contentJson).digest("hex") };
+}
+
+export function scriptVersionId(input: {
+  episodeId: string;
+  kind: ScriptVersionKind;
+  version: number;
+  contentHash: string;
+  parentVersionId: string | null;
+}) {
+  return `script_${createHash("sha256")
+    .update(`script-version-v1\0${input.episodeId}\0${input.kind}\0${input.version}\0${input.contentHash}\0${input.parentVersionId ?? ""}`)
+    .digest("hex")}`;
+}
+
 interface StoredVersionSourceRow extends SourceRow {
   segment_index: number;
   source_index: number;
@@ -107,6 +129,59 @@ function sourceMap(database: DatabaseSync, episodeId: string, parentVersionId: s
   return new Map((rows as unknown as SourceRow[]).map((row) => [row.episode_source_index, row]));
 }
 
+export function validateStoredScriptVersion(database: DatabaseSync, id: string) {
+  const row = database.prepare(
+    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+     FROM script_versions WHERE id = ?`,
+  ).get(id) as VersionRow | undefined;
+  if (!row) throw new ScriptVersionStoreError(409, "稿件版本不存在");
+  let content: unknown;
+  try { content = JSON.parse(row.content_json); } catch { throw new ScriptVersionStoreError(409, "稿件内容不是有效 JSON"); }
+  const paragraphs = (content as { paragraphs?: unknown })?.paragraphs as ScriptVersionInput["paragraphs"];
+  const normalized = normalizedContent(paragraphs);
+  if (row.kind === "faithful" && row.parent_version_id) {
+    throw new ScriptVersionStoreError(409, "忠实稿不能指定父版本");
+  }
+  if (row.kind === "packaged") {
+    const parent = row.parent_version_id && database.prepare(
+      "SELECT episode_id, kind FROM script_versions WHERE id = ?",
+    ).get(row.parent_version_id) as { episode_id: string; kind: string } | undefined;
+    if (!parent || parent.kind !== "faithful" || parent.episode_id !== row.episode_id) {
+      throw new ScriptVersionStoreError(409, "包装稿必须引用同一分集的忠实稿");
+    }
+    validateStoredScriptVersion(database, row.parent_version_id!);
+  }
+  if (row.content_json !== normalized.contentJson || row.content_hash !== normalized.contentHash ||
+      row.id !== scriptVersionId({ episodeId: row.episode_id, kind: row.kind, version: row.version,
+        contentHash: row.content_hash, parentVersionId: row.parent_version_id })) {
+    throw new ScriptVersionStoreError(409, "稿件内容或确定性身份无效");
+  }
+  const availableSources = sourceMap(database, row.episode_id, row.parent_version_id);
+  const expected = paragraphs.flatMap((paragraph, segmentIndex) => paragraph.sourceIndexes.map((episodeSourceIndex, sourceIndex) => {
+    const source = availableSources.get(episodeSourceIndex);
+    if (!source) throw new ScriptVersionStoreError(409, "稿件引用了不可用的分集来源");
+    return {
+      segment_index: segmentIndex,
+      source_index: sourceIndex,
+      episode_source_index: episodeSourceIndex,
+      chapter_id: source.chapter_id,
+      source_event_id: source.source_event_id,
+      source_byte_start: source.source_byte_start,
+      source_byte_end: source.source_byte_end,
+      source_hash: source.source_hash,
+    };
+  }));
+  const stored = database.prepare(
+    `SELECT segment_index, source_index, episode_source_index, chapter_id, source_event_id,
+            source_byte_start, source_byte_end, source_hash
+     FROM script_version_sources WHERE script_version_id = ? ORDER BY segment_index, source_index`,
+  ).all(id) as unknown as StoredVersionSourceRow[];
+  if (JSON.stringify(stored) !== JSON.stringify(expected)) {
+    throw new ScriptVersionStoreError(409, "稿件冻结来源与内容来源序号不一致");
+  }
+  return row;
+}
+
 export function createScriptVersion(
   database: DatabaseSync, episodeId: string, input: ScriptVersionInput, now = Date.now(),
 ) {
@@ -135,12 +210,7 @@ export function createScriptVersion(
   if (requestedSources.some((source) => !availableSources.has(source))) {
     throw new ScriptVersionStoreError(409, "稿件引用了不可用的分集来源");
   }
-  const contentJson = canonicalJson({
-    paragraphs: input.paragraphs.map((paragraph) => ({
-      text: paragraph.text.trim(), sourceIndexes: paragraph.sourceIndexes,
-    })),
-  });
-  const contentHash = createHash("sha256").update(contentJson).digest("hex");
+  const { contentJson, contentHash } = normalizedContent(input.paragraphs);
   database.exec("BEGIN IMMEDIATE");
   try {
     const existing = database.prepare(
@@ -155,9 +225,7 @@ export function createScriptVersion(
     const version = Number(database.prepare(
       "SELECT COALESCE(MAX(version), 0) + 1 AS version FROM script_versions WHERE episode_id = ? AND kind = ?",
     ).get(episodeId, input.kind)?.version);
-    const id = `script_${createHash("sha256")
-      .update(`script-version-v1\0${episodeId}\0${input.kind}\0${version}\0${contentHash}\0${parentVersionId ?? ""}`)
-      .digest("hex")}`;
+    const id = scriptVersionId({ episodeId, kind: input.kind, version, contentHash, parentVersionId });
     database.prepare(
       `INSERT INTO script_versions (
          id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at

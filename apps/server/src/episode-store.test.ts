@@ -107,8 +107,93 @@ test("分集复制两章证据且相同序号幂等替换", async () => {
     assert.equal(context.connection.database.prepare("SELECT COUNT(*) AS count FROM episode_sources").get()?.count, 2);
     const saved = await getEpisode(context.connection.database, context.dataRoot, project.id, 1);
     assert.equal(saved.title, "初入荣国府");
+    assert.equal(saved.targetDurationSeconds, 240);
     assert.deepEqual(saved.sources.map((source) => source.chapterId), ["chapter_1", "chapter_2"]);
     assert.deepEqual(saved.sources.map((source) => source.sourceText), ["宝玉", "荣国府"]);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("分集支持可配置长时长并在最终保存边界拒绝跳章", async () => {
+  const context = await fixture();
+  try {
+    const database = context.connection.database;
+    const project = createSeriesProject(database, { bookId: "book_episode", title: "长篇" }, 10);
+    assert.throws(() => replaceEpisode(database, project.id, {
+      index: 1, title: "短", storyArc: "弧", targetDurationSeconds: 59, sourceEventIds: ["event_1"],
+    }), /60 至 3600/);
+    const long = replaceEpisode(database, project.id, {
+      index: 1, title: "长", storyArc: "弧", targetDurationSeconds: 1200, sourceEventIds: ["event_1", "event_2"],
+    });
+    assert.equal(long.targetDurationSeconds, 1200);
+    database.prepare(
+      `INSERT INTO chapters (id, book_id, chapter_index, title, byte_start, byte_end, char_count, content_hash)
+       VALUES ('chapter_gap', 'book_episode', 3, '第四章', 0, 3, 1, 'hash')`,
+    ).run();
+    database.prepare(
+      `INSERT INTO chapter_events (id, chapter_id, event_index, occurrence, event_type, payload_json, created_at)
+       VALUES ('event_gap', 'chapter_gap', 0, 0, 'revelation', '{"fact":"跳章"}', 1)`,
+    ).run();
+    database.prepare(
+      `INSERT INTO chapter_event_sources (event_id, source_index, source_byte_start, source_byte_end, source_hash)
+       VALUES ('event_gap', 0, 0, 3, ?)`,
+    ).run(createHash("sha256").update(Buffer.from("第", "utf8")).digest("hex"));
+    assert.throws(() => replaceEpisode(database, project.id, {
+      index: 1, title: "跳章", storyArc: "弧", targetDurationSeconds: 1200,
+      sourceEventIds: ["event_1", "event_gap"],
+    }), /连续章节/);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("历史跳章分集即使同值 PUT 也会重新校验连续性，合法同值仍保持幂等", async () => {
+  const context = await fixture();
+  try {
+    const database = context.connection.database;
+    const project = createSeriesProject(database, { bookId: "book_episode", title: "历史连续性" }, 10);
+    const input = {
+      index: 1, title: "第一集", storyArc: "故事弧", targetDurationSeconds: 1200,
+      recap: null, nextHook: null, sourceEventIds: ["event_1", "event_2"],
+    };
+    const created = replaceEpisode(database, project.id, input, 20);
+    const legalSame = replaceEpisode(database, project.id, input, 30);
+    assert.deepEqual(legalSame, created);
+    database.prepare("UPDATE chapters SET chapter_index = 3 WHERE id = 'chapter_2'").run();
+    assert.throws(() => replaceEpisode(database, project.id, input, 40), /连续章节范围/);
+    assert.equal(database.prepare("SELECT updated_at FROM episodes WHERE id = ?").get(created.id)?.updated_at, 20);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("来源或时长变化会撤回旧批准，相同确认保持幂等", async () => {
+  const context = await fixture();
+  try {
+    const database = context.connection.database;
+    const project = createSeriesProject(database, { bookId: "book_episode", title: "批准" }, 10);
+    const input = { index: 1, title: "第一集", storyArc: "弧", targetDurationSeconds: 240, sourceEventIds: ["event_1"] };
+    const episode = replaceEpisode(database, project.id, input, 20);
+    database.prepare(
+      `INSERT INTO script_versions (id, episode_id, kind, version, content_json, content_hash, created_at)
+       VALUES ('script_approved', ?, 'packaged', 1, '{}', ?, 20)`,
+    ).run(episode.id, "a".repeat(64));
+    database.prepare(
+      `INSERT INTO script_approval_events (id, episode_id, revision, action, script_version_id, created_at)
+       VALUES ('approval_1', ?, 1, 'approve', 'script_approved', 20)`,
+    ).run(episode.id);
+    replaceEpisode(database, project.id, input, 20);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_approval_events").get()?.count, 1);
+    replaceEpisode(database, project.id, { ...input, targetDurationSeconds: 1200 }, 20);
+    const latest = database.prepare(
+      "SELECT action, revision FROM script_approval_events WHERE episode_id = ? ORDER BY revision DESC LIMIT 1",
+    ).get(episode.id);
+    assert.equal(latest?.action, "withdraw");
+    assert.equal(latest?.revision, 2);
   } finally {
     context.connection.close();
     await rm(context.dataRoot, { recursive: true, force: true });

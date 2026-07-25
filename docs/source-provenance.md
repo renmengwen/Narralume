@@ -43,3 +43,13 @@
 | 2026-07-25 | reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | `ScriptProcessor`、structured editor 设计 | `apps/web/src/production/scripts/ScriptStage.tsx` | 仅参考结构化分段编辑器；不引入其处理器或状态体系。 |
 | 2026-07-25 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | `storyGeneration`、`useStoryGeneration`、`CanvasScriptPanel`、`useCanvasScript` | `apps/web/src/production/scripts/` | 仅参考中文编辑状态和画布交互；不复制生成或影子存储。 |
 | 2026-07-25 | reference-only / minimal-port | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `NarrationPanel`、`HtmlVideoDraftPanel`、`htmlVideoDraftService` | `apps/web/src/production/scripts/` | 极小移植人工稿件编辑与明确保存交互；核心合同仍为 Narralume 不可变版本和 revision 批准。 |
+
+## PC-02B 可配置时长与跨章选材参考来源
+
+| 日期 | 类型 | 来源仓库 | 来源提交 | 来源文件/能力 | Narralume 文件 | 修改说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-25 | reference-only | `dramaclaw/dramaclaw` | `2864e72b3a717adbacfe09ded7b3ac6de2c2e28f` | 分集工作台、任务恢复与取消 | `apps/web/src/production/episode/`、`apps/server/src/episode-recommendation-job.ts` | 仅参考分集作用域、URL/Job 恢复和取消方法；不引入其图谱、状态库或 Agent 运行时。 |
+| 2026-07-25 | method-port / source-reference-only | `HBAI-Ltd/Toonflow-app` | `bc61ec7a1b5df31293b286981a5f4ad4635464ee` | `data/skills/script_agent_decision.md`、`script_execution_skeleton.md`、`script_execution_script.md` | `apps/server/src/episode-recommendation-job.ts`、`apps/web/src/production/episode/` | 移植“Agent 推荐范围、用户确认、再按骨架逐章取材”的方法；不复制源码、短漫剧时长/字数/固定章数/付费节奏或多层 Agent。 |
+| 2026-07-25 | reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | Series/Episode 与显式候选确认 | `apps/web/src/production/episode/` | 仅参考系列/分集作用域和显式选择；没有适配逐章事件证据的推荐闭包。 |
+| 2026-07-25 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | SQLite 任务状态与恢复 | `apps/server/src/database.ts`、`apps/server/src/episode-recommendation-job.ts` | 仅参考本地持久任务方法；不复制第二套任务或 Episode 存储。 |
+| 2026-07-25 | method-port / values-and-source-reference-only | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `appSettings`、`CreativeDefaultsSettings`、`creativeWorkflows`、`OneClick` | `apps/server/src/episode-policy.ts`、`apps/server/src/episode-recommendation-job.ts`、`apps/web/src/production/episode/` | 移植“系统默认可读、单任务可覆写、恢复时冻结身份”的方法；不复制其短视频默认值、固定语速/字数、业务 Prompt 或一键创作链。 |

@@ -4,11 +4,14 @@ import { lstat, mkdir, open, readdir, realpath, rename, rm } from "node:fs/promi
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { backup, DatabaseSync, type DatabaseSync as Database } from "node:sqlite";
 
+import { openDatabase } from "./database.js";
 import { FINAL_VIDEO_MANIFEST_VERSION, type FinalVideoManifest } from "./final-video.js";
 import { loadRenderPlanSnapshot, RENDER_CONTRACT } from "./render-chunk-job.js";
+import { scriptApprovalEventId } from "./script-approval-store.js";
+import { validateStoredScriptVersion } from "./script-version-store.js";
 
 export const PROJECT_PACKAGE_VERSION = "narralume-project-package-v1" as const;
-const CURRENT_SCHEMA_VERSION = 12;
+const CURRENT_SCHEMA_VERSION = 13;
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 10_000;
 const MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024;
@@ -204,14 +207,16 @@ async function durableText(path: string, text: string) {
   try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
 }
 
-function validateDatabase(database: Database) {
+function validateDatabase(database: Database, allowedVersions = [CURRENT_SCHEMA_VERSION]) {
   const integrity = database.prepare("PRAGMA integrity_check").all() as Array<Record<string, unknown>>;
   if (integrity.length !== 1 || Object.values(integrity[0] ?? {})[0] !== "ok") throw new Error("项目数据库完整性校验失败");
   if ((database.prepare("PRAGMA foreign_key_check").all() as unknown[]).length) throw new Error("项目数据库外键校验失败");
   const versions = database.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>;
-  if (versions.length !== CURRENT_SCHEMA_VERSION || versions.some((row, index) => row.version !== index + 1)) {
+  const version = versions.length;
+  if (!allowedVersions.includes(version) || versions.some((row, index) => row.version !== index + 1)) {
     throw new Error("项目数据库迁移版本不兼容");
   }
+  return version;
 }
 
 function parseFinalManifest(text: string): FinalVideoManifest {
@@ -265,8 +270,14 @@ function addSpec(specs: Map<string, { path: string; roles: Set<string>; bytes?: 
   specs.set(key, value);
 }
 
-function enumerateProject(database: Database, finalManifestPath: string, finalManifest: FinalVideoManifest) {
-  validateDatabase(database);
+function enumerateProject(
+  database: Database,
+  finalManifestPath: string,
+  finalManifest: FinalVideoManifest,
+  allowedSchemaVersions = [CURRENT_SCHEMA_VERSION],
+  sealedRenderPlanSchemaVersion?: number,
+) {
+  const schemaVersion = validateDatabase(database, allowedSchemaVersions);
   const series = database.prepare("SELECT id, book_id FROM series_projects ORDER BY id").all() as Array<{ id: string; book_id: string }>;
   if (series.length !== 1) throw new Error("首版项目包只支持恰好一个系列项目的数据根");
   const books = database.prepare("SELECT id, original_file_path, original_file_hash FROM books ORDER BY id").all() as
@@ -280,11 +291,29 @@ function enumerateProject(database: Database, finalManifestPath: string, finalMa
   if (finalManifestPath !== `episodes/${finalManifest.episodeId}/exports/${finalManifest.exportHash.slice(0, 2)}/${finalManifest.exportHash}/manifest.json`) {
     throw new Error("最终视频清单不是规范内容寻址路径");
   }
-  const snapshot = loadRenderPlanSnapshot(database, finalManifest.episodeId, finalManifest.timelineHash);
-  if (snapshot.scriptVersionId !== finalManifest.scriptVersionId || snapshot.approvalRevision !== finalManifest.approvalRevision ||
-      JSON.stringify(snapshot.chunks) !== JSON.stringify(finalManifest.chunks.map((chunk) => ({
-        index: chunk.index, startMs: chunk.startMs, endMs: chunk.endMs, renderHash: chunk.renderHash,
-      })))) throw new Error("最终清单不是当前批准稿与渲染计划");
+  const sealedRenderPlan = schemaVersion === sealedRenderPlanSchemaVersion;
+  if (sealedRenderPlan) {
+    const approval = database.prepare(
+      `SELECT id, revision, action, script_version_id FROM script_approval_events
+       WHERE episode_id = ? ORDER BY revision DESC LIMIT 1`,
+    ).get(finalManifest.episodeId) as { id: string; revision: number; action: string; script_version_id: string } | undefined;
+    if (!approval || approval.action !== "approve" || approval.revision !== finalManifest.approvalRevision ||
+        approval.script_version_id !== finalManifest.scriptVersionId ||
+        approval.id !== scriptApprovalEventId({ episodeId: finalManifest.episodeId, revision: approval.revision,
+          action: "approve", scriptVersionId: approval.script_version_id })) {
+      throw new Error("历史最终清单不是封存时的最新批准包装稿");
+    }
+    const script = validateStoredScriptVersion(database, finalManifest.scriptVersionId);
+    if (script.episode_id !== finalManifest.episodeId || script.kind !== "packaged") {
+      throw new Error("历史最终清单不是封存时的最新批准包装稿");
+    }
+  } else {
+    const snapshot = loadRenderPlanSnapshot(database, finalManifest.episodeId, finalManifest.timelineHash);
+    if (snapshot.scriptVersionId !== finalManifest.scriptVersionId || snapshot.approvalRevision !== finalManifest.approvalRevision ||
+        JSON.stringify(snapshot.chunks) !== JSON.stringify(finalManifest.chunks.map((chunk) => ({
+          index: chunk.index, startMs: chunk.startMs, endMs: chunk.endMs, renderHash: chunk.renderHash,
+        })))) throw new Error("最终清单不是当前批准稿与渲染计划");
+  }
 
   const specs = new Map<string, { path: string; roles: Set<string>; bytes?: number; hash?: string }>();
   addSpec(specs, books[0]!.original_file_path, "original-text", undefined, books[0]!.original_file_hash);
@@ -309,14 +338,20 @@ function enumerateProject(database: Database, finalManifestPath: string, finalMa
   if (allCandidates !== images.length) throw new Error("数据根包含当前视觉计划之外的候选图片文件记录");
   images.forEach((row) => addSpec(specs, row.relative_path, "selected-image", row.bytes, row.file_hash));
   const chunks = database.prepare(
-    `SELECT render_hash, chunk_index, relative_path, file_hash, bytes FROM render_chunks
+    `SELECT render_hash, episode_id, timeline_hash, chunk_index, script_version_id, approval_revision,
+            start_ms, end_ms, relative_path, file_hash, bytes, duration_ms FROM render_chunks
      WHERE episode_id = ? AND timeline_hash = ? AND chunk_index < ? ORDER BY chunk_index`,
   ).all(finalManifest.episodeId, finalManifest.timelineHash, finalManifest.chunks.length) as
-    Array<{ render_hash: string; chunk_index: number; relative_path: string; file_hash: string; bytes: number }>;
+    Array<{ render_hash: string; episode_id: string; timeline_hash: string; chunk_index: number; script_version_id: string;
+      approval_revision: number; start_ms: number; end_ms: number; relative_path: string; file_hash: string; bytes: number;
+      duration_ms: number }>;
   if (chunks.length !== finalManifest.chunks.length || chunks.some((row, index) => {
     const chunk = finalManifest.chunks[index];
-    return !chunk || row.render_hash !== chunk.renderHash || row.chunk_index !== chunk.index || row.relative_path !== chunk.relativePath ||
-      row.file_hash !== chunk.fileHash || row.bytes !== chunk.bytes;
+    return !chunk || row.episode_id !== finalManifest.episodeId || row.timeline_hash !== finalManifest.timelineHash ||
+      row.script_version_id !== finalManifest.scriptVersionId || row.approval_revision !== finalManifest.approvalRevision ||
+      row.render_hash !== chunk.renderHash || row.chunk_index !== chunk.index || row.start_ms !== chunk.startMs ||
+      row.end_ms !== chunk.endMs || row.relative_path !== chunk.relativePath || row.file_hash !== chunk.fileHash ||
+      row.bytes !== chunk.bytes || row.duration_ms !== chunk.durationMs;
   })) throw new Error("最终清单分片与当前数据库不一致");
   const allChunks = (database.prepare("SELECT COUNT(*) AS count FROM render_chunks").get() as { count: number }).count;
   if (allChunks !== chunks.length) throw new Error("数据根包含当前渲染计划之外的分片文件记录");
@@ -333,6 +368,7 @@ function enumerateProject(database: Database, finalManifestPath: string, finalMa
   addSpec(specs, finalManifest.finalVideo.relativePath, "final-video", finalManifest.finalVideo.bytes, finalManifest.finalVideo.fileHash);
   addSpec(specs, finalManifestPath, "final-manifest");
   return {
+    schemaVersion,
     project: {
       seriesProjectId: series[0]!.id, bookId: books[0]!.id, episodeId: finalManifest.episodeId,
       scriptVersionId: finalManifest.scriptVersionId, approvalRevision: finalManifest.approvalRevision,
@@ -538,15 +574,35 @@ async function loadPackageStructure(packagePathValue: string) {
   return { manifest, packagePath, payload };
 }
 
-async function validateStagedPackage(staging: string, manifest: ProjectPackageManifest) {
+async function validateStagedPackage(
+  staging: string,
+  manifest: ProjectPackageManifest,
+  options: {
+    allowedSchemaVersions?: number[];
+    requireOriginalDatabaseBytes?: boolean;
+    sealedRenderPlanSchemaVersion?: number;
+  } = {},
+) {
+  const allowedSchemaVersions = options.allowedSchemaVersions ?? [CURRENT_SCHEMA_VERSION];
+  const requireOriginalDatabaseBytes = options.requireOriginalDatabaseBytes ?? true;
   const actual = await walkPayload(staging);
   const expected = manifest.files.map((file) => file.path).sort(compareText);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("恢复 staging 存在缺失或额外文件");
+  for (const file of manifest.files) {
+    if (file.path === "narralume.sqlite3" && !requireOriginalDatabaseBytes) continue;
+    await readOrdinaryFile(staging, file.path, { expectedBytes: file.bytes, expectedHash: file.sha256 });
+  }
   const database = new DatabaseSync(resolve(staging, "narralume.sqlite3"), { readOnly: true });
   try {
     const finalMeasured = await readOrdinaryFile(staging, manifest.project.finalManifestPath, { maxBytes: MAX_MANIFEST_BYTES, capture: true });
     const finalText = finalMeasured.content!.toString("utf8");
-    const enumerated = enumerateProject(database, manifest.project.finalManifestPath, parseFinalManifest(finalText));
+    const enumerated = enumerateProject(
+      database,
+      manifest.project.finalManifestPath,
+      parseFinalManifest(finalText),
+      allowedSchemaVersions,
+      options.sealedRenderPlanSchemaVersion,
+    );
     if (JSON.stringify(enumerated.project) !== JSON.stringify(manifest.project)) throw new Error("项目包项目身份与数据库不一致");
     const expectedSpecs = new Map(enumerated.specs.map((spec) => [spec.path.toLowerCase(), spec]));
     for (const file of manifest.files.filter((item) => item.path !== "narralume.sqlite3")) {
@@ -558,6 +614,7 @@ async function validateStagedPackage(staging: string, manifest: ProjectPackageMa
       expectedSpecs.delete(file.path.toLowerCase());
     }
     if (expectedSpecs.size) throw new Error("项目包缺少数据库要求的文件");
+    return enumerated.schemaVersion;
   } finally { database.close(); }
 }
 
@@ -605,7 +662,25 @@ export async function restoreProjectPackage(
       await ops.afterCopy?.(file.path);
     }
     await ops.afterPayloadCopied?.();
-    await validateStagedPackage(staging, structure.manifest);
+    const schemaVersion = await validateStagedPackage(
+      staging,
+      structure.manifest,
+      {
+        allowedSchemaVersions: [CURRENT_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION],
+        sealedRenderPlanSchemaVersion: CURRENT_SCHEMA_VERSION - 1,
+      },
+    );
+    if (schemaVersion === CURRENT_SCHEMA_VERSION - 1) {
+      const migrated = openDatabase(staging);
+      migrated.close();
+      const databaseHandle = await open(resolve(staging, "narralume.sqlite3"), "r+");
+      try { await databaseHandle.sync(); } finally { await databaseHandle.close(); }
+      await validateStagedPackage(staging, structure.manifest, {
+        allowedSchemaVersions: [CURRENT_SCHEMA_VERSION],
+        requireOriginalDatabaseBytes: false,
+        sealedRenderPlanSchemaVersion: CURRENT_SCHEMA_VERSION,
+      });
+    }
     await ops.syncDirectory(staging);
     const installed = await renameNoReplace(staging, target, ops);
     try { await ops.syncDirectory(dirname(target)); } catch (error) {

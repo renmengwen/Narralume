@@ -65,3 +65,15 @@
 | 2026-07-26 | budget-method-port / source-reference-only | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `server/services/agent/agentRunsFreeformHelpers.js`、`agentRunsFreeformWorkflow.js`、`agentRuns.js`、`storyboard/storyboardNarrationBudget.js` | `apps/server/src/episode-script-generation-job.ts` | 移植目标时长全链传播及真实 TTS 后按当前 voice/rate 实际时长反算字符预算的方法；`4.5` 字符/秒只允许显式 provisional fallback，不复制业务 prompt、一键创作或 HTML-video 链。 |
 
 本 Task 没有直接复制任何参考仓源码；实现只复用 Narralume 现有 `episode_sources`、持久 Job/provider、稿件版本与批准门合同，不新增第二套存储、通用 Agent 框架或参考项目运行时依赖。
+
+## TTS 短样校准参考来源
+
+| 日期 | 类型 | 来源仓库 | 来源提交 | 来源文件/能力 | Narralume 文件 | 修改说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-26 | reference-only | `dramaclaw/dramaclaw` | `2864e72b3a717adbacfe09ded7b3ac6de2c2e28f` | 全仓 TTS/voice/试听能力核对 | 待实现的 TTS 短样 Job 与 AudioStage 接线 | 未发现同时覆盖批准稿绑定、专名短样、实测 CPS、显式选择和 restart 恢复的闭包；不复制其任务或运行时。 |
+| 2026-07-26 | reference-only | `HBAI-Ltd/Toonflow-app` | `bc61ec7a1b5df31293b286981a5f4ad4635464ee` | 全仓 TTS/voice/试听能力核对 | 待实现的 TTS 短样 Job 与 AudioStage 接线 | 未发现适配 Narralume 现有批准稿、WAV 和持久 Job 合同的短样闭包；不复制短漫剧常量、进程内任务或固定字数。 |
+| 2026-07-26 | interaction-method-port / source-reference-only | `alibaba/lumenx` | `7a1213a0db73ab90ca976f5c4b4ca680e1ae1d2d` | 语音预览与显式应用/选择交互 | 待实现的 AudioStage 短样试听与选择 | 只移植“试听”和“应用选择”是两个动作的方法；用户必须显式选择成功 sample，不引入其状态体系、语音注册表或运行时。 |
+| 2026-07-26 | reference-only | `xuanyustudio/LocalMiniDrama` | `b695284b8288e392a4ce2a63717406f3830966af` | TTS service、任务状态与音频播放能力核对 | 待实现的 TTS 短样 Job 与 AudioStage 接线 | 未发现同时冻结稿件身份、实测语速并恢复显式选择的完整闭包；不复制第二套任务、覆盖式音频状态或固定每分钟字数。 |
+| 2026-07-26 | duration-method-port / source-reference-only | `renmengwen/MuseDock` | `3cf8d392436983e9fa93f9cdf7aa3186780cd5dd` | `server/services/tts/sceneTts.js`、`ttsTimeline.js`、`server/services/agent/agentRunsFreeformWorkflow.js`、`server/services/storyboard/storyboardNarrationBudget.js`、`frontend-react/src/components/creative-video-editor/NarrationPanel.jsx` | 待实现的 TTS 短样 Job、真实 duration/CPS 与 AudioStage 选择 | 移植真实音频时长与 `characterCount / durationSeconds` 实测 CPS、按当前 voice/rate 反推长稿预算的方法；复用 Narralume 现有 System.Speech/WAV/Job，不复制 provider router、voice clone/design、随机文件名、业务 prompt 或敏感配置。 |
+
+短样首版只复用 Narralume 现有 `tts-provider.ts`、批准门、持久 Job、WAV/PCM/ffprobe、取消/轮询/restart 和 AudioStage 试听能力。至少生成两个真实 voice/rate 组合，保存 exact text/hash、字符数、真实 duration、实测 CPS 与 sample identity，并要求用户显式选择；不自动批准稿件、不自动启动完整 TTS、不写入 `audio_segments` 冒充正式 timeline，不新增第二套完整 TTS store。

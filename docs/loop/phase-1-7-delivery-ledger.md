@@ -32,11 +32,11 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 ## 当前恢复入口
 
 - 当前分支：`dev`
-- 当前 HEAD：`63d78b7`（PC-05 provider 接入与 review 修复业务提交已入库；本控制提交不得自引用）。
+- 当前 HEAD：`f23593f`（PC-05 provider 进展登记已入库；本控制提交不得自引用）。
 - 工作区：仅有用户未跟踪文件 `docs/handoff-to-next-session.md`，以及本 Ledger 控制更新；未清理、未暂存、未混入用户交接文件。
 - 最近验证：PC-05 根 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN；server 214 PASS/1 个 Windows 普通文件 symlink 权限 SKIP，web 50 PASS，Vite 60 modules。真实 Edge smoke 使用 `node-edge-tts@1.2.10` 与 `zh-CN-YunjianNeural` 返回空音频/空字幕，adapter 正确失败且未落 durable timeline；TTS-CAL System.Speech 真实《盗墓笔记》双样与完整 TTS 消费仍为最近可听音频基线。
-- 当前 Task：`TTS-CAL` complete；`CFG-01 模型设置中心` complete；`PC-05 真实 TTS 与听音` implementing；`PC-04 视觉语义与多图生产` 已分配低冲突前端派生段数 worker。TTS-CAL 业务提交 `9086d1050c9ac28e23c08beb4170e182265f5998`，Responses 兼容修复 `e8884fe`；OpenDesign 提交 `6ab1592`；来源登记 `caa96d0`；CFG-01 业务提交 `1a4148a`；PC-05 业务提交 `333317a`、review 修复 `63d78b7`。
-- 下一动作：`pc05_edge_smoke_worker` 诊断 Edge 空音频真实 smoke；`pc04_visual_worker_2` 去除视觉段数 8～15 全局硬编码。主窗口仅负责规划、Ledger、边界核对和验收证据登记。
+- 当前 Task：`TTS-CAL` complete；`CFG-01 模型设置中心` complete；`PC-05 真实 TTS 与听音` implementing；`PC-04 视觉语义与多图生产` implementing 但业务 worker 尚未落盘。TTS-CAL 业务提交 `9086d1050c9ac28e23c08beb4170e182265f5998`，Responses 兼容修复 `e8884fe`；OpenDesign 提交 `6ab1592`；来源登记 `caa96d0`；CFG-01 业务提交 `1a4148a`；PC-05 业务提交 `333317a`、review 修复 `63d78b7`。
+- 下一动作：子代理通道恢复后继续分配 Edge 空音频诊断与 PC-04 派生段数实现；主窗口仅负责规划、Ledger、边界核对和验收证据登记，不抢写业务代码。
 
 ## 2026-07-25 产品闭环复开
 
@@ -105,8 +105,8 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PC-05 Edge smoke 诊断 | `pc05_edge_smoke_worker` 已分配 | 共享工作区 `dev@63d78b7` | `apps/server/src/tts-provider*`、必要 provider 定向测试；只读 `node_modules/node-edge-tts` 与官方包文档；本 Ledger 仅 Coordinator 更新 | Worker 业务 / Coordinator 状态 | 不得读取或输出密钥值；用户文件 `docs/handoff-to-next-session.md` 排除；不得形成第二套 TTS/字幕 store | `implementing` |
-| PC-04 visual 派生段数 | `pc04_visual_worker_2` 已分配 | 共享工作区 `dev@63d78b7` | `apps/web/src/production/visual/visual-editor.ts`、`use-visual-workspace.ts`、`VisualStage.tsx`、`apps/web/test/visual-editor.test.ts`；本 Ledger 仅 Coordinator 更新 | Worker 业务 / Coordinator 状态 | 不得碰 TTS、server、package/lockfile、render/final、project package/recovery core；用户文件排除 | `implementing` |
+| PC-05 Edge smoke 诊断 | 待重新分配 | 共享工作区 `dev@f23593f` | `apps/server/src/tts-provider*`、必要 provider 定向测试；只读 `node_modules/node-edge-tts` 与官方包文档；本 Ledger 仅 Coordinator 更新 | Worker 业务 / Coordinator 状态 | 不得读取或输出密钥值；用户文件 `docs/handoff-to-next-session.md` 排除；不得形成第二套 TTS/字幕 store | `queued` |
+| PC-04 visual 派生段数 | 待重新分配 | 共享工作区 `dev@f23593f` | `apps/web/src/production/visual/visual-editor.ts`、`use-visual-workspace.ts`、`VisualStage.tsx`、`apps/web/test/visual-editor.test.ts`；本 Ledger 仅 Coordinator 更新 | Worker 业务 / Coordinator 状态 | 不得碰 TTS、server、package/lockfile、render/final、project package/recovery core；用户文件排除 | `queued` |
 | PC-05 TTS provider 接入 | `pc05_worker_2` 已释放 | 业务 `333317a`、修复 `63d78b7` | 无 | Coordinator | Edge 真实 smoke 未通过，不得标 complete；不得清理用户交接文件 | `implementing` |
 | CFG-01 / 模型设置中心 | `cfg01_worker` 已释放 | 业务 `1a4148a` | 无 | Coordinator | 真实 3101/5174 验收资源已释放；设置文件已恢复默认 Edge，无假 key 残留 | `complete` |
 | TTS-CAL | `pc02c_worker` 已释放 | 共享工作区；业务 `9086d10`，兼容修复 `e8884fe` | 无 | Coordinator | 真实 3101/5174 验收资源已释放 | `complete` |
@@ -331,6 +331,7 @@ PC-02 当前 checkpoint：
 | 2026-07-26 PC-05 实现、只读复核与修复 | 原 `pc05_worker` 留下未提交 provider diff 后无响应，Coordinator 中断并改租给 `pc05_worker_2`，同一时间仍只有一个 PC-05 writer。业务提交 `333317a feat(tts): 接入 Edge TTS 与模型配置 provider` 安装 `node-edge-tts@1.2.10`，把 calibration/timeline 消费切到 CFG-01 runtime resolver，默认 Edge voice `zh-CN-YunjianNeural`，Edge 临时 MP3/JSON subtitle 转现有 WAV/cue/SRT/ASS 管线，MiniMax/MiMo 按 MuseDock 合同移植 `/t2a_v2` hex 与 `/chat/completions` base64，保留 System.Speech fallback，并把 provider/model/voice/language/rate 纳入 identity。只读 review 发现四项：逐词边界不能替代 PC-03 可读短句 cue、Edge 生成期间需真实取消、MiniMax/MiMo abort 需归一为取消、runtime voice 覆盖后校准组合需按有效 voice/rate 去重；修复提交 `63d78b7 fix(tts): 修正 Edge 边界与取消处理` 全部关闭。验证：server 定向 provider/calibration/timeline 实际跑全量 214 PASS/1 Windows symlink 权限 SKIP；根 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` GREEN，web 50 PASS、Vite 60 modules。 |
 | 2026-07-26 PC-05 Edge 真实 smoke 未通过 | `pc05_worker_2` 用已编译 provider 调用 `node-edge-tts@1.2.10` + `zh-CN-YunjianNeural` 生成短句，adapter 正确失败为 `Edge TTS 未返回有效音频`，未落 durable timeline。直接调用包排查：`audio-24khz-48kbitrate-mono-mp3` 写出 0 byte MP3、字幕 JSON `[]`；`webm-24khz-16bit-mono-opus` 写出 150 byte WebM header、字幕 JSON 仍为 `[]`。结论登记为当前环境/上游 Edge WebSocket 空 audio/metadata，代码不冒充成功；PC-05 仍为 `implementing`，不能标 `complete`。Coordinator 分配 `pc05_edge_smoke_worker` 从 `dev@63d78b7` 做最小诊断，若发现 Narralume 调用误用则修复提交，否则只输出可复现实验与下一步。 |
 | 2026-07-26 PC-04/PC-06 并行调度 | 用户要求可同步实现时多开 agent。PC-06 只读验收规划完成：后端 `/api/jobs` 可跑 `render_chunks`/`final_video`，项目包仍复用 `createProjectPackage`/`restoreProjectPackage` 与 P7 gate 库函数；前端 `export` 阶段仍是 placeholder，`visual` 阶段仅联系表导出，没有前端创建 render chunks 的最小入口；旧 P7 gate 硬编码红楼/P5 图/180～300 秒/固定 hash 只能参考，不能冒充北派验收。PC-06 必须等待 PC-05 真实音频/timeline 与 PC-04 productionReady 视觉段。首个 `pc04_visual_worker` 因 transport 错误退出且未落盘，工作区确认仅剩用户交接文件；Coordinator 改租 `pc04_visual_worker_2`，只允许修改 web visual readiness/status 与定向测试，目标是去除固定 8～15 段全局判断，改为由 timeline duration/cue boundaries/opening pacing 派生。 |
+| 2026-07-26 子代理通道异常与未落盘确认 | `pc05_edge_smoke_worker_2`、`pc04_visual_worker_4` 均因 subagent transport `encrypted_content missing_required_parameter` 失败；`pc04_visual_worker_2/3` 无响应后被中断。Coordinator 多次只读确认 `git status --short` 仅剩用户未跟踪文件 `docs/handoff-to-next-session.md`，无 PC-04/Edge 诊断业务文件落盘、无 index 修改。按用户“主窗口只负责规划和写总账”约束，Coordinator 未抢写业务代码；PC-05 Edge 诊断与 PC-04 派生段数实现回到 `queued`，待子代理通道恢复或用户授权主窗口临时接手后继续。 |
 
 ## 决策与剩余风险
 

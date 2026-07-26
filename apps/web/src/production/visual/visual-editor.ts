@@ -67,13 +67,26 @@ export function visualSegmentPayload(timelineHash: string, draft: VisualSegmentD
   };
 }
 
-export function visualPlanStatus(cueCount: number, segments: VisualSegment[]) {
+export function visualPlanStatus(timeline: TtsTimeline | undefined, segments: VisualSegment[]) {
   const ordered = [...segments].sort((left, right) => left.cueStartIndex - right.cueStartIndex);
+  const cueCount = timeline?.cues.length ?? 0;
   const continuous = ordered.length > 0 && ordered[0]!.cueStartIndex === 0 &&
     ordered.every((segment, index) => index === 0 || segment.cueStartIndex === ordered[index - 1]!.cueEndIndex + 1) &&
     ordered.at(-1)!.cueEndIndex === cueCount - 1;
   const productionReady = continuous && ordered.every((segment) => segment.productionReady);
-  return { continuous, productionReady, withinTargetCount: ordered.length >= 8 && ordered.length <= 15 };
+  return { continuous, productionReady, suggestion: visualPlanSuggestion(timeline, ordered) };
+}
+
+function visualPlanSuggestion(timeline: TtsTimeline | undefined, ordered: VisualSegment[]) {
+  const durationMs = timeline?.durationMs ?? timeline?.cues.at(-1)?.endMs ?? 0;
+  const cueCount = timeline?.cues.length ?? 0;
+  const targetCount = cueCount ? Math.min(cueCount, Math.max(1, Math.ceil(durationMs / 5000))) : 0;
+  const openingMs = Math.min(durationMs, 15000);
+  const openingCueCount = timeline?.cues.filter((cue) => cue.startMs < openingMs).length ?? 0;
+  const openingMin = openingCueCount ? Math.min(openingCueCount, Math.max(1, Math.ceil(openingMs / 5000))) : 0;
+  const openingMax = openingCueCount ? Math.min(openingCueCount, Math.max(openingMin, Math.ceil(openingMs / 3750))) : 0;
+  const openingCount = ordered.filter((segment) => segment.startMs < openingMs && segment.endMs > 0).length;
+  return { targetCount, openingCount, openingMin, openingMax };
 }
 
 export function conflictRevision(message: string) {

@@ -23,7 +23,7 @@ export function useVisualWorkspace({ seriesId, episodeIndex, timelineHash, exter
   const writing = useRef(false);
   const epoch = useRef(0);
   const routeKey = `${seriesId}:${episodeIndex}:${timelineHash ?? "latest"}`;
-  const plan = useMemo(() => visualPlanStatus(timeline?.cues.length ?? 0, segments), [segments, timeline?.cues.length]);
+  const plan = useMemo(() => visualPlanStatus(timeline, segments), [segments, timeline]);
   const busy = externalBusy || loading;
 
   async function readSegments(episodeId: string, hash: string) {
@@ -106,7 +106,7 @@ export function useVisualWorkspace({ seriesId, episodeIndex, timelineHash, exter
   }
 
   async function exportContactSheet() {
-    if (!episode || !timeline || writing.current || !plan.productionReady || !plan.withinTargetCount) return;
+    if (!episode || !timeline || writing.current || !plan.productionReady) return;
     writing.current = true; setLoading(true); setBusy(true); setContactSheet(undefined); setStatus("正在验证并导出联系表…");
     const requestEpoch = epoch.current;
     try {

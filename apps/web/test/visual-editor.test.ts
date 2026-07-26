@@ -6,7 +6,7 @@ import { conflictRevision, nextVisualDraft, visualDraft, visualPlanStatus, visua
 import type { VisualSegment } from "../src/production/visual/types.ts";
 
 const HASH = "a".repeat(64);
-const timeline = { timelineHash: HASH, cues: [0, 1, 2].map((index) => ({ index, segmentIndex: index, startMs: index * 1000, endMs: (index + 1) * 1000, text: `cue ${index}` })) } as TtsTimeline;
+const timeline = { timelineHash: HASH, durationMs: 3000, cues: [0, 1, 2].map((index) => ({ index, segmentIndex: index, startMs: index * 1000, endMs: (index + 1) * 1000, text: `cue ${index}` })) } as TtsTimeline;
 const segment = (index: number, ready = true): VisualSegment => ({
   id: `visual_${index}`, episodeId: "episode", segmentIndex: index, timelineHash: HASH,
   cueStartIndex: index, cueEndIndex: index, startMs: index * 1000, endMs: (index + 1) * 1000,
@@ -34,12 +34,19 @@ test("视觉段提交只允许一张已选候选并保留其他显式资产", ()
   }), /已批准候选图/);
 });
 
-test("联系表仅在 8 至 15 个连续且可生产视觉段时允许导出", () => {
-  const eight = Array.from({ length: 8 }, (_, index) => ({ ...segment(index), cueStartIndex: index, cueEndIndex: index }));
-  assert.deepEqual(visualPlanStatus(8, eight), { continuous: true, productionReady: true, withinTargetCount: true });
-  assert.equal(visualPlanStatus(8, eight.map((item, index) => index === 4 ? { ...item, productionReady: false } : item)).productionReady, false);
-  assert.equal(visualPlanStatus(9, eight).continuous, false);
-  assert.equal(visualPlanStatus(3, [segment(0), segment(1), segment(2)]).withinTargetCount, false);
+test("视觉计划不再用 8 至 15 个固定段数做导出门禁", () => {
+  const three = [segment(0), segment(1), segment(2)];
+  assert.equal(visualPlanStatus(timeline, three).productionReady, true);
+  assert.equal(visualPlanStatus(timeline, three.map((item, index) => index === 1 ? { ...item, productionReady: false } : item)).productionReady, false);
+  assert.equal(visualPlanStatus({ ...timeline, cues: [...timeline.cues, { index: 3, segmentIndex: 3, startMs: 3000, endMs: 4000, text: "cue 3" }] }, three).continuous, false);
+
+  const longTimeline = { ...timeline, durationMs: 90000, cues: Array.from({ length: 18 }, (_, index) => ({ index, segmentIndex: index, startMs: index * 3750, endMs: (index + 1) * 3750, text: `cue ${index}` })) } as TtsTimeline;
+  const eighteen = Array.from({ length: 18 }, (_, index) => ({ ...segment(index), startMs: index * 3750, endMs: (index + 1) * 3750 }));
+  const longStatus = visualPlanStatus(longTimeline, eighteen);
+  assert.equal(longStatus.productionReady, true);
+  assert.equal(longStatus.suggestion.targetCount, 18);
+  assert.equal(longStatus.suggestion.openingMin, 3);
+  assert.equal(longStatus.suggestion.openingMax, 4);
 });
 
 test("冲突响应可刷新 expectedRevision 且不改草稿字段", () => {

@@ -137,6 +137,23 @@ test("视觉段允许字幕时间轴首条保留短静音偏移", () => fixture(
   assert.equal(assertVisualPlanReady(store.database, "episode", TIMELINE).length, 1);
 }));
 
+test("视觉段允许字幕 cue 间隙但拒绝重叠倒退", () => fixture((store) => {
+  store.database.prepare(
+    "UPDATE subtitle_cues SET start_ms = start_ms + cue_index * 800, end_ms = end_ms + cue_index * 800 WHERE timeline_hash = ?",
+  ).run(TIMELINE);
+  const segment = putVisualSegment(store.database, "episode", 0, input({ cueEndIndex: 3 }), 10);
+  assert.equal(segment.startMs, 0);
+  assert.equal(segment.endMs, 6400);
+  assert.equal(segment.productionReady, true);
+  assert.equal(assertVisualPlanReady(store.database, "episode", TIMELINE).length, 1);
+
+  store.database.prepare("UPDATE subtitle_cues SET start_ms = 900 WHERE timeline_hash = ? AND cue_index = 1").run(TIMELINE);
+  assert.throws(() => putVisualSegment(store.database, "episode", 1, input({
+    cueStartIndex: 2,
+    cueEndIndex: 3,
+  })), /音频时间轴不连续/);
+}));
+
 test("视觉段拒绝跨系列、候选错配以及 pending 或 rejected 候选", () => fixture((store) => {
   assert.throws(() => putVisualSegment(store.database, "episode", 0, input({
     assets: [{ assetId: "asset_other", selectedCandidateId: "candidate_a" }],

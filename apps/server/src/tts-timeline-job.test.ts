@@ -45,6 +45,7 @@ const edgeRuntime: RuntimeModelConfig = {
   providerId: "edge-tts",
   providerName: "Edge TTS",
   providerKind: "edge-tts",
+  protocol: "openai-response",
   baseUrl: "",
   apiKey: "",
   modelId: "node-edge-tts",

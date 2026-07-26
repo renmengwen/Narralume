@@ -98,6 +98,59 @@ test("保存配置不回显完整 key，空 key 保留旧 key", async () => {
   }
 });
 
+test("模型配置保存 MuseDock 兼容的 protocol 与按模式字段", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-model-config-musedock-"));
+  try {
+    const saved = await writeModelConfig(dataRoot, {
+      providers: {
+        provider_1: {
+          name: "自定义供应商",
+          kind: "openai-compatible",
+          protocol: "anthropic-message",
+          baseUrl: "https://api.anthropic.com/v1/",
+          apiKey: "secret",
+          models: {
+            text: { enabled: true, modelId: "claude-sonnet", supportsMultimodal: true },
+            image: { enabled: true, modelId: "gpt-image-2", note: "北派视觉" },
+            tts: { enabled: true, modelId: "speech-2.8-hd", voiceId: "voice-a", ttsConcurrency: 9, ttsQueueIntervalMs: -10 },
+          },
+        },
+      },
+      active: { text: "provider_1/text", image: "provider_1/image", tts: "provider_1/tts" },
+    });
+    const provider = saved.providers.provider_1!;
+
+    assert.equal(provider.protocol, "anthropic-message");
+    assert.equal(provider.baseUrl, "https://api.anthropic.com/v1");
+    assert.equal(provider.models.text.supportsMultimodal, true);
+    assert.equal(provider.models.tts.ttsConcurrency, 5);
+    assert.equal(provider.models.tts.ttsQueueIntervalMs, 0);
+    assert.equal(resolveRuntimeModelConfig("text", saved)?.protocol, "anthropic-message");
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("保存配置按页面供应商列表删除非 Edge 默认供应商", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-model-config-remove-provider-"));
+  try {
+    await writeModelConfig(dataRoot, defaultModelConfig());
+    const saved = await writeModelConfig(dataRoot, {
+      providers: {
+        "edge-tts": defaultModelConfig().providers["edge-tts"],
+      },
+      active: { text: "", image: "", tts: "edge-tts/tts" },
+    });
+
+    assert.ok(saved.providers["edge-tts"]);
+    assert.equal(saved.providers.minimax, undefined);
+    assert.equal(saved.providers.mimo, undefined);
+    assert.equal(saved.providers["openai-compatible"], undefined);
+  } finally {
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("模型配置 HTTP API 支持读取、保存和重启恢复", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-model-config-api-"));
   let app = buildApp({ dataRoot, logger: false });

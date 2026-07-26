@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { activeModelLabel, updateActive, updateProvider, type ModelConfig } from "../src/settings/model-settings.ts";
+import {
+  activeModelLabel,
+  emptyProvider,
+  removeProvider,
+  updateActive,
+  updateProvider,
+  updateProviderModel,
+  type ModelConfig,
+} from "../src/settings/model-settings.ts";
 
 function config(): ModelConfig {
   return {
@@ -10,6 +18,7 @@ function config(): ModelConfig {
         id: "edge-tts",
         name: "Edge TTS",
         kind: "edge-tts",
+        protocol: "openai-response",
         baseUrl: "",
         apiKey: "",
         hasApiKey: false,
@@ -33,6 +42,7 @@ function config(): ModelConfig {
         id: "minimax",
         name: "MiniMax",
         kind: "minimax",
+        protocol: "openai-response",
         baseUrl: "https://api.minimaxi.com/v1",
         apiKey: "",
         hasApiKey: false,
@@ -65,4 +75,20 @@ test("模型设置纯函数展示 Edge TTS 默认标签并更新 active", () => 
   assert.equal(fourth.active.tts, "minimax/tts");
   assert.equal(fourth.providers.minimax.models.tts.enabled, true);
   assert.equal(first.providers.minimax.models.tts.enabled, false);
+});
+
+test("模型设置复用 MuseDock 的供应商草稿和按模式配置逻辑", () => {
+  const first = config();
+  const custom = { ...emptyProvider("provider_1"), name: "自定义供应商" };
+  const second = updateProvider(first, custom);
+  const third = updateProviderModel(second, second.providers.provider_1, "image", "enabled", true);
+  const fourth = updateProviderModel(third, third.providers.provider_1, "image", "modelId", "gpt-image-2");
+  const fifth = updateActive(fourth, "image", "provider_1/image");
+  const sixth = removeProvider(fifth, "provider_1");
+
+  assert.equal(fifth.providers.provider_1.models.image.enabled, true);
+  assert.equal(fifth.providers.provider_1.models.image.modelId, "gpt-image-2");
+  assert.equal(fifth.active.image, "provider_1/image");
+  assert.equal(sixth.providers.provider_1, undefined);
+  assert.equal(sixth.active.image, "");
 });

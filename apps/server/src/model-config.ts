@@ -12,17 +12,21 @@ export interface ModelEntry {
   enabled: boolean;
   modelId: string;
   note: string;
+  supportsMultimodal?: boolean;
   voiceId?: string;
   voiceLabel?: string;
   language?: string;
   gender?: "male" | "female" | "";
   wordBoundary?: boolean;
+  ttsConcurrency?: number;
+  ttsQueueIntervalMs?: number;
 }
 
 export interface ModelProvider {
   id: string;
   name: string;
   kind: "openai-compatible" | "edge-tts" | "minimax" | "mimo";
+  protocol: "openai-response" | "anthropic-message";
   baseUrl: string;
   apiKey: string;
   models: Record<ModelConfigType, ModelEntry>;
@@ -39,6 +43,7 @@ export interface RuntimeModelConfig {
   providerId: string;
   providerName: string;
   providerKind: ModelProvider["kind"];
+  protocol: ModelProvider["protocol"];
   baseUrl: string;
   apiKey: string;
   modelId: string;
@@ -66,6 +71,7 @@ export function defaultModelConfig(): StoredModelConfig {
         id: "edge-tts",
         name: "Edge TTS",
         kind: "edge-tts",
+        protocol: "openai-response",
         baseUrl: "",
         apiKey: "",
         models: defaultModels({
@@ -85,6 +91,7 @@ export function defaultModelConfig(): StoredModelConfig {
         id: "minimax",
         name: "MiniMax",
         kind: "minimax",
+        protocol: "openai-response",
         baseUrl: "https://api.minimaxi.com/v1",
         apiKey: "",
         models: defaultModels({
@@ -95,6 +102,7 @@ export function defaultModelConfig(): StoredModelConfig {
         id: "mimo",
         name: "MiMo",
         kind: "mimo",
+        protocol: "openai-response",
         baseUrl: "https://api.xiaomimimo.com/v1",
         apiKey: "",
         models: defaultModels({
@@ -105,6 +113,7 @@ export function defaultModelConfig(): StoredModelConfig {
         id: "openai-compatible",
         name: "OpenAI 兼容",
         kind: "openai-compatible",
+        protocol: "openai-response",
         baseUrl: "",
         apiKey: "",
         models: defaultModels(),
@@ -129,6 +138,18 @@ function normalizeGender(value: unknown): "male" | "female" | "" {
   return value === "male" || value === "female" ? value : "";
 }
 
+function normalizeProtocol(value: unknown): ModelProvider["protocol"] {
+  return value === "anthropic-message" || value === "anthropic-messages"
+    ? "anthropic-message"
+    : "openai-response";
+}
+
+function numberValue(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
 function normalizeModelEntry(type: ModelConfigType, input: unknown): ModelEntry {
   const raw = input && typeof input === "object" ? input as Record<string, unknown> : {};
   const entry: ModelEntry = {
@@ -136,12 +157,17 @@ function normalizeModelEntry(type: ModelConfigType, input: unknown): ModelEntry 
     modelId: stringValue(raw.modelId),
     note: stringValue(raw.note),
   };
+  if (type === "text") {
+    entry.supportsMultimodal = raw.supportsMultimodal === true;
+  }
   if (type === "tts") {
     entry.voiceId = stringValue(raw.voiceId);
     entry.voiceLabel = stringValue(raw.voiceLabel);
     entry.language = stringValue(raw.language);
     entry.gender = normalizeGender(raw.gender);
     entry.wordBoundary = raw.wordBoundary === true;
+    entry.ttsConcurrency = numberValue(raw.ttsConcurrency, 1, 1, 5);
+    entry.ttsQueueIntervalMs = numberValue(raw.ttsQueueIntervalMs, 1800, 0, 10000);
   }
   return entry;
 }
@@ -153,6 +179,7 @@ function normalizeProvider(id: string, input: unknown, previous?: ModelProvider)
     id,
     name: stringValue(raw.name) || id,
     kind: normalizeKind(raw.kind),
+    protocol: normalizeProtocol(raw.protocol),
     baseUrl: stringValue(raw.baseUrl).replace(/\/+$/, ""),
     apiKey: stringValue(raw.apiKey) || previous?.apiKey || "",
     models: defaultModels(),
@@ -170,6 +197,8 @@ function normalizeProvider(id: string, input: unknown, previous?: ModelProvider)
       language: provider.models.tts.language || "zh-CN",
       gender: provider.models.tts.gender || "male",
       wordBoundary: true,
+      ttsConcurrency: provider.models.tts.ttsConcurrency || 1,
+      ttsQueueIntervalMs: provider.models.tts.ttsQueueIntervalMs ?? 1800,
     };
   }
   return provider;
@@ -189,7 +218,8 @@ export function normalizeModelConfig(input: unknown, previous?: StoredModelConfi
   const rawProviders = raw.providers && typeof raw.providers === "object"
     ? raw.providers as Record<string, unknown>
     : {};
-  const providers: Record<string, ModelProvider> = { ...defaults.providers };
+  const hasExplicitProviders = Object.keys(rawProviders).length > 0;
+  const providers: Record<string, ModelProvider> = hasExplicitProviders ? {} : { ...defaults.providers };
   for (const [id, value] of Object.entries(rawProviders)) {
     providers[id] = normalizeProvider(id, value, previous?.providers[id]);
   }
@@ -268,6 +298,7 @@ export function resolveRuntimeModelConfig(
     providerId,
     providerName: provider.name,
     providerKind: provider.kind,
+    protocol: provider.protocol,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     modelId: model.modelId,

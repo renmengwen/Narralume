@@ -2,14 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   activeModelLabel,
+  emptyProvider,
+  enabledModelSummary,
   loadModelConfig,
+  MODEL_PROTOCOLS,
+  MODEL_TYPE_INFO,
   MODEL_TYPE_LABELS,
   MODEL_TYPES,
   providerList,
+  removeProvider,
   saveModelConfig,
   updateActive,
   updateProvider,
+  updateProviderModel,
   type ModelConfig,
+  type ModelEntry,
   type ModelProvider,
   type ModelType,
 } from "./model-settings";
@@ -61,20 +68,35 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
   const providers = useMemo(() => config ? providerList(config) : [], [config]);
   const selectedProvider = config?.providers[selectedProviderId] ?? providers[0];
 
-  function patchProvider(provider: ModelProvider) {
-    if (!config) return;
-    setConfig(updateProvider(config, provider));
+  function patchConfig(next: ModelConfig) {
+    setConfig(next);
     setDirty(true);
   }
 
-  function patchTtsModel(provider: ModelProvider, field: string, value: string | boolean) {
-    patchProvider({
-      ...provider,
-      models: {
-        ...provider.models,
-        tts: { ...provider.models.tts, [field]: value },
-      },
-    });
+  function patchProvider(provider: ModelProvider) {
+    if (!config) return;
+    patchConfig(updateProvider(config, provider));
+  }
+
+  function patchModel(provider: ModelProvider, type: ModelType, field: keyof ModelEntry, value: string | boolean | number) {
+    if (!config) return;
+    patchConfig(updateProviderModel(config, provider, type, field, value));
+  }
+
+  function addProvider() {
+    if (!config) return;
+    const provider = emptyProvider();
+    patchConfig(updateProvider(config, provider));
+    setSelectedProviderId(provider.id);
+    setStatusTone("warning");
+    setStatus("已添加供应商草稿。填写名称、Base URL、API Key 和需要启用的模式后，点击顶部保存模型配置。");
+  }
+
+  function deleteProvider(provider: ModelProvider) {
+    if (!config || provider.kind === "edge-tts") return;
+    if (!window.confirm(`确认删除「${provider.name || provider.id}」？删除后仍需点击顶部保存模型配置。`)) return;
+    patchConfig(removeProvider(config, provider.id));
+    setSelectedProviderId("edge-tts");
   }
 
   async function save() {
@@ -98,8 +120,7 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
 
   function setActive(type: ModelType, value: string) {
     if (!config) return;
-    setConfig(updateActive(config, type, value));
-    setDirty(true);
+    patchConfig(updateActive(config, type, value));
   }
 
   function back() {
@@ -139,6 +160,7 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
         <section className="grid grid-cols-[240px_minmax(0,1fr)] gap-0 px-7 py-6 max-lg:grid-cols-1 max-md:px-4">
           <aside className="border-r border-[var(--border-subtle)] pr-4 max-lg:border-r-0 max-lg:pr-0">
             <p className="mb-3 font-mono text-[11px] font-semibold tracking-[.17em] text-[var(--fg-tertiary)]">供应商</p>
+            <button type="button" disabled={!config || loading || saving} onClick={addProvider} className="mb-3 min-h-10 w-full rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50">添加供应商</button>
             <div className="grid gap-2 max-lg:grid-cols-2 max-sm:grid-cols-1">
               {providers.map((provider) => (
                 <button
@@ -148,7 +170,8 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
                   onClick={() => setSelectedProviderId(provider.id)}
                 >
                   <strong className="block">{provider.name}</strong>
-                  <span className="mt-1 block font-mono text-[11px] text-[var(--fg-tertiary)]">{provider.kind} · {provider.kind === "edge-tts" ? "默认" : provider.hasApiKey ? "已保存密钥" : "待配置"}</span>
+                  <span className="mt-1 block font-mono text-[11px] text-[var(--fg-tertiary)]">{provider.kind} · {provider.kind === "edge-tts" ? "内置默认" : provider.hasApiKey ? "已保存密钥" : "待配置"}</span>
+                  <span className="mt-1 block truncate text-xs text-[var(--fg-secondary)]">{enabledModelSummary(provider)}</span>
                 </button>
               ))}
             </div>
@@ -170,7 +193,7 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
                           <option value="">未配置</option>
                           {providers.flatMap((provider) => {
                             const model = provider.models[type];
-                            return model?.modelId ? [<option key={`${provider.id}/${type}`} value={`${provider.id}/${type}`}>{provider.kind === "edge-tts" ? `${provider.name} / ${model.voiceLabel}` : `${provider.name} / ${model.modelId}`}</option>] : [];
+                            return [<option key={`${provider.id}/${type}`} disabled={!model?.enabled || !model.modelId} value={`${provider.id}/${type}`}>{provider.kind === "edge-tts" ? `${provider.name} / ${model?.voiceLabel || model?.voiceId || model?.modelId || "未配置"}` : `${provider.name} / ${model?.modelId || "未配置"}`}</option>];
                           })}
                         </select>
                         <span className="truncate font-mono text-[11px] text-[var(--fg-tertiary)]">{activeModelLabel(config, type)}</span>
@@ -180,7 +203,7 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
                 </section>
 
                 {selectedProvider ? (
-                  <ProviderEditor provider={selectedProvider} onChange={patchProvider} onTtsChange={patchTtsModel} />
+                  <ProviderEditor provider={selectedProvider} onChange={patchProvider} onModelChange={patchModel} onDelete={deleteProvider} />
                 ) : null}
 
                 <section className="mt-5 border border-[var(--border-subtle)]">
@@ -206,30 +229,69 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
 function ProviderEditor({
   provider,
   onChange,
-  onTtsChange,
+  onModelChange,
+  onDelete,
 }: {
   provider: ModelProvider;
   onChange: (provider: ModelProvider) => void;
-  onTtsChange: (provider: ModelProvider, field: string, value: string | boolean) => void;
+  onModelChange: (provider: ModelProvider, type: ModelType, field: keyof ModelEntry, value: string | boolean | number) => void;
+  onDelete: (provider: ModelProvider) => void;
 }) {
-  const tts = provider.models.tts;
   const credentialed = provider.kind !== "edge-tts";
+  function changeKind(kind: ModelProvider["kind"]) {
+    const defaults = {
+      minimax: { baseUrl: "https://api.minimaxi.com/v1", ttsModel: "speech-2.8-hd", voiceId: "Chinese_deep_voiced_male_nv1" },
+      mimo: { baseUrl: "https://api.xiaomimimo.com/v1", ttsModel: "mimo-v2.5-tts", voiceId: "mimo_default" },
+      "openai-compatible": { baseUrl: "https://api.openai.com/v1", ttsModel: provider.models.tts.modelId, voiceId: provider.models.tts.voiceId ?? "" },
+      "edge-tts": { baseUrl: "", ttsModel: "node-edge-tts", voiceId: "zh-CN-YunjianNeural" },
+    }[kind];
+    onChange({
+      ...provider,
+      kind,
+      baseUrl: provider.baseUrl || defaults.baseUrl,
+      models: {
+        ...provider.models,
+        tts: {
+          ...provider.models.tts,
+          modelId: provider.models.tts.modelId || defaults.ttsModel,
+          voiceId: provider.models.tts.voiceId || defaults.voiceId,
+        },
+      },
+    });
+  }
   return (
     <section className="mt-5 border border-[var(--border-subtle)]">
       <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3">
         <div>
           <h2 className="m-0 text-lg font-semibold">{provider.name}</h2>
-          <p className="mt-1 text-sm text-[var(--fg-secondary)]">{provider.kind === "edge-tts" ? "内置零成本语音供应商，不需要 API Key。" : "保存页面草稿后，仍需点击顶部保存模型配置。"}</p>
+          <p className="mt-1 text-sm text-[var(--fg-secondary)]">{provider.kind === "edge-tts" ? "内置零成本语音供应商，不需要 API Key。" : "像 MuseDock 一样，先在供应商下启用具体模式，再到全局默认模型中选择。"}</p>
         </div>
-        <span className="rounded border border-[var(--border-subtle)] px-2 py-1 text-xs text-[var(--fg-secondary)]">{credentialed && !provider.hasApiKey ? "待配置" : "已启用"}</span>
+        <div className="flex items-center gap-2">
+          <span className="rounded border border-[var(--border-subtle)] px-2 py-1 text-xs text-[var(--fg-secondary)]">{credentialed && !provider.hasApiKey ? "待配置" : "已启用"}</span>
+          {provider.kind !== "edge-tts" ? <button type="button" onClick={() => onDelete(provider)} className="rounded border border-red-700/25 bg-red-700/10 px-3 py-1 text-xs font-semibold text-red-800 dark:text-red-200">删除</button> : null}
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-4 p-4 max-lg:grid-cols-1">
         <label className="grid gap-2">
           <span className="text-xs font-semibold text-[var(--fg-tertiary)]">供应商名称</span>
           <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={provider.name} onChange={(event) => onChange({ ...provider, name: event.target.value })} />
         </label>
+        <label className="grid gap-2">
+          <span className="text-xs font-semibold text-[var(--fg-tertiary)]">供应商类型</span>
+          <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" disabled={provider.kind === "edge-tts"} value={provider.kind} onChange={(event) => changeKind(event.target.value as ModelProvider["kind"])}>
+            <option value="openai-compatible">OpenAI 兼容</option>
+            <option value="minimax">MiniMax</option>
+            <option value="mimo">MiMo</option>
+          </select>
+        </label>
         {credentialed ? (
           <>
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">分析模型协议</span>
+              <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={provider.protocol} onChange={(event) => onChange({ ...provider, protocol: event.target.value as ModelProvider["protocol"], baseUrl: provider.baseUrl || (event.target.value === "anthropic-message" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1") })}>
+                {MODEL_PROTOCOLS.map((protocol) => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}
+              </select>
+            </label>
             <label className="grid gap-2">
               <span className="text-xs font-semibold text-[var(--fg-tertiary)]">Base URL</span>
               <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={provider.baseUrl} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} />
@@ -241,28 +303,69 @@ function ProviderEditor({
             </label>
           </>
         ) : null}
-        <label className="grid gap-2">
-          <span className="text-xs font-semibold text-[var(--fg-tertiary)]">{provider.kind === "edge-tts" ? "Voice" : "模型"}</span>
-          <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={provider.kind === "edge-tts" ? tts.voiceLabel ?? "" : tts.modelId} disabled={provider.kind === "edge-tts"} onChange={(event) => onTtsChange(provider, "modelId", event.target.value)} />
-        </label>
-        {provider.kind === "edge-tts" ? (
-          <>
-            <div className="grid gap-2">
-              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">Language / Gender</span>
-              <div className="min-h-11 rounded border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-3 py-2 text-sm">中文 / 男性</div>
-            </div>
-            <div className="grid gap-2 lg:col-span-2">
-              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">逐词字幕</span>
-              <div className="min-h-11 rounded border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-3 py-2 text-sm">实际 voice ID：{tts.voiceId}；时间边界写入现有 cue 与 SRT/ASS，不建立独立字幕数据。</div>
-            </div>
-          </>
-        ) : (
-          <label className="grid gap-2">
-            <span className="text-xs font-semibold text-[var(--fg-tertiary)]">Voice ID</span>
-            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={tts.voiceId ?? ""} onChange={(event) => onTtsChange(provider, "voiceId", event.target.value)} />
-          </label>
-        )}
+        <div className="grid gap-3 lg:col-span-2">
+          {MODEL_TYPES.map((type) => <ModelConfigCard key={type} provider={provider} type={type} model={provider.models[type]} onChange={onModelChange} />)}
+        </div>
       </div>
     </section>
+  );
+}
+
+function ModelConfigCard({
+  provider,
+  type,
+  model,
+  onChange,
+}: {
+  provider: ModelProvider;
+  type: ModelType;
+  model: ModelEntry;
+  onChange: (provider: ModelProvider, type: ModelType, field: keyof ModelEntry, value: string | boolean | number) => void;
+}) {
+  const edgeTts = provider.kind === "edge-tts" && type === "tts";
+  return (
+    <div className={`rounded border p-3 ${model.enabled ? "border-[var(--border-strong)] bg-[var(--bg-inset)]" : "border-[var(--border-subtle)] bg-[var(--bg-canvas)]"}`}>
+      <label className="flex min-h-8 items-center gap-3">
+        <input type="checkbox" checked={model.enabled} disabled={edgeTts} onChange={(event) => onChange(provider, type, "enabled", event.target.checked)} />
+        <span className="text-sm font-semibold">{MODEL_TYPE_INFO[type].title}</span>
+        <span className="text-xs text-[var(--fg-tertiary)]">{MODEL_TYPE_INFO[type].help}</span>
+      </label>
+      <div className="mt-3 grid grid-cols-2 gap-3 max-lg:grid-cols-1">
+        <label className="grid gap-2">
+          <span className="text-xs font-semibold text-[var(--fg-tertiary)]">{edgeTts ? "NPM 包 / 模型" : "模型 ID"}</span>
+          <input className="min-h-10 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm disabled:opacity-60" value={model.modelId} disabled={!model.enabled || edgeTts} placeholder={MODEL_TYPE_INFO[type].placeholder} onChange={(event) => onChange(provider, type, "modelId", event.target.value)} />
+        </label>
+        <label className="grid gap-2">
+          <span className="text-xs font-semibold text-[var(--fg-tertiary)]">备注</span>
+          <input className="min-h-10 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm disabled:opacity-60" value={model.note} disabled={!model.enabled} placeholder="用途、限制或价格说明" onChange={(event) => onChange(provider, type, "note", event.target.value)} />
+        </label>
+        {type === "text" && model.enabled ? (
+          <label className="flex items-center gap-2 text-sm text-[var(--fg-secondary)]">
+            <input type="checkbox" checked={model.supportsMultimodal === true} onChange={(event) => onChange(provider, type, "supportsMultimodal", event.target.checked)} />
+            支持多模态输入
+          </label>
+        ) : null}
+        {type === "tts" && model.enabled ? (
+          <>
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">Voice ID</span>
+              <input className="min-h-10 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={model.voiceId ?? ""} disabled={edgeTts} placeholder="Chinese_deep_voiced_male_nv1" onChange={(event) => onChange(provider, type, "voiceId", event.target.value)} />
+            </label>
+            {edgeTts ? <div className="grid gap-2">
+              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">Language / Gender / 字幕边界</span>
+              <div className="min-h-10 rounded border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-3 py-2 text-sm">中文 / 男性 / {model.voiceLabel || "Chinese - China - Yunjian"} / 逐词字幕开启</div>
+            </div> : null}
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">并发</span>
+              <input type="number" min={1} max={5} className="min-h-10 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={model.ttsConcurrency ?? 1} onChange={(event) => onChange(provider, type, "ttsConcurrency", Number(event.target.value))} />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-[var(--fg-tertiary)]">队列间隔 ms</span>
+              <input type="number" min={0} max={10000} step={100} className="min-h-10 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={model.ttsQueueIntervalMs ?? 1800} onChange={(event) => onChange(provider, type, "ttsQueueIntervalMs", Number(event.target.value))} />
+            </label>
+          </>
+        ) : null}
+      </div>
+    </div>
   );
 }

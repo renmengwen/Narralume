@@ -31,7 +31,7 @@ async function readTextConfig(): Promise<ChapterTextModelConfig> {
   const apiKey = provider?.apiKey?.trim() ?? "";
   const baseUrl = provider?.baseUrl?.trim() ?? "";
   const modelId = model?.modelId?.trim() ?? "";
-  assert.equal(provider?.protocol, "openai-responses", "真实 gate 当前只支持已冻结的 OpenAI Responses 文本协议");
+  assert.equal(provider?.protocol, "openai-response", "真实 gate 当前只支持已冻结的 /v1/response 文本协议");
   assert.ok(providerId && apiKey && baseUrl && model?.enabled && modelId, "MuseDock 本机文本模型配置不可用");
   return {
     providerId,

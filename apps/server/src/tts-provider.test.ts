@@ -34,6 +34,7 @@ function runtime(overrides: Partial<RuntimeModelConfig>): RuntimeModelConfig {
     gender: "male",
     wordBoundary: true,
     ...overrides,
+    protocol: overrides.protocol ?? "openai-response",
   };
 }
 

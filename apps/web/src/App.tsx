@@ -53,7 +53,8 @@ export function App() {
   const [showModelSettings, setShowModelSettings] = useState(() => isModelSettingsSearch(window.location.search));
   const [chapterText, setChapterText] = useState("");
   const [selectedChapterId, setSelectedChapterId] = useState<string>();
-  const [pendingDelete, setPendingDelete] = useState<Chapter>();
+  const [pendingBookDelete, setPendingBookDelete] = useState<Book>();
+  const [pendingChapterDelete, setPendingChapterDelete] = useState<Chapter>();
   const [status, setStatus] = useState("正在加载书库…");
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -188,7 +189,7 @@ export function App() {
 
   async function deleteChapter(chapter: Chapter) {
     if (!selectedBook || busy) return;
-    setPendingDelete(undefined);
+    setPendingChapterDelete(undefined);
     setBusy(true);
     setStatus(`正在删除章节“${chapter.title}”…`);
     try {
@@ -210,6 +211,32 @@ export function App() {
       }
     } catch (error) {
       setStatus(`章节删除失败：${(error as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteBook(book: Book) {
+    if (busy) return;
+    setPendingBookDelete(undefined);
+    setBusy(true);
+    setStatus(`正在删除小说“${book.title}”及其全部项目数据…`);
+    try {
+      const body = await responseJson<{ message: string }>(await fetch(
+        `/api/books/${encodeURIComponent(book.id)}`,
+        { method: "DELETE" },
+      ));
+      setBooks((current) => current.filter((item) => item.id !== book.id));
+      if (selectedBook === book.id) {
+        setSelectedBook(undefined);
+        setChapters([]);
+        setChapterTotal(0);
+        setChapterText("");
+        setSelectedChapterId(undefined);
+      }
+      setStatus(body.message);
+    } catch (error) {
+      setStatus(`小说删除失败：${(error as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -341,17 +368,17 @@ export function App() {
               <span>{books.length}</span>
             </div>
             <div className="panel-list">
-              {books.map((book) => (
+              {books.map((book) => <div key={book.id} className="group relative">
                 <button
-                  key={book.id}
                   disabled={busy}
                   onClick={() => void openBook(book.id)}
-                  className={`list-item ${selectedBook === book.id ? "is-selected" : ""}`}
+                  className={`list-item pr-16 ${selectedBook === book.id ? "is-selected" : ""}`}
                 >
                   <span className="item-title" title={book.title}>{book.title}</span>
                   <span className="item-meta">{book.encoding} / {book.chapter_count} 章</span>
                 </button>
-              ))}
+                <button type="button" disabled={busy} onClick={() => setPendingBookDelete(book)} aria-label={`删除小说“${book.title}”`} title={`删除小说“${book.title}”`} className="absolute right-1 top-0 min-h-11 px-3 text-xs font-semibold text-[var(--danger)] opacity-100 transition-colors hover:bg-[var(--danger-soft)] focus-visible:opacity-100 disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">删除</button>
+              </div>)}
               {!books.length ? <p className="empty-state">尚未导入书籍</p> : null}
             </div>
           </section>
@@ -367,7 +394,7 @@ export function App() {
                   <span className="chapter-index">{String(chapter.chapter_index + 1).padStart(3, "0")}</span>
                   <span className="item-title" title={chapter.title}>{chapter.title}</span>
                 </button>
-                <button type="button" disabled={busy} onClick={() => setPendingDelete(chapter)} aria-label={`删除章节“${chapter.title}”`} title={`删除章节“${chapter.title}”`} className="absolute right-1 top-0 min-h-11 px-3 text-xs font-semibold text-[var(--danger)] opacity-100 transition-colors hover:bg-[var(--danger-soft)] focus-visible:opacity-100 disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">删除</button>
+                <button type="button" disabled={busy} onClick={() => setPendingChapterDelete(chapter)} aria-label={`删除章节“${chapter.title}”`} title={`删除章节“${chapter.title}”`} className="absolute right-1 top-0 min-h-11 px-3 text-xs font-semibold text-[var(--danger)] opacity-100 transition-colors hover:bg-[var(--danger-soft)] focus-visible:opacity-100 disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">删除</button>
               </div>)}
               {chapters.length < chapterTotal ? (
                 <button className="load-more" type="button" disabled={busy} onClick={() => void loadMoreChapters()}>
@@ -388,17 +415,31 @@ export function App() {
             </pre>
           </section>
         </div>
-        <AlertDialog open={!!pendingDelete} onOpenChange={(open) => { if (!open) setPendingDelete(undefined); }}>
+        <AlertDialog open={!!pendingBookDelete} onOpenChange={(open) => { if (!open) setPendingBookDelete(undefined); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>永久删除这一章？</AlertDialogTitle>
+              <AlertDialogTitle>永久删除这部小说及全部项目？</AlertDialogTitle>
               <AlertDialogDescription>
-                删除后无法恢复章节“{pendingDelete?.title}”的本地索引、事件分析和任务记录。原始 TXT 不会被改写；已被分集引用的章节不会删除。
+                删除后无法恢复小说“{pendingBookDelete?.title}”的本地副本、全部章节与事件、系列分集、稿件与审批、资产候选、配音字幕、视觉段、渲染文件和任务记录。你电脑上原来导入的 TXT 文件不会被修改。
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>取消</AlertDialogCancel>
-              <AlertDialogAction onClick={() => { if (pendingDelete) void deleteChapter(pendingDelete); }}>永久删除</AlertDialogAction>
+              <AlertDialogAction onClick={() => { if (pendingBookDelete) void deleteBook(pendingBookDelete); }}>永久删除全部内容</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog open={!!pendingChapterDelete} onOpenChange={(open) => { if (!open) setPendingChapterDelete(undefined); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>永久删除这一章？</AlertDialogTitle>
+              <AlertDialogDescription>
+                删除后无法恢复章节“{pendingChapterDelete?.title}”的本地索引、事件分析和任务记录。原始 TXT 不会被改写；已被分集引用的章节不会删除。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={() => { if (pendingChapterDelete) void deleteChapter(pendingChapterDelete); }}>永久删除</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

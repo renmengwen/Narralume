@@ -5,6 +5,8 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 
+import { withDataFileMutationLock } from "./data-file-mutation-lock.js";
+
 const MAX_BYTES = 30 * 1024 * 1024;
 const MAX_PIXELS = 40_000_000;
 const HASH = /^[0-9a-f]{64}$/u;
@@ -370,17 +372,19 @@ export async function registerAssetCandidate(
   input: RegisterAssetCandidateInput,
 ) {
   const assetId = text(input.assetId, "资产 ID");
-  if (!database.prepare("SELECT id FROM assets WHERE id = ?").get(assetId)) {
-    throw new AssetCandidateStoreError(404, "资产不存在");
-  }
   const writer: AssetCandidateWriter = {
     run: (sql, ...parameters) => { database.prepare(sql).run(...parameters); },
   };
-  const published = await publishAssetCandidate(dataRoot, { ...input, assetId });
-  registerPublishedAssetCandidate(writer, published);
-  const row = database.prepare(`${CANDIDATE_SELECT} WHERE c.id = ?`).get(published.id) as CandidateRow | undefined;
-  if (!row) throw new AssetCandidateStoreError(500, "候选图登记失败");
-  return rowResult(row);
+  return withDataFileMutationLock(dataRoot, async () => {
+    if (!database.prepare("SELECT id FROM assets WHERE id = ?").get(assetId)) {
+      throw new AssetCandidateStoreError(404, "资产不存在");
+    }
+    const published = await publishAssetCandidate(dataRoot, { ...input, assetId });
+    registerPublishedAssetCandidate(writer, published);
+    const row = database.prepare(`${CANDIDATE_SELECT} WHERE c.id = ?`).get(published.id) as CandidateRow | undefined;
+    if (!row) throw new AssetCandidateStoreError(500, "候选图登记失败");
+    return rowResult(row);
+  });
 }
 
 export function listAssetCandidates(database: DatabaseSync, assetId: string): AssetCandidateRecord[] {

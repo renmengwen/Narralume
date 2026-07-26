@@ -120,6 +120,12 @@ test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
     assert.equal(deleted.statusCode, 200);
     assert.equal(deleted.json().message, "章节“第一章”已从本地索引删除");
     assert.equal(afterDelete.json().total, 0);
+    const deletedBook = await app.inject({ method: "DELETE", url: `/api/books/${bookId}` });
+    const afterBookDelete = await app.inject({ method: "GET", url: "/api/books" });
+    assert.equal(deletedBook.statusCode, 200);
+    assert.equal(deletedBook.json().message, "小说“测试书”及其全部项目数据已删除");
+    assert.equal(afterBookDelete.json().items.length, 0);
+    await assert.rejects(readFile(join(dataRoot, "books", bookId, "source.txt")));
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

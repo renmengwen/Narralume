@@ -15,6 +15,8 @@ import {
   registerAssetCandidate,
   type AssetCandidateSource,
 } from "./asset-candidate-store.js";
+import { deleteBook } from "./book-library.js";
+import { withDataFileMutationLock } from "./data-file-mutation-lock.js";
 import { openDatabase } from "./database.js";
 
 function fixture(path: string, format: "png" | "mjpeg" | "webp", size = "32x24") {
@@ -170,6 +172,43 @@ test("候选图拒绝伪装格式、越界尺寸、超限流并清理 staging", 
     assert.deepEqual(await readdir(imports).catch(() => []), []);
     assert.equal((await readFile(invalid)).length > 8, true);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("整书删除排在候选上传前时，上传重新校验资产且不遗留候选文件", async () => {
+  const root = await mkdtemp(join(tmpdir(), "narralume-candidate-delete-race-"));
+  const input = join(root, "sample.png");
+  fixture(input, "png");
+  const connection = openDatabase(root);
+  try {
+    seedAsset(connection.database);
+    let releaseBlocker!: () => void;
+    let blockerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { blockerStarted = resolve; });
+    const blocker = withDataFileMutationLock(root, async () => {
+      blockerStarted();
+      await new Promise<void>((resolve) => { releaseBlocker = resolve; });
+    });
+    await started;
+    const deletion = deleteBook(connection.database, root, "book");
+    await Promise.resolve();
+    const uploadRejected = assert.rejects(
+      registerAssetCandidate(connection.database, root, {
+        assetId: "asset",
+        source: { kind: "upload", originalName: "sample.png" },
+        raw: createReadStream(input),
+      }),
+      isStoreError(404),
+    );
+    releaseBlocker();
+    await blocker;
+    await deletion;
+    await uploadRejected;
+    const published = await readdir(join(root, "assets", "candidates"), { recursive: true }).catch(() => []);
+    assert.deepEqual(published, []);
+  } finally {
+    connection.close();
     await rm(root, { recursive: true, force: true });
   }
 });

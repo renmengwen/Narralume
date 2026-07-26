@@ -18,7 +18,8 @@ import {
   type AssetCandidateReviewAction,
 } from "./asset-candidate-store.js";
 import { BookImportError, importBookText } from "./book-import.js";
-import { BookLibraryError, listBooks, listChapters, readChapterText } from "./book-library.js";
+import { BookLibraryError, cleanupPendingBookDeletions, listBooks, listChapters, readChapterText } from "./book-library.js";
+import { registerBookRoutes } from "./book-routes.js";
 import { registerChapterRoutes } from "./chapter-routes.js";
 import {
   ChapterEventError,
@@ -364,6 +365,8 @@ export function buildApp(options: BuildAppOptions = {}) {
   }
 
   app.addHook("onReady", async () => {
+    const cleanup = await cleanupPendingBookDeletions(connection.database, dataRoot);
+    if (cleanup.pending) app.log.warn({ pending: cleanup.pending }, "存在尚未清理的整书删除文件");
     if (supportedJobTypes.size > 0) worker.start(options.jobPollMs);
   });
   app.addHook("onClose", async () => {
@@ -381,6 +384,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   }));
 
   void app.register(registerModelConfigRoutes, { dataRoot });
+  void app.register(registerBookRoutes, { database: connection.database, dataRoot });
   void app.register(registerChapterRoutes, { database: connection.database });
 
   app.get("/api/episode-policy", async () => ({ ok: true, duration: EPISODE_DURATION_POLICY }));

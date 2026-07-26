@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { withDataFileMutationLock } from "./data-file-mutation-lock.js";
+
 import {
   findGeneratedAssetCandidate,
   publishAssetCandidate,
@@ -223,28 +225,39 @@ export function createImageCandidateJobHandler(
     context.throwIfCancellationRequested();
     const controller = new AbortController();
     const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
-    let published: PublishedAssetCandidate;
+    let candidate: AssetCandidateRecord;
     try {
       const generated = await generate({ prompt: task.prompt, config, signal: controller.signal });
       if (controller.signal.aborted) throw new JobCancelledError();
-      published = await publish(dataRoot, {
-        assetId: task.assetId,
-        source: {
-          kind: "generation",
-          episodeId: task.episodeId,
-          scriptVersionId: task.scriptVersionId,
-          approvalRevision: task.approvalRevision,
-          provider: task.providerId,
-          model: task.model,
-          promptHash,
-          requestHash: task.requestHash,
-          size: IMAGE_GENERATION_SIZE,
-          outputIndex: 0,
-          ...(generated.revisedPrompt ? { revisedPrompt: generated.revisedPrompt } : {}),
-          ...(task.derivedFromCandidateId ? { derivedFromCandidateId: task.derivedFromCandidateId } : {}),
-        },
-        raw: oneChunk(generated.bytes),
-        signal: controller.signal,
+      candidate = await withDataFileMutationLock(dataRoot, async () => {
+        assertFrozenIdentity(database, config, context.job.id, task);
+        const published: PublishedAssetCandidate = await publish(dataRoot, {
+          assetId: task.assetId,
+          source: {
+            kind: "generation",
+            episodeId: task.episodeId,
+            scriptVersionId: task.scriptVersionId,
+            approvalRevision: task.approvalRevision,
+            provider: task.providerId,
+            model: task.model,
+            promptHash,
+            requestHash: task.requestHash,
+            size: IMAGE_GENERATION_SIZE,
+            outputIndex: 0,
+            ...(generated.revisedPrompt ? { revisedPrompt: generated.revisedPrompt } : {}),
+            ...(task.derivedFromCandidateId ? { derivedFromCandidateId: task.derivedFromCandidateId } : {}),
+          },
+          raw: oneChunk(generated.bytes),
+          signal: controller.signal,
+        });
+        context.throwIfCancellationRequested();
+        let committed: AssetCandidateRecord = { ...published, reviewRevision: 0, reviewStatus: "pending" };
+        context.commitCheckpoint("image-candidate", task.assetId, task.requestHash, (transaction) => {
+          assertFrozenIdentity(database, config, context.job.id, task);
+          committed = registerPublishedAssetCandidate(transaction, published);
+          return undefined;
+        });
+        return findGeneratedAssetCandidate(database, task.assetId, task.requestHash) ?? committed;
       });
     } catch (error) {
       if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
@@ -253,14 +266,6 @@ export function createImageCandidateJobHandler(
       clearInterval(poll);
     }
 
-    context.throwIfCancellationRequested();
-    let candidate: AssetCandidateRecord = { ...published, reviewRevision: 0, reviewStatus: "pending" };
-    context.commitCheckpoint("image-candidate", task.assetId, task.requestHash, (transaction) => {
-      assertFrozenIdentity(database, config, context.job.id, task);
-      candidate = registerPublishedAssetCandidate(transaction, published);
-      return undefined;
-    });
-    candidate = findGeneratedAssetCandidate(database, task.assetId, task.requestHash) ?? candidate;
     context.reportProgress(1);
     return { episodeId: task.episodeId, requestHash: task.requestHash, candidate };
   };

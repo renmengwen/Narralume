@@ -6,6 +6,8 @@ import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { DatabaseSync } from "node:sqlite";
 
+import { withDataFileMutationLock } from "./data-file-mutation-lock.js";
+
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 
 export class BookImportError extends Error {
@@ -86,61 +88,63 @@ export async function importBookText(options: ImportBookTextOptions) {
     if (bytes === 0) throw new BookImportError(400, "TXT 文件不能为空");
 
     const contentHash = hash.digest("hex");
-    const existing = findBookByHash(options.database, contentHash);
-    if (existing) return { book: existing, created: false, bytes };
+    return await withDataFileMutationLock(options.dataRoot, async () => {
+      const existing = findBookByHash(options.database, contentHash);
+      if (existing) return { book: existing, created: false, bytes };
 
-    const id = `book_${contentHash}`;
-    const booksRoot = join(options.dataRoot, "books");
-    bookDirectory = join(booksRoot, id);
-    await mkdir(booksRoot, { recursive: true });
+      const id = `book_${contentHash}`;
+      const booksRoot = join(options.dataRoot, "books");
+      bookDirectory = join(booksRoot, id);
+      await mkdir(booksRoot, { recursive: true });
 
-    try {
-      await rename(stagingDirectory, bookDirectory);
-      stagingOwned = false;
-      bookDirectoryOwned = true;
-    } catch (error) {
-      const alreadyClaimed = await stat(bookDirectory)
-        .then((entry) => entry.isDirectory())
-        .catch(() => false);
-      if (!alreadyClaimed) throw error;
-    }
-
-    const book: BookRecord = {
-      id,
-      title: displayTitle(options.title, options.fileName),
-      author: options.author?.trim() || null,
-      original_file_path: `books/${id}/source.txt`,
-      original_file_hash: contentHash,
-      encoding: "pending",
-      import_status: "importing",
-    };
-
-    try {
-      options.database
-        .prepare(
-          `INSERT INTO books (
-            id, title, author, original_file_path, original_file_hash, encoding, import_status
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          book.id,
-          book.title,
-          book.author,
-          book.original_file_path,
-          book.original_file_hash,
-          book.encoding,
-          book.import_status,
-        );
-      bookDirectoryOwned = false;
-      return { book, created: true, bytes };
-    } catch (error) {
-      const concurrent = findBookByHash(options.database, contentHash);
-      if (concurrent) {
-        bookDirectoryOwned = false;
-        return { book: concurrent, created: false, bytes };
+      try {
+        await rename(stagingDirectory, bookDirectory);
+        stagingOwned = false;
+        bookDirectoryOwned = true;
+      } catch (error) {
+        const alreadyClaimed = await stat(bookDirectory)
+          .then((entry) => entry.isDirectory())
+          .catch(() => false);
+        if (!alreadyClaimed) throw error;
       }
-      throw error;
-    }
+
+      const book: BookRecord = {
+        id,
+        title: displayTitle(options.title, options.fileName),
+        author: options.author?.trim() || null,
+        original_file_path: `books/${id}/source.txt`,
+        original_file_hash: contentHash,
+        encoding: "pending",
+        import_status: "importing",
+      };
+
+      try {
+        options.database
+          .prepare(
+            `INSERT INTO books (
+              id, title, author, original_file_path, original_file_hash, encoding, import_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            book.id,
+            book.title,
+            book.author,
+            book.original_file_path,
+            book.original_file_hash,
+            book.encoding,
+            book.import_status,
+          );
+        bookDirectoryOwned = false;
+        return { book, created: true, bytes };
+      } catch (error) {
+        const concurrent = findBookByHash(options.database, contentHash);
+        if (concurrent) {
+          bookDirectoryOwned = false;
+          return { book: concurrent, created: false, bytes };
+        }
+        throw error;
+      }
+    });
   } catch (error) {
     if (bookDirectoryOwned) await rm(bookDirectory, { recursive: true, force: true });
     throw error;

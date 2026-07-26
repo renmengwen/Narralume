@@ -51,3 +51,16 @@ test("拆句合同版本进入 System.Speech 输入身份", () => {
     systemSpeechInputHash({ ...input, contractVersion: "subtitle-timeline-v2" }),
   );
 });
+
+test("splitNarration merges quote-only punctuation into neighboring speakable text", () => {
+  const units = splitNarration("\"项云峰，你不能就这么回去。你一定能成为有钱人。\"");
+  assert.equal(units.map((unit) => unit.speechText).join(""), "\"项云峰，你不能就这么回去。你一定能成为有钱人。\"");
+  assert.deepEqual(splitNarration("\""), []);
+  assert.equal(units.some((unit) => !/[\p{L}\p{N}]/u.test(unit.speechText)), false);
+  assert.equal(units.some((unit) => unit.speechText === "\""), false);
+  for (const unit of units) {
+    const lines = unit.subtitleText.split("\n");
+    assert.ok(lines.length <= 2);
+    assert.ok(lines.every((line) => line.length > 0 && [...line].length <= SUBTITLE_LINE_LIMIT));
+  }
+});

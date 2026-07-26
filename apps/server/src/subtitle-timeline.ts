@@ -14,6 +14,7 @@ export interface SubtitleCue {
 }
 
 const MAX_UNIT_LENGTH = SUBTITLE_LINE_LIMIT * 2;
+const SPEAKABLE_TEXT = /[\p{L}\p{N}]/u;
 const SENTENCE_END = /[。！？!?；;…]/u;
 const SOFT_BREAK = /[，,、：:]/u;
 const PUNCTUATION = /[，。！？；：、,.!?;:…）》】」』]/u;
@@ -35,6 +36,24 @@ function wrapSubtitle(text: string) {
     if (score < bestScore) { best = split; bestScore = score; }
   }
   return `${characters.slice(0, best).join("")}\n${characters.slice(best).join("")}`;
+}
+
+function mergeUnspeakableUnits(units: string[]) {
+  if (!units.some((unit) => SPEAKABLE_TEXT.test(unit))) return [];
+  const merged: string[] = [];
+  for (let index = 0; index < units.length; index += 1) {
+    const unit = units[index];
+    if (!unit) continue;
+    if (SPEAKABLE_TEXT.test(unit)) {
+      merged.push(unit);
+    } else if (merged.length > 0) {
+      merged[merged.length - 1] += unit;
+    } else {
+      const next = units.slice(index + 1).findIndex((candidate) => SPEAKABLE_TEXT.test(candidate));
+      if (next >= 0) units[index + 1 + next] = `${unit}${units[index + 1 + next]!}`;
+    }
+  }
+  return merged;
 }
 
 export function splitNarration(text: string): SubtitleUnit[] {
@@ -68,7 +87,7 @@ export function splitNarration(text: string): SubtitleUnit[] {
     }
     return result;
   });
-  return speechUnits.filter(Boolean).map((speechText) => ({ speechText, subtitleText: wrapSubtitle(speechText) }));
+  return mergeUnspeakableUnits(speechUnits).map((speechText) => ({ speechText, subtitleText: wrapSubtitle(speechText) }));
 }
 
 function srtTimestamp(ms: number) {

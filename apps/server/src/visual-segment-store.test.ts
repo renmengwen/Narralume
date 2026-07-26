@@ -126,6 +126,17 @@ test("视觉段从字幕闭区间派生时间并幂等完全替换资产关系",
   assert.throws(() => putVisualSegment(store.database, "episode", 0, input({ expectedRevision: 1 })), /revision=2/);
 }));
 
+test("视觉段允许字幕时间轴首条保留短静音偏移", () => fixture((store) => {
+  store.database.prepare(
+    "UPDATE subtitle_cues SET start_ms = start_ms + 95, end_ms = end_ms + 95 WHERE timeline_hash = ?",
+  ).run(TIMELINE);
+  const segment = putVisualSegment(store.database, "episode", 0, input({ cueEndIndex: 3 }), 10);
+  assert.equal(segment.startMs, 95);
+  assert.equal(segment.endMs, 4095);
+  assert.equal(segment.productionReady, true);
+  assert.equal(assertVisualPlanReady(store.database, "episode", TIMELINE).length, 1);
+}));
+
 test("视觉段拒绝跨系列、候选错配以及 pending 或 rejected 候选", () => fixture((store) => {
   assert.throws(() => putVisualSegment(store.database, "episode", 0, input({
     assets: [{ assetId: "asset_other", selectedCandidateId: "candidate_a" }],

@@ -96,7 +96,7 @@ function timelineCues(database: DatabaseSync, episodeId: string, timelineHash: s
   if (cues.length === 0) throw new VisualSegmentStoreError(409, "音频时间轴不存在");
   for (let index = 0; index < cues.length; index += 1) {
     const cue = cues[index]!;
-    if (cue.cue_index !== index || (index === 0 ? cue.start_ms !== 0 : cue.start_ms !== cues[index - 1]!.end_ms)) {
+    if (cue.cue_index !== index || (index > 0 && cue.start_ms !== cues[index - 1]!.end_ms)) {
       throw new VisualSegmentStoreError(409, "音频时间轴不连续");
     }
   }

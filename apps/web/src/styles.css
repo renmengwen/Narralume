@@ -16,6 +16,8 @@
   --accent-strong: #7d4015;
   --accent-contrast: #fbf8f2;
   --focus: #a95b20;
+  --danger: #a23f36;
+  --danger-soft: #f3d9d4;
   --shadow: 0 16px 40px rgb(62 52 38 / 8%);
 }
 
@@ -34,6 +36,8 @@
   --accent-strong: #efbd87;
   --accent-contrast: #211e1a;
   --focus: #e3a667;
+  --danger: #df8b80;
+  --danger-soft: #432a27;
   --shadow: 0 18px 48px rgb(0 0 0 / 28%);
 }
 

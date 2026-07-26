@@ -112,6 +112,14 @@ test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
     assert.equal(missingBook.json().message, "书籍不存在");
     assert.equal(missingChapter.statusCode, 404);
     assert.equal(missingChapter.json().message, "章节不存在");
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/api/books/${bookId}/chapters/${chapterId}`,
+    });
+    const afterDelete = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(deleted.json().message, "章节“第一章”已从本地索引删除");
+    assert.equal(afterDelete.json().total, 0);
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

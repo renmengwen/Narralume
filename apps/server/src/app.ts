@@ -19,6 +19,7 @@ import {
 } from "./asset-candidate-store.js";
 import { BookImportError, importBookText } from "./book-import.js";
 import { BookLibraryError, listBooks, listChapters, readChapterText } from "./book-library.js";
+import { registerChapterRoutes } from "./chapter-routes.js";
 import {
   ChapterEventError,
   listChapterEvents,
@@ -380,6 +381,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   }));
 
   void app.register(registerModelConfigRoutes, { dataRoot });
+  void app.register(registerChapterRoutes, { database: connection.database });
 
   app.get("/api/episode-policy", async () => ({ ok: true, duration: EPISODE_DURATION_POLICY }));
 

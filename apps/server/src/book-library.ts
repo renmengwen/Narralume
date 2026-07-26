@@ -35,6 +35,41 @@ export function listChapters(database: DatabaseSync, bookId: string, limit: numb
   return { items, total };
 }
 
+export function deleteChapter(database: DatabaseSync, bookId: string, chapterId: string) {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const chapter = database.prepare(
+      "SELECT chapter_index, title FROM chapters WHERE id = ? AND book_id = ?",
+    ).get(chapterId, bookId) as { chapter_index: number; title: string } | undefined;
+    if (!chapter) throw new BookLibraryError(404, "章节不存在");
+    if (database.prepare("SELECT 1 FROM episode_sources WHERE chapter_id = ? LIMIT 1").get(chapterId)) {
+      throw new BookLibraryError(409, "章节已被分集引用，请先调整分集选材");
+    }
+    if (database.prepare(
+      `SELECT 1 FROM jobs
+       WHERE status IN ('queued', 'running')
+         AND EXISTS (SELECT 1 FROM json_tree(jobs.payload_json) WHERE type = 'text' AND value = ?)
+       LIMIT 1`,
+    ).get(chapterId)) throw new BookLibraryError(409, "章节仍有任务正在执行，请稍后重试");
+
+    database.prepare(
+      `DELETE FROM jobs
+       WHERE status NOT IN ('queued', 'running')
+         AND (
+           EXISTS (SELECT 1 FROM json_tree(jobs.payload_json) WHERE type = 'text' AND value = ?)
+           OR (result_json IS NOT NULL AND json_valid(result_json)
+             AND EXISTS (SELECT 1 FROM json_tree(jobs.result_json) WHERE type = 'text' AND value = ?))
+         )`,
+    ).run(chapterId, chapterId);
+    database.prepare("DELETE FROM chapters WHERE id = ? AND book_id = ?").run(chapterId, bookId);
+    database.exec("COMMIT");
+    return { id: chapterId, title: chapter.title };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export async function readChapterText(database: DatabaseSync, dataRoot: string, bookId: string, chapterId: string) {
   const row = database
     .prepare(

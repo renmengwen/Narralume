@@ -3,6 +3,7 @@
 - `main` 只保存已验收的稳定版本；日常开发、验证和推送只在 `dev` 或从 `dev` 派生的短期功能分支进行。未经用户明确授权，不合并到 `main`。
 - 用户可见文案默认使用中文。
 - 前端使用 React、TypeScript、Vite、Tailwind CSS，并优先使用官方 `shadcn/ui` 组件。
+- 涉及前端 UI 调整时，必须调用 OpenDesign 技能参与；优先加载 `opendesign/design-systems/narralume-product`，并让实现、文案和验收遵循现有产品设计系统。
 - 后端使用 Fastify 和 TypeScript。
 - 本项目是独立产品，不运行时依赖 MuseDock、DramaClaw、Toonflow 或其他参考项目。
 - 后续真实验收若需要生图、多模态或配音模型，可只读 `D:\code3\MuseDock` 中已经可用的本机配置与调用合同直接执行，不因普通模型测试配置暂停向用户提问；不得把 MuseDock 变成 Narralume 的运行时依赖，不得复制其业务限定，也不得把 API Key、账号或其他敏感配置写入代码、提交、Delivery Ledger 或输出。

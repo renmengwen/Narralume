@@ -10,9 +10,13 @@
     "test": "tsx --test test/**/*.test.ts"
   },
   "dependencies": {
+    "@radix-ui/react-alert-dialog": "^1.1.23",
     "@tailwindcss/vite": "^4.1.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.1.0"
   },
   "devDependencies": {

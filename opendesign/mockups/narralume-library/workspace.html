@@ -51,6 +51,18 @@
     .badge { min-height: 24px; display: inline-flex; align-items: center; padding: 0 var(--space-2); border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--fg-secondary); font-size: var(--text-11); }
     .chapter { min-height: 48px; }
     .chapter .index { color: var(--fg-muted); font: var(--text-11)/1.4 var(--font-mono); }
+    .chapter-row { position: relative; }
+    .chapter-row .chapter { padding-right: 72px; }
+    .chapter-delete { position: absolute; top: 2px; right: 4px; min-width: 56px; min-height: 44px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--status-danger); font-weight: var(--weight-semibold); cursor: pointer; opacity: 0; transition: opacity var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard); }
+    .chapter-row:hover .chapter-delete, .chapter-row:focus-within .chapter-delete { opacity: 1; }
+    .chapter-delete:hover { background: var(--status-danger-soft); }
+    .dialog-layer { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: var(--space-4); background: var(--overlay); }
+    .dialog-layer[hidden] { display: none; }
+    .dialog { width: min(480px, 92vw); display: grid; gap: var(--space-5); padding: var(--space-6); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-primary); box-shadow: var(--shadow-raised); }
+    .dialog h2 { margin: 0; font-size: var(--text-20); }
+    .dialog p { margin: var(--space-2) 0 0; color: var(--fg-secondary); line-height: 1.75; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+    .button.danger { background: var(--status-danger); color: var(--fg-inverse); }
     .reader-wrap { min-height: 0; display: grid; grid-template-rows: auto 1fr auto; }
     .reader-meta { display: flex; flex-wrap: wrap; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border-subtle); color: var(--fg-muted); font: var(--text-11)/1.4 var(--font-mono); }
     .reader { min-height: 0; overflow: auto; padding: var(--space-6) clamp(var(--space-5), 4vw, var(--space-10)); background: var(--surface-inset); }
@@ -59,7 +71,7 @@
     .reader p { margin: 0 0 var(--space-4); font: var(--text-16)/var(--leading-reading) var(--font-reading); }
     .reader-foot { min-height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-4); border-top: 1px solid var(--border-subtle); color: var(--fg-muted); font-size: var(--caption-size); }
     .empty { padding: var(--space-8) var(--space-5); color: var(--fg-muted); text-align: center; }
-    @media (max-width: 900px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 280px; } .reader-pane { min-height: 560px; } .brand { min-width: auto; } .phase { display: none; } }
+    @media (max-width: 900px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 280px; } .reader-pane { min-height: 560px; } .brand { min-width: auto; } .phase { display: none; } .chapter-delete { opacity: 1; } }
     @media (max-width: 560px) { .topbar { padding: var(--space-3); flex-wrap: wrap; } .tools { width: 100%; margin-left: 0; } .button { flex: 1; } .statusbar { padding: 0 var(--space-3); } .status-meta { display: none; } }
     @media (prefers-reduced-motion: reduce) { .statusbar[data-state="busy"]::before { animation: none; } }
   </style>
@@ -104,6 +116,12 @@
         </div>
       </section>
     </div>
+    <div class="dialog-layer" id="delete-dialog" hidden>
+      <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">
+        <div><h2 id="delete-title">永久删除这一章？</h2><p id="delete-description"></p></div>
+        <div class="dialog-actions"><button class="button secondary" id="delete-cancel" type="button">取消</button><button class="button danger" id="delete-confirm" type="button">永久删除</button></div>
+      </section>
+    </div>
   </main>
   <script>
     const books = [
@@ -119,6 +137,7 @@
     ];
     let selectedBook = "tide";
     let selectedChapter = 0;
+    let pendingDelete;
     const bookList = document.getElementById("book-list");
     const chapterList = document.getElementById("chapter-list");
     const status = document.getElementById("status");
@@ -149,7 +168,19 @@
         button.setAttribute("aria-current", String(i === selectedChapter));
         button.innerHTML = `<span class="title">第${i + 1}章　${titles[i % titles.length]}</span><span class="index">${String(i + 1).padStart(3, "0")}</span>`;
         button.addEventListener("click", () => { selectedChapter = i; renderChapters(); });
-        li.append(button); chapterList.append(li);
+        li.className = "chapter-row";
+        const remove = document.createElement("button");
+        remove.className = "chapter-delete";
+        remove.type = "button";
+        remove.textContent = "删除";
+        remove.setAttribute("aria-label", `删除第${i + 1}章`);
+        remove.addEventListener("click", () => {
+          pendingDelete = { book, index: i };
+          activeDeleteTrigger = remove;
+          document.getElementById("delete-description").textContent = `删除后无法恢复第${i + 1}章的本地索引、事件分析和任务记录。原始 TXT 不会被改写。`;
+          setDeleteDialogOpen(true);
+        });
+        li.append(button, remove); chapterList.append(li);
       }
       document.getElementById("chapter-title").textContent = `第${selectedChapter + 1}章　${titles[selectedChapter % titles.length]}`;
       document.getElementById("chapter-copy").innerHTML = paragraphs.map((text) => `<p>${text}</p>`).join("");
@@ -162,6 +193,38 @@
       const button = event.currentTarget;
       button.disabled = true; button.textContent = "正在处理…"; status.dataset.state = "busy"; status.firstElementChild.textContent = "正在读取并索引 TXT，请稍候…";
       setTimeout(() => { button.disabled = false; button.textContent = "导入 TXT"; status.dataset.state = ""; status.firstElementChild.textContent = "演示导入完成，共识别 24章。"; }, 1200);
+    });
+    let activeDeleteTrigger;
+    const deleteDialog = document.getElementById("delete-dialog");
+    const deleteDialogSiblings = [...deleteDialog.parentElement.children].filter((element) => element !== deleteDialog);
+    function setDeleteDialogOpen(open) {
+      deleteDialog.hidden = !open;
+      deleteDialogSiblings.forEach((element) => { element.inert = open; });
+      if (open) document.getElementById("delete-cancel").focus();
+      else activeDeleteTrigger?.focus();
+    }
+    deleteDialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        pendingDelete = undefined;
+        setDeleteDialogOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = [document.getElementById("delete-cancel"), document.getElementById("delete-confirm")];
+      const next = event.shiftKey ? controls[1] : controls[0];
+      const wraps = event.shiftKey ? document.activeElement === controls[0] : document.activeElement === controls[1];
+      if (wraps) { event.preventDefault(); next.focus(); }
+    });
+    document.getElementById("delete-cancel").addEventListener("click", () => { pendingDelete = undefined; setDeleteDialogOpen(false); });
+    document.getElementById("delete-confirm").addEventListener("click", () => {
+      if (!pendingDelete) return;
+      pendingDelete.book.count -= 1;
+      selectedChapter = Math.min(selectedChapter, Math.max(0, pendingDelete.book.count - 1));
+      status.firstElementChild.textContent = `第${pendingDelete.index + 1}章已删除。`;
+      pendingDelete = undefined;
+      setDeleteDialogOpen(false);
+      renderChapters();
     });
     const root = document.documentElement;
     const trigger = document.getElementById("theme-trigger");

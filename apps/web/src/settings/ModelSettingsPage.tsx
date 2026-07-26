@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "../components/ui/alert-dialog";
+import {
   activeModelLabel,
   emptyProvider,
   enabledModelSummary,
@@ -33,6 +37,9 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [confirmation, setConfirmation] = useState<
+    { type: "delete-provider"; provider: ModelProvider } | { type: "leave" }
+  >();
 
   useEffect(() => {
     let cancelled = false;
@@ -94,7 +101,11 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
 
   function deleteProvider(provider: ModelProvider) {
     if (!config || provider.kind === "edge-tts") return;
-    if (!window.confirm(`确认删除「${provider.name || provider.id}」？删除后仍需点击顶部保存模型配置。`)) return;
+    setConfirmation({ type: "delete-provider", provider });
+  }
+
+  function confirmDeleteProvider(provider: ModelProvider) {
+    if (!config || provider.kind === "edge-tts") return;
     patchConfig(removeProvider(config, provider.id));
     setSelectedProviderId("edge-tts");
   }
@@ -124,7 +135,8 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
   }
 
   function back() {
-    if (!dirty || window.confirm("有未保存的模型配置，确定返回吗？")) onBack();
+    if (dirty) setConfirmation({ type: "leave" });
+    else onBack();
   }
 
   const statusClasses = {
@@ -221,6 +233,27 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
             )}
           </div>
         </section>
+        <AlertDialog open={!!confirmation} onOpenChange={(open) => { if (!open) setConfirmation(undefined); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{confirmation?.type === "leave" ? "放弃未保存的修改？" : "删除这个供应商？"}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {confirmation?.type === "leave"
+                  ? "返回后，本页尚未保存的模型配置将丢失。"
+                  : `供应商“${confirmation?.provider.name || confirmation?.provider.id}”将从页面草稿中删除；点击顶部“保存模型配置”后才会持久化。`}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={() => {
+                const pending = confirmation;
+                setConfirmation(undefined);
+                if (pending?.type === "leave") onBack();
+                else if (pending?.type === "delete-provider") confirmDeleteProvider(pending.provider);
+              }}>{confirmation?.type === "leave" ? "放弃修改并返回" : "删除供应商"}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </main>
   );

@@ -10,6 +10,7 @@ import { buildApp } from "./app.js";
 import { openDatabase } from "./database.js";
 import { getJob } from "./job-store.js";
 import { IMAGE_CANDIDATE_JOB_TYPE } from "./image-candidate-job.js";
+import { writeModelConfig } from "./model-config.js";
 import { changeScriptApproval } from "./script-approval-store.js";
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
@@ -753,17 +754,23 @@ test("候选图 API 覆盖原始上传、列表、追加审核和生图任务门
     seed.close();
   }
 
-  const imageProvider = {
-    baseUrl: "https://images.example/v1",
-    apiKey: "test-only",
-    model: "test-image",
-    providerId: "test-provider",
-  };
+  await writeModelConfig(dataRoot, {
+    providers: {
+      "test-provider": {
+        name: "测试图片供应商",
+        kind: "openai-compatible",
+        protocol: "openai-response",
+        baseUrl: "https://images.example/v1",
+        apiKey: "test-only",
+        models: { image: { enabled: true, modelId: "test-image" } },
+      },
+    },
+    active: { image: "test-provider/image" },
+  });
   let app = buildApp({
     dataRoot,
     logger: false,
     jobPollMs: 60_000,
-    imageProvider,
     jobHandlers: { [IMAGE_CANDIDATE_JOB_TYPE]: async () => ({ accepted: true }) },
   });
   try {

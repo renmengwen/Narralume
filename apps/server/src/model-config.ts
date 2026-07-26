@@ -54,6 +54,11 @@ export interface RuntimeModelConfig {
   wordBoundary?: boolean;
 }
 
+export interface RuntimeModelIdentity {
+  providerId: string;
+  modelId: string;
+}
+
 function emptyModel(): ModelEntry {
   return { enabled: false, modelId: "", note: "" };
 }
@@ -283,14 +288,17 @@ export async function writeModelConfig(dataRoot: string, input: unknown) {
 export function resolveRuntimeModelConfig(
   type: ModelConfigType,
   config: StoredModelConfig,
+  identity?: RuntimeModelIdentity,
 ): RuntimeModelConfig | null {
   const normalized = normalizeModelConfig(config);
-  const [providerId, modelType] = (normalized.active[type] || "").split("/");
+  const [activeProviderId, modelType] = (normalized.active[type] || "").split("/");
+  const providerId = identity?.providerId.trim() || activeProviderId;
   if (!providerId) return null;
-  if (modelType !== type) return null;
+  if (!identity && modelType !== type) return null;
   const provider = normalized.providers[providerId];
   const model = provider?.models[type];
   if (!provider || !model?.enabled || !model.modelId) return null;
+  if (identity && model.modelId !== identity.modelId.trim()) return null;
   if (provider.kind !== "edge-tts" && !provider.apiKey) return null;
   return {
     enabled: true,

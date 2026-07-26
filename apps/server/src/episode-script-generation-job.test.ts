@@ -17,6 +17,7 @@ import {
 import { createOpenAiEpisodeScriptGenerator } from "./episode-script-provider.js";
 import { getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
+import { writeModelConfig } from "./model-config.js";
 import { getScriptApproval, requireApprovedScriptForProduction } from "./script-approval-store.js";
 import { listScriptVersions } from "./script-version-store.js";
 
@@ -105,6 +106,37 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
   await generate({ stage: "packaged", targetDurationSeconds: 120, characterBudget: 400,
     paragraphs: [{ text: "忠实稿", sourceIndexes: [0] }], signal });
   assert.equal(calls, 3);
+});
+
+test("Anthropic Messages 配置使用 messages 端点与对应鉴权合同", async () => {
+  const anthropic = { ...config, protocol: "anthropic-message" as const };
+  let requestedUrl = "";
+  let requestedHeaders = new Headers();
+  let requestedBody: Record<string, unknown> = {};
+  const generate = createOpenAiEpisodeScriptGenerator(anthropic, (async (url, init) => {
+    requestedUrl = String(url);
+    requestedHeaders = new Headers(init?.headers);
+    requestedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ content: [{ type: "text", text: JSON.stringify({ beats: [{ intent: "进入墓道", sourceIndexes: [0] }] }) }] });
+  }) as typeof fetch);
+
+  await generate({
+    stage: "skeleton",
+    episode: { id: "episode", storyArc: "进入墓道", recap: null, nextHook: null, targetDurationSeconds: 120 },
+    characterBudget: 400,
+    calibration: { identity: "provisional" },
+    sources: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(requestedUrl, "https://example.invalid/v1/messages");
+  assert.equal(requestedHeaders.get("x-api-key"), "test");
+  assert.equal(requestedHeaders.get("anthropic-version"), "2023-06-01");
+  assert.equal(requestedHeaders.get("authorization"), null);
+  assert.equal(requestedBody.model, "test-model");
+  assert.equal(requestedBody.max_tokens, 8192);
+  assert.equal(Array.isArray(requestedBody.messages), true);
+  assert.equal(requestedBody.input, undefined);
 });
 
 async function run(
@@ -293,11 +325,23 @@ test("包装稿拒绝忠实父稿冻结集合之外的来源", async () => {
 test("HTTP 入口持久化同一 Job，并由现有 Worker 完成后可查询恢复", async () => {
   const context = await fixture();
   context.connection.close();
+  await writeModelConfig(context.dataRoot, {
+    providers: {
+      [config.providerId]: {
+        name: "测试文本供应商",
+        kind: "openai-compatible",
+        protocol: "openai-response",
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        models: { text: { enabled: true, modelId: config.model } },
+      },
+    },
+    active: { text: `${config.providerId}/text` },
+  });
   const app = buildApp({
     dataRoot: context.dataRoot,
     logger: false,
     jobPollMs: 5,
-    chapterTextProvider: config,
     episodeScriptGenerator: successfulGenerator(),
   });
   try {

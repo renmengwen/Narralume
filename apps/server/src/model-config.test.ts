@@ -53,6 +53,32 @@ test("active 模型保存后自动启用供 runtime 消费", () => {
   assert.equal(runtime?.modelId, "speech-2.8-hd");
 });
 
+test("已排队任务可按冻结 provider/model 解析配置，不受 active 切换影响", () => {
+  const config = defaultModelConfig();
+  config.providers.first = {
+    id: "first", name: "第一供应商", kind: "openai-compatible", protocol: "openai-response",
+    baseUrl: "https://first.example/v1", apiKey: "first-key",
+    models: {
+      text: { enabled: true, modelId: "first-model", note: "" },
+      image: { enabled: false, modelId: "", note: "" },
+      tts: { enabled: false, modelId: "", note: "" },
+    },
+  };
+  config.providers.second = {
+    ...config.providers.first,
+    id: "second", name: "第二供应商", baseUrl: "https://second.example/v1", apiKey: "second-key",
+    models: { ...config.providers.first.models, text: { enabled: true, modelId: "second-model", note: "" } },
+  };
+  config.active.text = "second/text";
+
+  const queued = resolveRuntimeModelConfig("text", config, { providerId: "first", modelId: "first-model" });
+
+  assert.equal(resolveRuntimeModelConfig("text", config)?.providerId, "second");
+  assert.equal(queued?.providerId, "first");
+  assert.equal(queued?.apiKey, "first-key");
+  assert.equal(resolveRuntimeModelConfig("text", config, { providerId: "first", modelId: "changed" }), null);
+});
+
 test("保存配置不回显完整 key，空 key 保留旧 key", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-model-config-"));
   try {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import { limitedJson, responseText } from "./chapter-event-analyzer.js";
+import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import type { JobHandler } from "./job-worker.js";
@@ -42,6 +42,8 @@ interface FrozenPayload extends EpisodeRecommendationInput {
   requestedStartChapterId: string | null;
   startChapterId: string;
   summaryHash: string;
+  providerId: string;
+  model: string;
   requestHash: string;
 }
 
@@ -99,7 +101,12 @@ function validateDuration(value: number) {
   }
 }
 
-export function enqueueEpisodeRecommendationJob(database: DatabaseSync, input: EpisodeRecommendationInput, job: Omit<CreateJobInput, "id" | "type" | "payload"> = {}) {
+export function enqueueEpisodeRecommendationJob(
+  database: DatabaseSync,
+  config: ChapterTextModelConfig,
+  input: EpisodeRecommendationInput,
+  job: Omit<CreateJobInput, "id" | "type" | "payload"> = {},
+) {
   if (!Number.isSafeInteger(input.episodeIndex) || input.episodeIndex < 1) throw new Error("分集序号必须从 1 开始");
   validateDuration(input.targetDurationSeconds);
   const source = summaries(database, input.seriesId.trim(), input.episodeIndex, input.startChapterId);
@@ -109,7 +116,9 @@ export function enqueueEpisodeRecommendationJob(database: DatabaseSync, input: E
     requestedStartChapterId: input.startChapterId?.trim() || null,
     startChapterId: source.startChapterId, targetDurationSeconds: input.targetDurationSeconds,
     endingPreference: input.endingPreference?.trim() || undefined, summaryHash,
+    providerId: config.providerId.trim(), model: config.model.trim(),
   };
+  if (!identity.providerId || !identity.model) throw new Error("选材推荐模型配置无效");
   const requestHash = sha256(JSON.stringify({ contract: "episode-sources-recommend-v1", ...identity }));
   const payload: FrozenPayload = { ...identity, requestHash };
   const id = `job_episode_recommend_${requestHash}`;
@@ -118,9 +127,17 @@ export function enqueueEpisodeRecommendationJob(database: DatabaseSync, input: E
   return { job: createJob(database, { ...job, id, type: EPISODE_RECOMMENDATION_JOB_TYPE, payload }), created: true };
 }
 
-export function createEpisodeRecommendationJobHandler(database: DatabaseSync, recommend: RecommendEpisodeSources): JobHandler {
+export function createEpisodeRecommendationJobHandler(
+  database: DatabaseSync,
+  config: ChapterTextModelConfig,
+  recommend: RecommendEpisodeSources,
+): JobHandler {
   return async (context) => {
     const task = context.job.payload as FrozenPayload;
+    if ((task.providerId || task.model) &&
+        (task.providerId !== config.providerId.trim() || task.model !== config.model.trim())) {
+      throw new Error("选材推荐任务或模型冻结身份不一致");
+    }
     validateDuration(task.targetDurationSeconds);
     const source = summaries(database, task.seriesId, task.episodeIndex, task.requestedStartChapterId ?? undefined);
     if (source.bookId !== task.bookId || source.startChapterId !== task.startChapterId ||
@@ -166,8 +183,7 @@ export function createEpisodeRecommendationJobHandler(database: DatabaseSync, re
   };
 }
 
-export function createOpenAiEpisodeRecommender(config: { baseUrl: string; apiKey: string; model: string }, fetchImpl: typeof fetch = fetch): RecommendEpisodeSources {
-  const endpoint = new URL("responses", `${config.baseUrl.replace(/\/+$/, "")}/`);
+export function createOpenAiEpisodeRecommender(config: ChapterTextModelConfig, fetchImpl: typeof fetch = fetch): RecommendEpisodeSources {
   return async ({ targetDurationSeconds, endingPreference, chapters, signal }) => {
     const input = [
       "基于逐章结构化事件摘要推荐连续章节和真实事件。只输出严格 JSON。",
@@ -176,10 +192,11 @@ export function createOpenAiEpisodeRecommender(config: { baseUrl: string; apiKey
       JSON.stringify(chapters),
       '输出：{"chapterIds":[],"eventIds":[],"estimatedCharacterCount":1200,"advice":"保留"}',
     ].join("\n");
-    const response = await fetchImpl(endpoint, {
+    const request = textModelRequest(config, input);
+    const response = await fetchImpl(request.endpoint, {
       method: "POST", signal, redirect: "error",
-      headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: config.model, input }),
+      headers: request.headers,
+      body: request.body,
     });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`选材推荐模型请求失败（HTTP ${response.status}）`); }
     try { return JSON.parse(responseText(await limitedJson(response))) as Awaited<ReturnType<RecommendEpisodeSources>>; }

@@ -1,11 +1,10 @@
-import { limitedJson, responseText, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
+import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import type { GenerateEpisodeScript } from "./episode-script-generation-job.js";
 
 export function createOpenAiEpisodeScriptGenerator(
   config: ChapterTextModelConfig,
   fetchImpl: typeof fetch = fetch,
 ): GenerateEpisodeScript {
-  const endpoint = new URL("responses", `${config.baseUrl.replace(/\/+$/, "")}/`);
   return async (input) => {
     const instructions = input.stage === "skeleton"
       ? "生成按原文顺序排列的故事 beats。只能引用输入 sourceIndex，不得发明或重复来源。输出严格 JSON：{\"beats\":[{\"intent\":\"...\",\"sourceIndexes\":[0],\"targetDurationSeconds\":60}]}"
@@ -13,15 +12,13 @@ export function createOpenAiEpisodeScriptGenerator(
         ? "只根据本 beat 提供的原文写忠实叙事段落，不添加事实。输出严格 JSON：{\"text\":\"...\"}"
         : "在不改变事实的前提下包装忠实稿，控制在字符预算内。每段只能引用输入已有 sourceIndexes。输出严格 JSON：{\"paragraphs\":[{\"text\":\"...\",\"sourceIndexes\":[0]}]}";
     const { signal, ...safeInput } = input;
-    const response = await fetchImpl(endpoint, {
+    const request = textModelRequest(config, `${instructions}\n${JSON.stringify(safeInput)}`);
+    const response = await fetchImpl(request.endpoint, {
       method: "POST",
       signal,
       redirect: "error",
-      headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: config.model,
-        input: `${instructions}\n${JSON.stringify(safeInput)}`,
-      }),
+      headers: request.headers,
+      body: request.body,
     });
     if (!response.ok) {
       await response.body?.cancel();

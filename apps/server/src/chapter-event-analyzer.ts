@@ -28,6 +28,7 @@ export interface ChapterTextModelConfig {
   apiKey: string;
   model: string;
   providerId: string;
+  protocol?: "openai-response" | "anthropic-message";
 }
 
 export interface ChapterAnalysisInput {
@@ -169,12 +170,31 @@ export function responseText(body: unknown) {
   const value = body as {
     output_text?: unknown;
     output?: Array<{ content?: Array<{ text?: unknown }> }>;
+    content?: Array<{ text?: unknown }>;
   };
   if (typeof value?.output_text === "string") return value.output_text;
+  const content = value?.content?.map((item) => item.text)
+    .filter((item): item is string => typeof item === "string");
+  if (content?.length) return content.join("");
   const parts = value?.output?.flatMap((item) => item.content ?? [])
     .map((item) => item.text).filter((item): item is string => typeof item === "string");
   if (parts?.length) return parts.join("");
   throw new Error("章节分析模型返回结果缺少文本内容");
+}
+
+export function textModelRequest(config: ChapterTextModelConfig, input: string, maxTokens = 8192) {
+  const anthropic = config.protocol === "anthropic-message";
+  const endpoint = new URL(anthropic ? "messages" : "responses", `${config.baseUrl.replace(/\/+$/, "")}/`);
+  const headers: Record<string, string> = anthropic
+    ? { "x-api-key": config.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" }
+    : { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" };
+  return {
+    endpoint,
+    headers,
+    body: JSON.stringify(anthropic
+      ? { model: config.model, max_tokens: maxTokens, messages: [{ role: "user", content: input }] }
+      : { model: config.model, input }),
+  };
 }
 
 function modelEvents(value: unknown, atoms: readonly ChapterEvidenceAtom[]): ChapterEventInput[] {
@@ -213,22 +233,20 @@ export function createOpenAiResponsesChapterAnalyzer(
   fetchImpl: typeof fetch = fetch,
 ): AnalyzeChapterEvents {
   let endpoint: URL;
-  try { endpoint = new URL("responses", `${config.baseUrl.replace(/\/+$/, "")}/`); }
+  try { endpoint = textModelRequest(config, "").endpoint; }
   catch { throw new Error("章节分析模型配置无效"); }
   if (!config.apiKey.trim() || !config.model.trim() || !config.providerId.trim() ||
       (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
     throw new Error("章节分析模型配置无效");
   }
   async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal) {
+    const request = textModelRequest(config, prompt(atoms));
     let response: Response;
     try {
-      response = await fetchImpl(endpoint, {
+      response = await fetchImpl(request.endpoint, {
         method: "POST",
-        headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: config.model,
-          input: [{ role: "user", content: [{ type: "input_text", text: prompt(atoms) }] }],
-        }),
+        headers: request.headers,
+        body: request.body,
         signal,
         redirect: "error",
       });

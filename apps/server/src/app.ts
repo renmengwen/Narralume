@@ -64,8 +64,13 @@ import {
 } from "./episode-script-generation-job.js";
 import { createOpenAiEpisodeScriptGenerator } from "./episode-script-provider.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
-import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
+import { JobWorker, type JobExecutionContext, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
 import { registerModelConfigRoutes } from "./model-config-routes.js";
+import {
+  readModelConfig,
+  resolveRuntimeModelConfig,
+  type RuntimeModelIdentity,
+} from "./model-config.js";
 import {
   createScriptVersion,
   listScriptVersions,
@@ -200,6 +205,7 @@ function chapterTextProviderFromEnvironment(): ChapterTextModelConfig | null {
     apiKey: process.env.NARRALUME_TEXT_API_KEY?.trim() ?? "",
     model: process.env.NARRALUME_TEXT_MODEL?.trim() ?? "",
     providerId: process.env.NARRALUME_TEXT_PROVIDER_ID?.trim() ?? "",
+    protocol: "openai-response" as const,
   };
   return Object.values(config).every(Boolean) ? config : null;
 }
@@ -251,46 +257,89 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
   const dataRoot = resolveDataRoot(options.dataRoot);
   const connection = openDatabase(dataRoot);
-  const imageProvider = options.imageProvider === undefined
-    ? imageProviderFromEnvironment()
-    : options.imageProvider;
-  const chapterTextProvider = options.chapterTextProvider === undefined
-    ? chapterTextProviderFromEnvironment()
-    : options.chapterTextProvider;
-  const episodeRecommender = options.episodeRecommender ?? (chapterTextProvider
-    ? createOpenAiEpisodeRecommender(chapterTextProvider)
-    : undefined);
-  const episodeScriptGenerator = options.episodeScriptGenerator ?? (chapterTextProvider
-    ? createOpenAiEpisodeScriptGenerator(chapterTextProvider)
-    : undefined);
+  async function resolveImageProvider(identity?: RuntimeModelIdentity): Promise<OpenAiImageConfig | null> {
+    if (options.imageProvider !== undefined) {
+      const provider = options.imageProvider;
+      return provider && (!identity || (provider.providerId === identity.providerId && provider.model === identity.modelId))
+        ? provider
+        : null;
+    }
+    const stored = await readModelConfig(dataRoot);
+    const runtime = resolveRuntimeModelConfig("image", stored, identity);
+    if (runtime?.baseUrl) return {
+      baseUrl: runtime.baseUrl,
+      apiKey: runtime.apiKey,
+      model: runtime.modelId,
+      providerId: runtime.providerId,
+    };
+    if (!identity && stored.active.image) return null;
+    const fallback = imageProviderFromEnvironment();
+    return fallback && (!identity || (fallback.providerId === identity.providerId && fallback.model === identity.modelId))
+      ? fallback
+      : null;
+  }
+  async function resolveChapterTextProvider(identity?: RuntimeModelIdentity): Promise<ChapterTextModelConfig | null> {
+    if (options.chapterTextProvider !== undefined) {
+      const provider = options.chapterTextProvider;
+      return provider && (!identity || (provider.providerId === identity.providerId && provider.model === identity.modelId))
+        ? provider
+        : null;
+    }
+    const stored = await readModelConfig(dataRoot);
+    const runtime = resolveRuntimeModelConfig("text", stored, identity);
+    if (runtime?.baseUrl) return {
+      baseUrl: runtime.baseUrl,
+      apiKey: runtime.apiKey,
+      model: runtime.modelId,
+      providerId: runtime.providerId,
+      protocol: runtime.protocol,
+    };
+    if (!identity && stored.active.text) return null;
+    const fallback = chapterTextProviderFromEnvironment();
+    return fallback && (!identity || (fallback.providerId === identity.providerId && fallback.model === identity.modelId))
+      ? fallback
+      : null;
+  }
+  function frozenModelIdentity(payload: unknown): RuntimeModelIdentity | undefined {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+    const { providerId, model } = payload as { providerId?: unknown; model?: unknown };
+    return typeof providerId === "string" && typeof model === "string" ? { providerId, modelId: model } : undefined;
+  }
   const jobHandlers = {
     [CHAPTER_EVENTS_JOB_TYPE]: createChapterEventsJobHandler(connection.database, dataRoot),
-    ...(chapterTextProvider ? {
-      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
-        connection.database,
-        dataRoot,
-        chapterTextProvider,
-        options.chapterAnalyzer ?? createOpenAiResponsesChapterAnalyzer(chapterTextProvider),
-      ),
-    } : {}),
-    ...(episodeRecommender ? {
-      [EPISODE_RECOMMENDATION_JOB_TYPE]: createEpisodeRecommendationJobHandler(
-        connection.database, episodeRecommender,
-      ),
-    } : {}),
-    ...(episodeScriptGenerator && chapterTextProvider ? {
-      [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
-        connection.database, dataRoot, chapterTextProvider, episodeScriptGenerator,
-      ),
-    } : {}),
+    [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("章节分析任务对应的模型配置不可用");
+      return createChapterEventsAnalysisJobHandler(
+        connection.database, dataRoot, provider,
+        options.chapterAnalyzer ?? createOpenAiResponsesChapterAnalyzer(provider),
+      )(context);
+    },
+    [EPISODE_RECOMMENDATION_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("选材推荐任务对应的模型配置不可用");
+      return createEpisodeRecommendationJobHandler(
+        connection.database, provider, options.episodeRecommender ?? createOpenAiEpisodeRecommender(provider),
+      )(context);
+    },
+    [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("长稿生成任务对应的模型配置不可用");
+      return createEpisodeScriptGenerationJobHandler(
+        connection.database, dataRoot, provider,
+        options.episodeScriptGenerator ?? createOpenAiEpisodeScriptGenerator(provider),
+      )(context);
+    },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
     [FINAL_VIDEO_JOB_TYPE]: createFinalVideoJobHandler(connection.database, dataRoot),
-    ...(imageProvider ? {
-      [IMAGE_CANDIDATE_JOB_TYPE]: createImageCandidateJobHandler(connection.database, dataRoot, imageProvider),
-    } : {}),
+    [IMAGE_CANDIDATE_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveImageProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("图片生成任务对应的模型配置不可用");
+      return createImageCandidateJobHandler(connection.database, dataRoot, provider)(context);
+    },
     ...(options.jobHandlers ?? {}),
   };
   const supportedJobTypes = new Set(Object.keys(jobHandlers));
@@ -830,6 +879,8 @@ export function buildApp(options: BuildAppOptions = {}) {
     if (!supportedJobTypes.has(type)) {
       return reply.code(400).send({ ok: false, message: `不支持的任务类型：${type || "（空）"}` });
     }
+    let requestImageProvider: OpenAiImageConfig | null = null;
+    let requestTextProvider: ChapterTextModelConfig | null = null;
     if (type === IMAGE_CANDIDATE_JOB_TYPE) {
       const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? body.payload as { episodeId?: unknown; assetId?: unknown; prompt?: unknown; derivedFromCandidateId?: unknown }
@@ -842,7 +893,8 @@ export function buildApp(options: BuildAppOptions = {}) {
             (typeof payload.derivedFromCandidateId !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.derivedFromCandidateId)))) {
         return reply.code(400).send({ ok: false, message: "图片生成任务缺少有效的分集、资产或提示词" });
       }
-      if (!imageProvider) {
+      requestImageProvider = await resolveImageProvider();
+      if (!requestImageProvider) {
         return reply.code(409).send({ ok: false, message: "Narralume 图片模型尚未配置" });
       }
       try {
@@ -870,14 +922,17 @@ export function buildApp(options: BuildAppOptions = {}) {
         throw error;
       }
     }
-    if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE && !chapterTextProvider) {
-      return reply.code(409).send({ ok: false, message: "Narralume 章节分析模型尚未配置，仍可使用人工事件入口" });
-    }
-    if (type === EPISODE_RECOMMENDATION_JOB_TYPE && !episodeRecommender) {
-      return reply.code(409).send({ ok: false, message: "Narralume 选材推荐模型尚未配置" });
-    }
-    if (type === EPISODE_SCRIPT_GENERATION_JOB_TYPE && (!chapterTextProvider || !episodeScriptGenerator)) {
-      return reply.code(409).send({ ok: false, message: "Narralume 长稿生成模型尚未配置" });
+    if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE || type === EPISODE_RECOMMENDATION_JOB_TYPE ||
+        type === EPISODE_SCRIPT_GENERATION_JOB_TYPE) {
+      requestTextProvider = await resolveChapterTextProvider();
+      if (!requestTextProvider) {
+        const message = type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE
+          ? "Narralume 章节分析模型尚未配置，仍可使用人工事件入口"
+          : type === EPISODE_RECOMMENDATION_JOB_TYPE
+            ? "Narralume 选材推荐模型尚未配置"
+            : "Narralume 长稿生成模型尚未配置";
+        return reply.code(409).send({ ok: false, message });
+      }
     }
     if (type === TTS_TIMELINE_JOB_TYPE) {
       const episodeId = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
@@ -929,7 +984,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       });
     }
     if (type === IMAGE_CANDIDATE_JOB_TYPE) {
-      const result = enqueueImageCandidateJob(connection.database, imageProvider!, {
+      const result = enqueueImageCandidateJob(connection.database, requestImageProvider!, {
         payload: body.payload ?? {}, priority, maxAttempts, runAfter,
       });
       return reply.code(result.created ? 201 : 200).send({
@@ -948,7 +1003,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
     if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE) {
       try {
-        const result = await enqueueChapterEventsAnalysisJob(connection.database, dataRoot, chapterTextProvider!, {
+        const result = await enqueueChapterEventsAnalysisJob(connection.database, dataRoot, requestTextProvider!, {
           payload: body.payload ?? {}, priority, maxAttempts, runAfter,
         });
         return reply.code(result.created ? 201 : 200).send({
@@ -972,7 +1027,9 @@ export function buildApp(options: BuildAppOptions = {}) {
           seriesId: string; episodeIndex: number; startChapterId?: string;
           targetDurationSeconds: number; endingPreference?: string;
         };
-        const result = enqueueEpisodeRecommendationJob(connection.database, payload, { priority, maxAttempts, runAfter });
+        const result = enqueueEpisodeRecommendationJob(
+          connection.database, requestTextProvider!, payload, { priority, maxAttempts, runAfter },
+        );
         return reply.code(result.created ? 201 : 200).send({
           ok: true,
           message: result.created ? "跨章选材推荐任务已创建并持久化" : "已恢复相同跨章选材推荐任务",
@@ -987,7 +1044,7 @@ export function buildApp(options: BuildAppOptions = {}) {
         const result = await enqueueEpisodeScriptGenerationJob(
           connection.database,
           dataRoot,
-          chapterTextProvider!,
+          requestTextProvider!,
           { payload: body.payload ?? {}, priority, maxAttempts, runAfter },
         );
         return reply.code(result.created ? 201 : 200).send({

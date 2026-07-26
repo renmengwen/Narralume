@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { openDatabase } from "./database.js";
 import {
   createEpisodeRecommendationJobHandler,
@@ -13,6 +14,13 @@ import {
 } from "./episode-recommendation-job.js";
 import { getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
+
+const config: ChapterTextModelConfig = {
+  baseUrl: "https://example.invalid/v1",
+  apiKey: "test",
+  model: "test-model",
+  providerId: "test-provider",
+};
 
 async function fixture(missingSecond = false) {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-recommend-"));
@@ -40,12 +48,12 @@ async function fixture(missingSecond = false) {
 
 async function run(missingSecond: boolean, recommend: RecommendEpisodeSources) {
   const context = await fixture(missingSecond);
-  const queued = enqueueEpisodeRecommendationJob(context.connection.database, {
+  const queued = enqueueEpisodeRecommendationJob(context.connection.database, config, {
     seriesId: "series", episodeIndex: 1, startChapterId: "chapter_1",
     targetDurationSeconds: 1200, endingPreference: "悬念",
   }, { maxAttempts: 1 });
   const worker = new JobWorker(context.connection.database, {
-    [EPISODE_RECOMMENDATION_JOB_TYPE]: createEpisodeRecommendationJobHandler(context.connection.database, recommend),
+    [EPISODE_RECOMMENDATION_JOB_TYPE]: createEpisodeRecommendationJobHandler(context.connection.database, config, recommend),
   }, { workerId: "test", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
   await worker.runOne();
   return { ...context, job: getJob(context.connection.database, queued.job.id)! };
@@ -67,7 +75,7 @@ test("推荐任务只向模型发送逐章摘要并持久化连续真实事件",
       assert.equal(serializedInput.includes(forbidden), false, `模型输入不得包含 ${forbidden}`);
     }
     assert.deepEqual((context.job.result as { chapterIds: string[]; eventIds: string[] }).chapterIds, ["chapter_1", "chapter_2"]);
-    const resumed = enqueueEpisodeRecommendationJob(context.connection.database, {
+    const resumed = enqueueEpisodeRecommendationJob(context.connection.database, config, {
       seriesId: "series", episodeIndex: 1, startChapterId: "chapter_1", targetDurationSeconds: 1200, endingPreference: "悬念",
     });
     assert.equal(resumed.created, false);
@@ -109,7 +117,7 @@ test("未指定起点时从上一 Episode 最后章节边界继续", async () =>
       VALUES ('episode_1','series',1,'第一集','弧',1200,1,1)`).run();
     db.prepare(`INSERT INTO episode_sources (episode_id,source_index,chapter_id,source_event_id,source_byte_start,source_byte_end,source_hash)
       VALUES ('episode_1',0,'chapter_1','event_1',0,1,?)`).run("a".repeat(64));
-    const queued = enqueueEpisodeRecommendationJob(db, {
+    const queued = enqueueEpisodeRecommendationJob(db, config, {
       seriesId: "series", episodeIndex: 2, targetDurationSeconds: 1200,
     });
     assert.deepEqual(
@@ -118,7 +126,7 @@ test("未指定起点时从上一 Episode 最后章节边界继续", async () =>
       ),
       { requestedStartChapterId: null, startChapterId: "chapter_2" },
     );
-    assert.throws(() => enqueueEpisodeRecommendationJob(db, {
+    assert.throws(() => enqueueEpisodeRecommendationJob(db, config, {
       seriesId: "series", episodeIndex: 3, targetDurationSeconds: 1200,
     }), /上一集不存在/);
   } finally { context.connection.close(); await rm(context.dataRoot, { recursive: true, force: true }); }
@@ -138,14 +146,14 @@ test("隐式起点的首集、续集成功结果和缺分析结果都保留原�
           VALUES ('episode_1',0,'chapter_1','event_1',0,1,?)`).run("a".repeat(64));
       }
       if (scenario === "needs-analysis") db.prepare("DELETE FROM chapter_events WHERE id = 'event_1'").run();
-      const queued = enqueueEpisodeRecommendationJob(db, {
+      const queued = enqueueEpisodeRecommendationJob(db, config, {
         seriesId: "series", episodeIndex, targetDurationSeconds: 1200,
       }, { maxAttempts: 1 });
       const payload = queued.job.payload as { requestedStartChapterId: string | null; startChapterId: string };
       assert.equal(payload.requestedStartChapterId, null);
       assert.equal(payload.startChapterId, resolvedStart);
       const worker = new JobWorker(db, {
-        [EPISODE_RECOMMENDATION_JOB_TYPE]: createEpisodeRecommendationJobHandler(db, async () => ({
+        [EPISODE_RECOMMENDATION_JOB_TYPE]: createEpisodeRecommendationJobHandler(db, config, async () => ({
           chapterIds: [resolvedStart], eventIds: [scenario === "continuation" ? "event_2" : "event_1"],
           estimatedCharacterCount: 800, advice: "保留",
         })),
@@ -163,10 +171,10 @@ test("隐式起点的首集、续集成功结果和缺分析结果都保留原�
 test("推荐任务可取消并落入持久终态", async () => {
   const context = await fixture(false);
   try {
-    const queued = enqueueEpisodeRecommendationJob(context.connection.database, {
+    const queued = enqueueEpisodeRecommendationJob(context.connection.database, config, {
       seriesId: "series", episodeIndex: 1, startChapterId: "chapter_1", targetDurationSeconds: 1200,
     }, { maxAttempts: 1 });
-    const handler = createEpisodeRecommendationJobHandler(context.connection.database, ({ signal }) =>
+    const handler = createEpisodeRecommendationJobHandler(context.connection.database, config, ({ signal }) =>
       new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true })),
     );
     const worker = new JobWorker(context.connection.database, { [EPISODE_RECOMMENDATION_JOB_TYPE]: handler }, {

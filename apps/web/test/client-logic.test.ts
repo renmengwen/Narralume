@@ -33,7 +33,7 @@ import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candida
 import type { AssetRecord, CandidateRecord } from "../src/production/assets/types.ts";
 import {
   consumeEpisodeRecommendation, createEpisodeHydrationCoordinator, emptyEpisodeDraft, episodeDraft,
-  episodePutPayload, episodeRecommendationJobMatchesIdentity,
+  episodePutPayload, episodeRecommendationJobMatchesIdentity, recommendationChapterSummaries,
   type EpisodeDraft,
 } from "../src/production/episode/episode-editor.ts";
 import { useCommittedEpisodeIdentity } from "../src/production/episode/use-episode-workspace.ts";
@@ -276,6 +276,25 @@ test("分集编辑使用可读技术策略并拒绝越界时长和空证据", ()
   assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 59 }), /60 至 3600/);
   assert.throws(() => episodePutPayload({ ...valid, targetDurationSeconds: 3601 }), /60 至 3600/);
   assert.throws(() => episodePutPayload({ ...valid, sourceEventIds: [] }), /至少选择一个/);
+});
+
+test("跨章推荐可按章节汇总入口状态", () => {
+  assert.deepEqual(recommendationChapterSummaries({
+    status: "recommended",
+    startChapterId: "chapter_1",
+    endChapterId: "chapter_2",
+    chapterIds: ["chapter_1", "chapter_2"],
+    eventIds: ["event_1", "event_2", "event_3"],
+    missingChapters: [],
+    events: [
+      { id: "event_1", chapterId: "chapter_1", type: "character", payload: { name: "吴邪", detail: "初入古墓" } },
+      { id: "event_2", chapterId: "chapter_1", type: "suspense", payload: { question: "血尸是谁" } },
+      { id: "event_3", chapterId: "chapter_2", type: "revelation", payload: { fact: "机关开启" } },
+    ],
+  }), [
+    { chapterId: "chapter_1", eventCount: 2, summary: "吴邪 / 初入古墓" },
+    { chapterId: "chapter_2", eventCount: 1, summary: "机关开启" },
+  ]);
 });
 
 test("分集基础恢复与推荐任务无论返回顺序都保留推荐结果", async (t) => {

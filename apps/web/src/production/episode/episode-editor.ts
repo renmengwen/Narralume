@@ -35,6 +35,21 @@ export function episodeDraft(episode: Episode): EpisodeDraft {
   };
 }
 
+export function recommendationChapterSummaries(recommendation?: EpisodeRecommendation) {
+  const events = recommendation?.status === "recommended" ? recommendation.events ?? [] : [];
+  const summaries = new Map<string, { chapterId: string; eventCount: number; summary: string }>();
+  for (const event of events) {
+    const current = summaries.get(event.chapterId) ?? { chapterId: event.chapterId, eventCount: 0, summary: "" };
+    const summary = Object.values(event.payload).filter(Boolean).join(" / ");
+    summaries.set(event.chapterId, {
+      chapterId: event.chapterId,
+      eventCount: current.eventCount + 1,
+      summary: current.summary || summary || event.type,
+    });
+  }
+  return [...summaries.values()];
+}
+
 function recommendationStatus(recommendation: EpisodeRecommendation) {
   return recommendation.status === "recommended" && recommendation.eventIds
     ? `推荐完成：${recommendation.chapterIds?.length ?? 0} 章、${recommendation.eventIds.length} 个事件，等待明确确认`

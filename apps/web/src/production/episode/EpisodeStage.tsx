@@ -1,24 +1,29 @@
 import { useState } from "react";
 
 import type { Chapter, JobRecord } from "../types";
+import { recommendationChapterSummaries } from "./episode-editor";
 import { useEpisodeWorkspace } from "./use-episode-workspace";
 
 function summary(payload: Record<string, string>) { return Object.values(payload).filter(Boolean).join(" → "); }
 
 export function EpisodeStage({
   bookId, seriesId, episodeIndex, chapters, startChapterId, currentJob, busy, setBusy, setStatus,
-  onEpisodeChange, onStartChapterChange, onJobCreated,
+  onEpisodeChange, onStartChapterChange, onJobCreated, onOpenScripts,
 }: {
   bookId: string; seriesId: string; episodeIndex: number; chapters: Chapter[]; startChapterId?: string;
   currentJob?: JobRecord; busy: boolean; setBusy: (busy: boolean) => void;
   setStatus: (message: string) => void; onEpisodeChange: (index: number) => void;
   onStartChapterChange: (id: string | undefined) => void; onJobCreated: (id?: string) => void;
+  onOpenScripts: () => void;
 }) {
   const [endingPreference, setEndingPreference] = useState("");
   const state = useEpisodeWorkspace({
     bookId, seriesId, episodeIndex, startChapterId, currentJob, busy, setBusy, setStatus, onJobCreated,
   });
   const selected = new Set(state.draft.sourceEventIds);
+  const chapterTitle = new Map(chapters.map((chapter) => [chapter.id, `${chapter.chapter_index + 1}. ${chapter.title}`]));
+  const recommendationChapters = recommendationChapterSummaries(state.recommendation);
+  const persistedChapters = [...new Set(state.episode?.sources.map((source) => source.chapterId) ?? [])];
   const toggle = (id: string) => state.updateDraft({
     sourceEventIds: selected.has(id)
       ? state.draft.sourceEventIds.filter((item) => item !== id)
@@ -38,8 +43,12 @@ export function EpisodeStage({
       <p className="mt-3 text-xs leading-6 text-[var(--fg-tertiary)]">推荐只读取逐章结构化事件摘要，不拼接多章全文；未确认前不会写入 Episode。</p>
       {state.recommendation ? <div className="mt-6 border-t border-[var(--border-subtle)] pt-4">
         {state.recommendation.status === "recommended" ? <>
-          <p className="text-sm font-semibold">范围：{state.recommendation.startChapterId} → {state.recommendation.endChapterId}</p>
+          <p className="text-sm font-semibold">多章范围：{chapterTitle.get(state.recommendation.startChapterId) ?? state.recommendation.startChapterId} → {chapterTitle.get(state.recommendation.endChapterId ?? "") ?? state.recommendation.endChapterId}</p>
           <p className="mt-2 text-xs text-[var(--fg-secondary)]">{state.recommendation.chapterIds?.length} 章 · 预计 {state.recommendation.estimatedCharacterCount} 字 / {state.recommendation.estimatedDurationSeconds} 秒 · 建议{state.recommendation.advice}</p>
+          <div className="mt-4 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3">
+            <p className="text-xs font-semibold">逐章摘要</p>
+            <div className="mt-2 space-y-2">{recommendationChapters.map((chapter) => <p key={chapter.chapterId} className="text-xs leading-5 text-[var(--fg-secondary)]"><b>{chapterTitle.get(chapter.chapterId) ?? chapter.chapterId}</b> · {chapter.eventCount} 个事件 · {chapter.summary}</p>)}</div>
+          </div>
           <div className="mt-4 space-y-2">{state.recommendation.events?.map((event) => <label key={event.id} className="flex gap-3 rounded border border-[var(--border-subtle)] p-3 text-sm"><input type="checkbox" disabled={busy} checked={selected.has(event.id)} onChange={() => toggle(event.id)} /><span><b className="block text-xs">{event.chapterId} · {event.type}</b>{summary(event.payload)}</span></label>)}</div>
         </> : null}
         {state.recommendation.missingChapters.map((chapter) => <div key={chapter.id} className="mt-3 rounded border border-[var(--border-subtle)] p-3 text-xs text-[var(--fg-secondary)]"><p>缺少事件分析：{chapter.title}（{chapter.id}），不能当作无剧情。</p><button type="button" disabled={busy} onClick={() => void state.analyzeMissing(chapter.id)} className="mt-2 font-semibold text-[var(--accent)] disabled:opacity-50">复用单章分析任务补齐</button></div>)}
@@ -56,6 +65,15 @@ export function EpisodeStage({
         <button type="button" disabled={busy || !state.draft.sourceEventIds.length} onClick={() => void state.save()} className="rounded bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{busy ? "处理中…" : "明确确认并保存选材"}</button>
       </div>
     </section>
-    <section className="bg-[color-mix(in_srgb,var(--bg-surface)_86%,var(--bg-canvas))]"><div className="flex h-12 items-center justify-between border-b border-[var(--border-subtle)] px-4"><h2 className="text-xs font-bold tracking-wider">持久证据快照</h2><span className="font-mono text-[10px] text-[var(--fg-tertiary)]">READ ONLY</span></div><div className="space-y-4 p-6">{state.episode?.sources.map((source) => <article key={source.sourceIndex} className="border-b border-[var(--border-subtle)] pb-4"><p className="font-mono text-[10px] text-[var(--fg-tertiary)]">{source.chapterId} · {source.byteStart}–{source.byteEnd}</p><p className="my-2 text-sm leading-6">{source.sourceText}</p><p className="break-all font-mono text-[9px] text-[var(--fg-tertiary)]">SHA-256 {source.sourceHash}</p></article>)}{!state.episode ? <p className="text-sm leading-7 text-[var(--fg-tertiary)]">确认后显示服务端 GET 回读的跨章原文、字节范围与哈希。</p> : null}</div></section>
+    <section className="bg-[color-mix(in_srgb,var(--bg-surface)_86%,var(--bg-canvas))]"><div className="flex h-12 items-center justify-between border-b border-[var(--border-subtle)] px-4"><h2 className="text-xs font-bold tracking-wider">持久证据快照</h2><span className="font-mono text-[10px] text-[var(--fg-tertiary)]">READ ONLY</span></div><div className="space-y-4 p-6">
+      <div className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-4">
+        <p className="text-xs font-semibold">生产入口状态</p>
+        {state.episode ? <>
+          <p className="mt-2 text-sm leading-6">已冻结 {state.episode.sources.length} 条来源，覆盖 {persistedChapters.length} 章：{persistedChapters.map((id) => chapterTitle.get(id) ?? id).join("、")}</p>
+          <button type="button" disabled={busy} onClick={onOpenScripts} className="mt-3 rounded bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">进入稿件阶段生成长稿</button>
+        </> : <p className="mt-2 text-sm leading-7 text-[var(--fg-tertiary)]">先推荐多章范围、确认来源并保存 Episode；保存后可进入稿件阶段触发 episode_scripts_generate。</p>}
+      </div>
+      {state.episode?.sources.map((source) => <article key={source.sourceIndex} className="border-b border-[var(--border-subtle)] pb-4"><p className="font-mono text-[10px] text-[var(--fg-tertiary)]">{source.chapterId} · {source.byteStart}–{source.byteEnd}</p><p className="my-2 text-sm leading-6">{source.sourceText}</p><p className="break-all font-mono text-[9px] text-[var(--fg-tertiary)]">SHA-256 {source.sourceHash}</p></article>)}
+    </div></section>
   </div>;
 }

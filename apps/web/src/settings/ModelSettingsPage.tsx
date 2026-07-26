@@ -170,7 +170,7 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
                   onClick={() => setSelectedProviderId(provider.id)}
                 >
                   <strong className="block">{provider.name}</strong>
-                  <span className="mt-1 block font-mono text-[11px] text-[var(--fg-tertiary)]">{provider.kind} · {provider.kind === "edge-tts" ? "内置默认" : provider.hasApiKey ? "已保存密钥" : "待配置"}</span>
+                  <span className="mt-1 block font-mono text-[11px] text-[var(--fg-tertiary)]">{provider.kind === "edge-tts" ? "内置默认" : provider.hasApiKey ? "已保存密钥" : "待配置"}</span>
                   <span className="mt-1 block truncate text-xs text-[var(--fg-secondary)]">{enabledModelSummary(provider)}</span>
                 </button>
               ))}
@@ -238,27 +238,6 @@ function ProviderEditor({
   onDelete: (provider: ModelProvider) => void;
 }) {
   const credentialed = provider.kind !== "edge-tts";
-  function changeKind(kind: ModelProvider["kind"]) {
-    const defaults = {
-      minimax: { baseUrl: "https://api.minimaxi.com/v1", ttsModel: "speech-2.8-hd", voiceId: "Chinese_deep_voiced_male_nv1" },
-      mimo: { baseUrl: "https://api.xiaomimimo.com/v1", ttsModel: "mimo-v2.5-tts", voiceId: "mimo_default" },
-      "openai-compatible": { baseUrl: "https://api.openai.com/v1", ttsModel: provider.models.tts.modelId, voiceId: provider.models.tts.voiceId ?? "" },
-      "edge-tts": { baseUrl: "", ttsModel: "node-edge-tts", voiceId: "zh-CN-YunjianNeural" },
-    }[kind];
-    onChange({
-      ...provider,
-      kind,
-      baseUrl: provider.baseUrl || defaults.baseUrl,
-      models: {
-        ...provider.models,
-        tts: {
-          ...provider.models.tts,
-          modelId: provider.models.tts.modelId || defaults.ttsModel,
-          voiceId: provider.models.tts.voiceId || defaults.voiceId,
-        },
-      },
-    });
-  }
   return (
     <section className="mt-5 border border-[var(--border-subtle)]">
       <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3">
@@ -275,14 +254,6 @@ function ProviderEditor({
         <label className="grid gap-2">
           <span className="text-xs font-semibold text-[var(--fg-tertiary)]">供应商名称</span>
           <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" value={provider.name} onChange={(event) => onChange({ ...provider, name: event.target.value })} />
-        </label>
-        <label className="grid gap-2">
-          <span className="text-xs font-semibold text-[var(--fg-tertiary)]">供应商类型</span>
-          <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm" disabled={provider.kind === "edge-tts"} value={provider.kind} onChange={(event) => changeKind(event.target.value as ModelProvider["kind"])}>
-            <option value="openai-compatible">OpenAI 兼容</option>
-            <option value="minimax">MiniMax</option>
-            <option value="mimo">MiMo</option>
-          </select>
         </label>
         {credentialed ? (
           <>

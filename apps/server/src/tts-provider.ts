@@ -1,10 +1,21 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { EdgeTTS } from "node-edge-tts";
+
+import type { RuntimeModelConfig } from "./model-config.js";
 
 const PROVIDER_VERSION = "windows-system-speech-v1";
+const EDGE_PROVIDER_VERSION = "edge-tts-v1";
+const HTTP_PROVIDER_VERSION = "http-tts-v1";
 const MAX_PROCESS_OUTPUT = 64 * 1024;
+const EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_EDGE_VOICE = "zh-CN-YunjianNeural";
+const DEFAULT_EDGE_LANGUAGE = "zh-CN";
+const DEFAULT_TTS_TIMEOUT_MS = 60_000;
+const DEFAULT_TTS_QUEUE_INTERVAL_MS = 1_800;
+const ttsQueues = new Map<string, Promise<void>>();
 export const SYSTEM_SPEECH_UTF8_INPUT = "[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)";
 const POWERSHELL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
@@ -33,6 +44,32 @@ export interface SystemSpeechInput {
   voice?: string;
   rate?: number;
   contractVersion?: string;
+}
+
+export interface TtsWordBoundary {
+  part: string;
+  startMs: number;
+  endMs: number;
+}
+
+export interface TtsSynthesisResult {
+  providerId: string;
+  voice: string;
+  rate: number;
+  inputHash: string;
+  outputPath: string;
+  bytes: number;
+  wordBoundaries?: TtsWordBoundary[];
+}
+
+export interface TtsSynthesisInput extends SystemSpeechInput {
+  runtime?: RuntimeModelConfig | null;
+  fetchImpl?: typeof fetch;
+  waitImpl?: (ms: number) => Promise<void>;
+  requestTimeoutMs?: number;
+  queueIntervalMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
 }
 
 export interface SystemSpeechWavProbe {
@@ -99,6 +136,284 @@ export function systemSpeechInputHash(input: Pick<SystemSpeechInput,
     rate,
     contractVersion: input.contractVersion,
   })).digest("hex");
+}
+
+function configuredTtsIdentity(input: TtsSynthesisInput, runtime: RuntimeModelConfig) {
+  const modelVoice = runtime.voiceId || input.voice || DEFAULT_EDGE_VOICE;
+  return {
+    contract: runtime.providerKind === "edge-tts" ? EDGE_PROVIDER_VERSION : HTTP_PROVIDER_VERSION,
+    providerId: runtime.providerId,
+    providerKind: runtime.providerKind,
+    modelId: runtime.modelId,
+    voice: modelVoice,
+    language: runtime.language || DEFAULT_EDGE_LANGUAGE,
+    gender: runtime.gender || "",
+    rate: input.rate ?? 0,
+    contractVersion: input.contractVersion,
+  };
+}
+
+export function ttsInputHash(input: Pick<TtsSynthesisInput,
+  "text" | "scriptVersionId" | "contentHash" | "voice" | "rate" | "contractVersion" | "runtime">) {
+  if (!input.runtime) return systemSpeechInputHash(input);
+  return createHash("sha256").update(JSON.stringify({
+    ...configuredTtsIdentity(input as TtsSynthesisInput, input.runtime),
+    scriptVersionId: input.scriptVersionId,
+    contentHash: input.contentHash,
+    text: input.text,
+  })).digest("hex");
+}
+
+function rateToEdge(value: number | undefined) {
+  const rate = value ?? 0;
+  if (rate === 0) return "default";
+  return `${rate > 0 ? "+" : ""}${Math.max(-100, Math.min(100, rate * 10))}%`;
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+function normalizeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "未知错误");
+}
+
+function shouldRetryStatus(status: number) {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+async function enqueueTtsRequest<T>(queueKey: string, task: () => Promise<T>, intervalMs = DEFAULT_TTS_QUEUE_INTERVAL_MS) {
+  const previous = ttsQueues.get(queueKey) ?? Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+  ttsQueues.set(queueKey, previous.catch(() => undefined).then(() => tail));
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    if (intervalMs > 0) await wait(intervalMs);
+    release();
+  }
+}
+
+async function transcodeToSystemWav(inputPath: string, outputPath: string, signal?: AbortSignal) {
+  const temporaryPath = `${outputPath}.${randomUUID()}.tmp.wav`;
+  let published = false;
+  try {
+    const child = spawn("ffmpeg", [
+      "-y", "-v", "error", "-i", inputPath,
+      "-ac", "1", "-ar", "22050", "-c:a", "pcm_s16le", temporaryPath,
+    ], { windowsHide: true, shell: false, signal });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8192); });
+    const code = await new Promise<number | null>((resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("close", resolvePromise);
+    });
+    if (signal?.aborted) throw new TtsCancelledError("语音生成已取消");
+    if (code !== 0) throw new TtsProviderError(`语音格式转换失败${stderr.trim() ? `：${stderr.trim()}` : ""}`);
+    await probeSystemSpeechWav(temporaryPath, signal);
+    await rename(temporaryPath, outputPath);
+    published = true;
+  } finally {
+    if (!published) await rm(temporaryPath, { force: true });
+  }
+}
+
+export function parseEdgeSubtitleJson(value: unknown): TtsWordBoundary[] {
+  if (!Array.isArray(value)) throw new TtsProviderError("Edge TTS 字幕不是数组");
+  if (value.length > 10_000) throw new TtsProviderError("Edge TTS 字幕数量超过限制");
+  let previousEnd = 0;
+  return value.map((item) => {
+    const raw = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const part = typeof raw.part === "string" ? raw.part : "";
+    const startMs = Number(raw.start);
+    const endMs = Number(raw.end);
+    if (!part || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs < startMs || startMs < previousEnd) {
+      throw new TtsProviderError("Edge TTS 字幕时间边界无效");
+    }
+    previousEnd = endMs;
+    return { part, startMs: Math.round(startMs), endMs: Math.round(endMs) };
+  });
+}
+
+async function synthesizeEdgeTts(input: TtsSynthesisInput, runtime: RuntimeModelConfig): Promise<TtsSynthesisResult> {
+  const text = input.text.trim();
+  if (!text) throw new TtsProviderError("语音文本不能为空");
+  const outputPath = resolve(input.outputPath);
+  const outputDirectory = dirname(outputPath);
+  const temporaryAudio = join(outputDirectory, `.${basename(outputPath)}.${randomUUID()}.tmp.mp3`);
+  const subtitlePath = `${temporaryAudio}.json`;
+  await mkdir(outputDirectory, { recursive: true });
+  let published = false;
+  try {
+    const tts = new EdgeTTS({
+      voice: runtime.voiceId || DEFAULT_EDGE_VOICE,
+      lang: runtime.language || DEFAULT_EDGE_LANGUAGE,
+      outputFormat: EDGE_OUTPUT_FORMAT,
+      saveSubtitles: true,
+      rate: rateToEdge(input.rate),
+      pitch: "default",
+      volume: "default",
+      timeout: input.requestTimeoutMs ?? 10_000,
+    });
+    await tts.ttsPromise(text, temporaryAudio);
+    const temporaryInfo = await stat(temporaryAudio);
+    if (!temporaryInfo.isFile() || temporaryInfo.size < 1_024) throw new TtsProviderError("Edge TTS 未返回有效音频");
+    const wordBoundaries = parseEdgeSubtitleJson(JSON.parse(await readFile(subtitlePath, "utf8")));
+    if (wordBoundaries.length === 0 && runtime.wordBoundary) throw new TtsProviderError("Edge TTS 未返回逐词边界");
+    await transcodeToSystemWav(temporaryAudio, outputPath, input.signal);
+    const info = await stat(outputPath);
+    published = true;
+    return {
+      providerId: runtime.providerId,
+      voice: runtime.voiceId || DEFAULT_EDGE_VOICE,
+      rate: input.rate ?? 0,
+      inputHash: ttsInputHash({ ...input, text, runtime }),
+      outputPath,
+      bytes: info.size,
+      wordBoundaries,
+    };
+  } catch (error) {
+    if (input.signal?.aborted || (error as NodeJS.ErrnoException).name === "AbortError") throw new TtsCancelledError("语音生成已取消");
+    if (error instanceof TtsProviderError) throw error;
+    throw new TtsProviderError(`Edge TTS 生成失败：${normalizeError(error)}`);
+  } finally {
+    await rm(temporaryAudio, { force: true });
+    await rm(subtitlePath, { force: true });
+    if (!published) await rm(outputPath, { force: true });
+  }
+}
+
+async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+function extractHttpAudio(payload: unknown, providerKind: RuntimeModelConfig["providerKind"]) {
+  const root = payload && typeof payload === "object" ? payload as Record<string, any> : {};
+  if (providerKind === "minimax") return root.data?.audio || root.audio || "";
+  return root.choices?.[0]?.message?.audio?.data
+    || root.choices?.[0]?.message?.audio?.audio
+    || root.choices?.[0]?.audio?.data
+    || root.choices?.[0]?.audio?.audio
+    || root.audio?.data
+    || root.audio?.audio
+    || root.audio_data
+    || root.audioContent
+    || root.data
+    || "";
+}
+
+export async function callHttpTtsModel(input: TtsSynthesisInput, runtime: RuntimeModelConfig): Promise<Buffer> {
+  const text = input.text.trim();
+  if (!text) throw new TtsProviderError("语音文本不能为空");
+  if ((runtime.providerKind !== "minimax" && runtime.providerKind !== "mimo") || !runtime.apiKey || !runtime.baseUrl || !runtime.modelId) {
+    throw new TtsProviderError("TTS 模型未配置");
+  }
+  const isMiniMax = runtime.providerKind === "minimax";
+  const timeoutMs = input.requestTimeoutMs ?? DEFAULT_TTS_TIMEOUT_MS;
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const retryLimit = Math.max(0, input.maxRetries ?? 2);
+  const retryDelayMs = Math.max(0, input.retryDelayMs ?? 1_500);
+  const url = `${runtime.baseUrl}${isMiniMax ? "/t2a_v2" : "/chat/completions"}`;
+  let response: Response | undefined;
+  let payload: unknown;
+  for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
+    response = await enqueueTtsRequest(`${runtime.providerId}:${runtime.baseUrl}:${runtime.modelId}`, async () =>
+      fetchJsonWithTimeout(fetchImpl, url, {
+        method: "POST",
+        headers: isMiniMax ? {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${runtime.apiKey}`,
+        } : {
+          "Content-Type": "application/json",
+          "api-key": runtime.apiKey,
+        },
+        body: JSON.stringify(isMiniMax ? {
+          model: runtime.modelId,
+          text,
+          stream: false,
+          output_format: "hex",
+          voice_setting: {
+            voice_id: runtime.voiceId || "Chinese_deep_voiced_male_nv1",
+            speed: 1,
+            vol: 1,
+            pitch: 0,
+          },
+          audio_setting: {
+            sample_rate: 32000,
+            bitrate: 128000,
+            format: "wav",
+            channel: 1,
+          },
+          subtitle_enable: false,
+        } : {
+          model: runtime.modelId,
+          messages: [
+            { role: "user", content: "请使用自然、清晰、适合说书旁白的语气。" },
+            { role: "assistant", content: text },
+          ],
+          modalities: ["text", "audio"],
+          audio: { format: "wav", voice: runtime.voiceId || "mimo_default" },
+        }),
+      }, timeoutMs, input.signal),
+      input.queueIntervalMs ?? DEFAULT_TTS_QUEUE_INTERVAL_MS,
+    );
+    payload = await response.json().catch(() => null);
+    if (!shouldRetryStatus(response.status) || attempt >= retryLimit) break;
+    const delay = [502, 503, 504].includes(response.status) ? retryDelayMs * (2 ** attempt) : retryDelayMs * (attempt + 1);
+    await (input.waitImpl ?? wait)(delay);
+  }
+  if (!response?.ok) throw new TtsProviderError(`TTS 模型请求失败：HTTP ${response?.status ?? 0}`);
+  if (isMiniMax) {
+    const root = payload && typeof payload === "object" ? payload as Record<string, any> : {};
+    if (Number(root.base_resp?.status_code || 0) !== 0) throw new TtsProviderError(`MiniMax TTS 失败：${root.base_resp?.status_msg || "接口返回错误"}`);
+  }
+  const audio = extractHttpAudio(payload, runtime.providerKind);
+  if (typeof audio !== "string" || !audio) throw new TtsProviderError("TTS 模型未返回有效音频");
+  return Buffer.from(audio, isMiniMax ? "hex" : "base64");
+}
+
+async function synthesizeHttpTts(input: TtsSynthesisInput, runtime: RuntimeModelConfig): Promise<TtsSynthesisResult> {
+  const outputPath = resolve(input.outputPath);
+  const outputDirectory = dirname(outputPath);
+  const temporaryAudio = join(outputDirectory, `.${basename(outputPath)}.${randomUUID()}.tmp.wav`);
+  let published = false;
+  try {
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(temporaryAudio, await callHttpTtsModel(input, runtime));
+    await transcodeToSystemWav(temporaryAudio, outputPath, input.signal);
+    const info = await stat(outputPath);
+    published = true;
+    return {
+      providerId: runtime.providerId,
+      voice: runtime.voiceId || "",
+      rate: input.rate ?? 0,
+      inputHash: ttsInputHash({ ...input, runtime }),
+      outputPath,
+      bytes: info.size,
+    };
+  } finally {
+    await rm(temporaryAudio, { force: true });
+    if (!published) await rm(outputPath, { force: true });
+  }
+}
+
+export async function synthesizeConfiguredTts(input: TtsSynthesisInput): Promise<TtsSynthesisResult> {
+  if (!input.runtime) return synthesizeSystemSpeech(input);
+  if (input.runtime.providerKind === "edge-tts") return synthesizeEdgeTts(input, input.runtime);
+  if (input.runtime.providerKind === "minimax" || input.runtime.providerKind === "mimo") return synthesizeHttpTts(input, input.runtime);
+  return synthesizeSystemSpeech(input);
 }
 
 export async function synthesizeSystemSpeech(input: SystemSpeechInput) {

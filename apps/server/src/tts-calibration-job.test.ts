@@ -10,6 +10,7 @@ import { openDatabase } from "./database.js";
 import { enqueueEpisodeScriptGenerationJob } from "./episode-script-generation-job.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
+import type { RuntimeModelConfig } from "./model-config.js";
 import { changeScriptApproval } from "./script-approval-store.js";
 import {
   createTtsCalibrationJobHandler,
@@ -66,6 +67,22 @@ function wav(seedByte = 1) {
   bytes.write("WAVE", 8, "ascii");
   return bytes;
 }
+
+const edgeRuntime: RuntimeModelConfig = {
+  enabled: true,
+  type: "tts",
+  providerId: "edge-tts",
+  providerName: "Edge TTS",
+  providerKind: "edge-tts",
+  baseUrl: "",
+  apiKey: "",
+  modelId: "node-edge-tts",
+  voiceId: "zh-CN-YunjianNeural",
+  voiceLabel: "Chinese - China - Yunjian",
+  language: "zh-CN",
+  gender: "male",
+  wordBoundary: true,
+};
 
 test("双短样生成、append-only 选择、恢复与 WAV 完整验证", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-tts-cal-"));
@@ -240,6 +257,34 @@ test("批准漂移、失败和取消不会产生伪成功校准", async () => {
     await running;
     assert.equal(getJob(connection.database, cancelled.id)?.status, "cancelled");
     assert.equal(getJob(connection.database, cancelled.id)?.result, null);
+  } finally {
+    connection.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("短样校准消费当前 TTS runtime provider 身份", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-tts-cal-runtime-"));
+  const connection = openDatabase(dataRoot);
+  try {
+    await seed(dataRoot, connection.database);
+    let consumedRuntime: RuntimeModelConfig | null | undefined;
+    const job = enqueueTtsCalibrationJob(connection.database, { mode: "generate", episodeId: "episode_cal" }, { maxAttempts: 1 });
+    const worker = new JobWorker(connection.database, {
+      [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot, {
+        runtime: async () => edgeRuntime,
+        synthesize: async (input) => {
+          consumedRuntime = input.runtime;
+          await writeFile(input.outputPath, wav(7));
+          return { providerId: edgeRuntime.providerId, voice: edgeRuntime.voiceId!, rate: input.rate!, inputHash: "x", outputPath: input.outputPath, bytes: 64 };
+        },
+        probe: async () => ({ bytes: 64, durationMs: 4_000 }),
+      }),
+    }, { workerId: "cal-runtime", leaseMs: 5_000, heartbeatMs: 50 });
+    assert.equal(await worker.runOne(), true);
+    const result = getJob(connection.database, job.id)!.result as { samples: TtsCalibrationSample[] };
+    assert.equal(consumedRuntime?.providerId, "edge-tts");
+    assert(result.samples.every((sample) => sample.providerId === "edge-tts" && sample.voice === "zh-CN-YunjianNeural"));
   } finally {
     connection.close();
     await rm(dataRoot, { recursive: true, force: true });

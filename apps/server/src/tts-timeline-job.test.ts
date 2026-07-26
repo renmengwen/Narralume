@@ -10,6 +10,7 @@ import { changeScriptApproval } from "./script-approval-store.js";
 import { openDatabase } from "./database.js";
 import { claimNextJob, createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker, type JobExecutionContext } from "./job-worker.js";
+import type { RuntimeModelConfig } from "./model-config.js";
 import { createTtsTimelineJobHandler, TTS_TIMELINE_JOB_TYPE } from "./tts-timeline-job.js";
 import type { SystemSpeechInput } from "./tts-provider.js";
 import { TtsCancelledError } from "./tts-provider.js";
@@ -37,6 +38,22 @@ function seedEpisode(database: ReturnType<typeof openDatabase>["database"]) {
     { text: "第二段真实旁白。", sourceIndexes: [0] },
   ] }), "a".repeat(64));
 }
+
+const edgeRuntime: RuntimeModelConfig = {
+  enabled: true,
+  type: "tts",
+  providerId: "edge-tts",
+  providerName: "Edge TTS",
+  providerKind: "edge-tts",
+  baseUrl: "",
+  apiKey: "",
+  modelId: "node-edge-tts",
+  voiceId: "zh-CN-YunjianNeural",
+  voiceLabel: "Chinese - China - Yunjian",
+  language: "zh-CN",
+  gender: "male",
+  wordBoundary: true,
+};
 
 test("批准稿按真实音频段建立可恢复时间轴并复用内容寻址文件", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-tts-timeline-"));
@@ -215,6 +232,59 @@ test("默认任务 API 只为已批准稿创建语音时间轴任务", async () 
     assert.equal(created.json().job.type, TTS_TIMELINE_JOB_TYPE);
   } finally {
     await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("语音时间轴消费当前 TTS runtime 并登记 provider 身份", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-tts-runtime-"));
+  const connection = openDatabase(dataRoot);
+  try {
+    seedEpisode(connection.database);
+    changeScriptApproval(connection.database, "episode_tts", {
+      action: "approve", expectedRevision: 0, scriptVersionId: "script_tts",
+    });
+    let consumedRuntime: RuntimeModelConfig | null | undefined;
+    const handler = createTtsTimelineJobHandler(connection.database, dataRoot, {
+      runtime: async () => edgeRuntime,
+      synthesize: async (input) => {
+        consumedRuntime = input.runtime;
+        await writeFile(input.outputPath, Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(60, 8)]));
+        return {
+          providerId: edgeRuntime.providerId,
+          voice: edgeRuntime.voiceId!,
+          rate: input.rate!,
+          inputHash: "x",
+          outputPath: input.outputPath,
+          bytes: 64,
+          wordBoundaries: [{ part: "吴邪", startMs: 0, endMs: 400 }, { part: "墓道", startMs: 400, endMs: 900 }],
+        };
+      },
+      probe: async (path) => ({ bytes: (await stat(path)).size, durationMs: 1_000 }),
+    });
+    const job = createJob(connection.database, { type: TTS_TIMELINE_JOB_TYPE, payload: { episodeId: "episode_tts" }, maxAttempts: 1 });
+    const worker = new JobWorker(connection.database, { [TTS_TIMELINE_JOB_TYPE]: handler }, {
+      workerId: "tts-runtime", leaseMs: 5_000, heartbeatMs: 50,
+    });
+    assert.equal(await worker.runOne(), true);
+    assert.equal(getJob(connection.database, job.id)?.status, "succeeded");
+    assert.equal(consumedRuntime?.providerId, "edge-tts");
+    const rows = connection.database.prepare(
+      "SELECT provider_id, voice FROM audio_segments WHERE episode_id = ?",
+    ).all("episode_tts") as unknown as Array<{ provider_id: string; voice: string }>;
+    assert(rows.length > 0);
+    assert(rows.every((row) => row.provider_id === "edge-tts" && row.voice === "zh-CN-YunjianNeural"));
+    const cues = connection.database.prepare(
+      "SELECT segment_index, start_ms, end_ms, text FROM subtitle_cues WHERE episode_id = ? ORDER BY cue_index LIMIT 2",
+    ).all("episode_tts") as unknown as Array<{ segment_index: number; start_ms: number; end_ms: number; text: string }>;
+    assert.deepEqual(cues.map((cue) => ({ ...cue })), [
+      { segment_index: 0, start_ms: 0, end_ms: 400, text: "吴邪" },
+      { segment_index: 0, start_ms: 400, end_ms: 900, text: "墓道" },
+    ]);
+    const result = getJob(connection.database, job.id)?.result as { srtRelativePath: string };
+    assert.match(await readFile(join(dataRoot, result.srtRelativePath), "utf8"), /吴邪/);
+  } finally {
+    connection.close();
     await rm(dataRoot, { recursive: true, force: true });
   }
 });

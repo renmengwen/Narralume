@@ -6,8 +6,16 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { createJob, getJob, type CreateJobInput } from "./job-store.js";
 import { JobCancelledError, type JobExecutionContext, type JobHandler } from "./job-worker.js";
+import { readModelConfig, resolveRuntimeModelConfig, type RuntimeModelConfig } from "./model-config.js";
 import { requireApprovedScriptForProduction } from "./script-approval-store.js";
-import { probeSystemSpeechWav, synthesizeSystemSpeech, systemSpeechInputHash, TtsCancelledError } from "./tts-provider.js";
+import {
+  probeSystemSpeechWav,
+  synthesizeConfiguredTts,
+  synthesizeSystemSpeech,
+  ttsInputHash,
+  TtsCancelledError,
+  type TtsSynthesisInput,
+} from "./tts-provider.js";
 
 export const TTS_CALIBRATION_JOB_TYPE = "tts_calibration";
 const CONTRACT = "tts-calibration-v1";
@@ -46,7 +54,7 @@ export interface TtsCalibrationSample {
   charactersPerSecond: number;
   voice: string;
   rate: number;
-  providerId: "windows-system-speech";
+  providerId: string;
   relativePath: string;
   fileHash: string;
   bytes: number;
@@ -75,8 +83,9 @@ export interface TtsCalibrationSelection extends CalibrationIdentity {
 }
 
 interface Dependencies {
-  synthesize: typeof synthesizeSystemSpeech;
+  synthesize: (input: TtsSynthesisInput) => Promise<Awaited<ReturnType<typeof synthesizeSystemSpeech>>>;
   probe: typeof probeSystemSpeechWav;
+  runtime: () => Promise<RuntimeModelConfig | null>;
 }
 
 function sha256(value: string | Buffer) {
@@ -219,11 +228,15 @@ export function createTtsCalibrationJobHandler(
   dataRoot: string,
   dependencies: Partial<Dependencies> = {},
 ): JobHandler {
-  const synthesize = dependencies.synthesize ?? synthesizeSystemSpeech;
+  const synthesize = dependencies.synthesize ?? synthesizeConfiguredTts;
   const probe = dependencies.probe ?? probeSystemSpeechWav;
+  const runtimeResolver = dependencies.runtime ?? (dependencies.synthesize
+    ? async () => null
+    : async () => resolveRuntimeModelConfig("tts", await readModelConfig(dataRoot)));
   return async (context: JobExecutionContext) => {
     const payload = parsePayload(context.job.payload);
     assertIdentity(database, payload);
+    const runtime = await runtimeResolver();
     if (payload.mode === "select") {
       const generated = succeededResult(database, payload.generateJobId);
       if (generated.mode !== "generate" || generated.episodeId !== payload.episodeId) throw new Error("父短样生成任务身份无效");
@@ -247,15 +260,18 @@ export function createTtsCalibrationJobHandler(
     const directory = resolve(dataRoot, "episodes", payload.episodeId, "audio", "calibration");
     await mkdir(directory, { recursive: true });
     const samples: TtsCalibrationSample[] = [];
+    const providerId = runtime?.providerId ?? "windows-system-speech";
+    const providerVoice = runtime?.voiceId;
     for (const [index, combination] of payload.combinations.entries()) {
       context.throwIfCancellationRequested();
-      const inputHash = systemSpeechInputHash({
+      const inputHash = ttsInputHash({
         text: payload.exactText,
         scriptVersionId: payload.scriptVersionId,
         contentHash: payload.contentHash,
         voice: combination.voice,
         rate: combination.rate,
         contractVersion: CONTRACT,
+        runtime,
       });
       const outputPath = resolve(directory, `${inputHash}.wav`);
       let exists = true;
@@ -275,6 +291,7 @@ export function createTtsCalibrationJobHandler(
             voice: combination.voice,
             rate: combination.rate,
             contractVersion: CONTRACT,
+            runtime,
             signal: controller.signal,
           });
         } catch (error) {
@@ -293,9 +310,9 @@ export function createTtsCalibrationJobHandler(
         characterCountMethod: payload.characterCountMethod,
         durationMs: measured.durationMs,
         charactersPerSecond,
-        voice: combination.voice,
+        voice: providerVoice || combination.voice,
         rate: combination.rate,
-        providerId: "windows-system-speech",
+        providerId,
         relativePath: relativePath(dataRoot, outputPath),
         fileHash: await sha256File(outputPath),
         bytes: measured.bytes,

@@ -26,6 +26,24 @@ export function seriesWorkspaceFromSearch(search: string) {
   return bookId && seriesId ? { bookId, seriesId } : undefined;
 }
 
+export function isModelSettingsSearch(search: string) {
+  return new URLSearchParams(search).get("settings") === "models";
+}
+
+export function withModelSettingsSearch(search: string) {
+  const parameters = new URLSearchParams(search);
+  parameters.set("settings", "models");
+  const value = parameters.toString();
+  return value ? `?${value}` : "";
+}
+
+export function withoutModelSettingsSearch(search: string) {
+  const parameters = new URLSearchParams(search);
+  parameters.delete("settings");
+  const value = parameters.toString();
+  return value ? `?${value}` : "";
+}
+
 export async function responseJson<T>(response: Response): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
   const body = contentType.includes("application/json")

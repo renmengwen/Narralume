@@ -2,14 +2,18 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   chapterPagePath,
+  isModelSettingsSearch,
   resolveTheme,
   resolveThemePreference,
   responseJson,
   seriesWorkspaceFromSearch,
   seriesWorkspacePath,
   type ThemePreference,
+  withModelSettingsSearch,
+  withoutModelSettingsSearch,
 } from "./client-logic";
 import { ProductionWorkspace } from "./ProductionWorkspace";
+import { ModelSettingsPage } from "./settings/ModelSettingsPage";
 
 interface Book {
   id: string;
@@ -42,6 +46,7 @@ export function App() {
   const [chapterTotal, setChapterTotal] = useState(0);
   const [selectedBook, setSelectedBook] = useState<string>();
   const [activeSeries, setActiveSeries] = useState<SeriesProject>();
+  const [showModelSettings, setShowModelSettings] = useState(() => isModelSettingsSearch(window.location.search));
   const [chapterText, setChapterText] = useState("");
   const [status, setStatus] = useState("正在加载书库…");
   const [busy, setBusy] = useState(false);
@@ -206,11 +211,26 @@ export function App() {
     setStatus("已返回书库");
   }
 
+  function openModelSettings() {
+    setShowModelSettings(true);
+    window.history.pushState(null, "", `${window.location.pathname}${withModelSettingsSearch(window.location.search)}`);
+    setStatus("已打开模型设置中心");
+  }
+
+  function closeModelSettings() {
+    setShowModelSettings(false);
+    window.history.pushState(null, "", `${window.location.pathname}${withoutModelSettingsSearch(window.location.search)}`);
+    setStatus(activeSeries ? `已返回系列项目：${activeSeries.title}` : "已返回书库");
+  }
+
+  if (showModelSettings) return <ModelSettingsPage onBack={closeModelSettings} />;
+
   if (activeSeries) return <ProductionWorkspace
     bookId={activeSeries.bookId}
     series={activeSeries}
     initialStatus={status}
     onLeave={leaveSeriesWorkspace}
+    onOpenSettings={openModelSettings}
   />;
 
   return (
@@ -253,6 +273,9 @@ export function App() {
                 }}
               />
             </label>
+            <button className="button-secondary" type="button" onClick={openModelSettings}>
+              模型设置
+            </button>
             <button
               className="button-primary"
               type="button"

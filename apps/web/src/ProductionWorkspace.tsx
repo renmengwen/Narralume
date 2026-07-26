@@ -24,7 +24,7 @@ import type { Chapter, ChapterEvent, JobRecord, SeriesProject } from "./producti
 import { useJobPolling } from "./production/use-job-polling";
 import { VisualStage } from "./production/visual/VisualStage";
 
-export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: { bookId: string; series: SeriesProject; initialStatus: string; onLeave: () => void }) {
+export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, onOpenSettings }: { bookId: string; series: SeriesProject; initialStatus: string; onLeave: () => void; onOpenSettings: () => void }) {
   const restored = productionWorkspaceFromSearch(window.location.search);
   const [stage, setStage] = useState<ProductionStageId>(() => resolveProductionStage(restored?.stage));
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -138,7 +138,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave }: 
 
   return <main className="min-h-screen bg-[var(--bg-canvas)] p-7 text-[var(--fg-primary)] max-md:p-0">
     <div className="mx-auto min-h-[calc(100vh-56px)] w-full max-w-[1640px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[var(--shadow)] max-md:min-h-screen max-md:border-0">
-      <ProductionHeader series={series} onLeave={onLeave} />
+      <ProductionHeader series={series} onLeave={onLeave} onOpenSettings={onOpenSettings} />
       <StageNavigation stage={stage} onChange={selectStage} />
       <ProductionStatus status={status} busy={busy} job={currentJob} onCancel={() => void cancelJob()} />
       {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage bookId={bookId} seriesId={series.id} episodeIndex={episodeIndex} chapters={chapters} startChapterId={selectedChapter} currentJob={currentJob} busy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} onStartChapterChange={(id) => id ? selectChapter(id) : (setSelectedChapter(undefined), setJobId(undefined), replaceLocation({ chapterId: undefined, jobId: undefined }))} onJobCreated={trackJob} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} onJobCreated={trackJob} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : stage === "audio" ? <AudioStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} onJobCreated={trackJob} /> : stage === "visual" ? <VisualStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} externalBusy={busy} setBusy={setBusy} setStatus={setStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} /> : <StagePlaceholder stage={stage} />}

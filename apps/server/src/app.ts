@@ -65,6 +65,7 @@ import {
 import { createOpenAiEpisodeScriptGenerator } from "./episode-script-provider.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker, type JobHandler, type JobWorkerOptions } from "./job-worker.js";
+import { registerModelConfigRoutes } from "./model-config-routes.js";
 import {
   createScriptVersion,
   listScriptVersions,
@@ -328,6 +329,8 @@ export function buildApp(options: BuildAppOptions = {}) {
     ok: true,
     service: "narralume",
   }));
+
+  void app.register(registerModelConfigRoutes, { dataRoot });
 
   app.get("/api/episode-policy", async () => ({ ok: true, duration: EPISODE_DURATION_POLICY }));
 

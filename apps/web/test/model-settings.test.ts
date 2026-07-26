@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { activeModelLabel, updateActive, updateProvider, type ModelConfig } from "../src/settings/model-settings.ts";
+
+function config(): ModelConfig {
+  return {
+    providers: {
+      "edge-tts": {
+        id: "edge-tts",
+        name: "Edge TTS",
+        kind: "edge-tts",
+        baseUrl: "",
+        apiKey: "",
+        hasApiKey: false,
+        apiKeyMasked: "",
+        models: {
+          text: { enabled: false, modelId: "", note: "" },
+          image: { enabled: false, modelId: "", note: "" },
+          tts: {
+            enabled: true,
+            modelId: "node-edge-tts",
+            note: "",
+            voiceId: "zh-CN-YunjianNeural",
+            voiceLabel: "Chinese - China - Yunjian",
+            language: "zh-CN",
+            gender: "male",
+            wordBoundary: true,
+          },
+        },
+      },
+      minimax: {
+        id: "minimax",
+        name: "MiniMax",
+        kind: "minimax",
+        baseUrl: "https://api.minimaxi.com/v1",
+        apiKey: "",
+        hasApiKey: false,
+        apiKeyMasked: "",
+        models: {
+          text: { enabled: false, modelId: "", note: "" },
+          image: { enabled: false, modelId: "", note: "" },
+          tts: { enabled: false, modelId: "speech-2.8-hd", note: "", voiceId: "voice-a" },
+        },
+      },
+    },
+    active: { text: "", image: "", tts: "edge-tts/tts" },
+  };
+}
+
+test("模型设置纯函数展示 Edge TTS 默认标签并更新 active", () => {
+  const first = config();
+  assert.equal(activeModelLabel(first, "tts"), "Edge TTS / Chinese - China - Yunjian");
+  assert.equal(activeModelLabel(first, "text"), "未配置");
+
+  const second = updateActive(first, "tts", "");
+  assert.equal(activeModelLabel(second, "tts"), "未配置");
+
+  const provider = { ...first.providers["edge-tts"], name: "Edge TTS 默认" };
+  const third = updateProvider(first, provider);
+  assert.equal(third.providers["edge-tts"].name, "Edge TTS 默认");
+  assert.equal(first.providers["edge-tts"].name, "Edge TTS");
+
+  const fourth = updateActive(first, "tts", "minimax/tts");
+  assert.equal(fourth.active.tts, "minimax/tts");
+  assert.equal(fourth.providers.minimax.models.tts.enabled, true);
+  assert.equal(first.providers.minimax.models.tts.enabled, false);
+});

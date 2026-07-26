@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { TtsTimeline } from "../src/production/types.ts";
 import { conflictRevision, nextVisualDraft, visualDraft, visualPlanStatus, visualSegmentPayload } from "../src/production/visual/visual-editor.ts";
-import type { VisualSegment } from "../src/production/visual/types.ts";
+import type { VisualAsset, VisualSegment } from "../src/production/visual/types.ts";
 
 const HASH = "a".repeat(64);
 const timeline = { timelineHash: HASH, durationMs: 3000, cues: [0, 1, 2].map((index) => ({ index, segmentIndex: index, startMs: index * 1000, endMs: (index + 1) * 1000, text: `cue ${index}` })) } as TtsTimeline;
@@ -20,6 +20,17 @@ test("视觉段草稿从服务端 revision 恢复且新段只取第一个未覆�
     segmentIndex: 1, cueStartIndex: 1, cueEndIndex: 1, motionKind: "none", motionAmountPpm: 0,
     fadeMs: 300, expectedRevision: 0, assetIds: [], selectedAssetId: "", selectedCandidateId: "",
   });
+  assert.equal(nextVisualDraft(timeline, [])?.cueEndIndex, 2);
+});
+
+test("visual draft prefers an approved asset candidate matched by cue text", () => {
+  const assets: VisualAsset[] = [
+    { id: "asset_scene", type: "scene", role: "master", name: "墓道", parentAssetId: null, stateLabel: null, description: null, aliases: ["甬道"], candidates: [{ id: "candidate_scene", assetId: "asset_scene", source: { kind: "upload" }, width: 900, height: 1600, bytes: 1, reviewRevision: 1, reviewStatus: "approved" }] },
+    { id: "asset_person", type: "character", role: "master", name: "吴邪", parentAssetId: null, stateLabel: null, description: null, aliases: [], candidates: [{ id: "candidate_person", assetId: "asset_person", source: { kind: "upload" }, width: 900, height: 1600, bytes: 1, reviewRevision: 1, reviewStatus: "approved" }] },
+  ];
+  const draft = nextVisualDraft({ ...timeline, cues: [{ ...timeline.cues[0]!, text: "我跟着吴邪走进墓道" }] }, [], assets);
+  assert.equal(draft?.selectedAssetId, "asset_scene");
+  assert.equal(draft?.selectedCandidateId, "candidate_scene");
 });
 
 test("视觉段提交只允许一张已选候选并保留其他显式资产", () => {

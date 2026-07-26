@@ -66,7 +66,7 @@ export function useVisualWorkspace({ seriesId, episodeIndex, timelineHash, exter
   function chooseSegment(segment: VisualSegment) { setDraft(visualDraft(segment)); setContactSheet(undefined); setStatus(`正在编辑视觉段 ${segment.segmentIndex + 1}`); }
   function addSegment() {
     if (!timeline) return;
-    const next = nextVisualDraft(timeline, segments);
+    const next = nextVisualDraft(timeline, segments, assets);
     if (!next) { setStatus("全部字幕已被视觉段覆盖"); return; }
     setDraft(next); setContactSheet(undefined); setStatus(`已创建视觉段 ${next.segmentIndex + 1} 草稿，请绑定资产与批准候选`);
   }

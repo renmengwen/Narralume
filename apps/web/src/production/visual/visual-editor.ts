@@ -1,5 +1,5 @@
 import type { TtsTimeline } from "../types";
-import type { VisualSegment, VisualSegmentDraft } from "./types";
+import type { VisualAsset, VisualSegment, VisualSegmentDraft } from "./types";
 
 export function formatTimelineTime(milliseconds: number) {
   const totalSeconds = Math.floor(milliseconds / 1000);
@@ -22,28 +22,46 @@ export function visualDraft(segment: VisualSegment): VisualSegmentDraft {
   };
 }
 
-export function nextVisualDraft(timeline: TtsTimeline, segments: VisualSegment[]): VisualSegmentDraft | undefined {
+export function nextVisualDraft(timeline: TtsTimeline, segments: VisualSegment[], assets: VisualAsset[] = []): VisualSegmentDraft | undefined {
   const covered = new Set(segments.flatMap((segment) => Array.from(
     { length: segment.cueEndIndex - segment.cueStartIndex + 1 },
     (_, offset) => segment.cueStartIndex + offset,
   )));
   const firstCue = timeline.cues.find((cue) => !covered.has(cue.index));
   if (!firstCue) return undefined;
+  const uncovered = timeline.cues.slice(firstCue.index).filter((cue) => !covered.has(cue.index));
+  const remainingSlots = Math.max(1, visualPlanStatus(timeline, segments).suggestion.targetCount - segments.length);
+  const cueEndIndex = uncovered[Math.min(uncovered.length, Math.ceil(uncovered.length / remainingSlots)) - 1]?.index ?? firstCue.index;
   const indexes = new Set(segments.map((segment) => segment.segmentIndex));
   let segmentIndex = 0;
   while (indexes.has(segmentIndex)) segmentIndex += 1;
+  const selected = suggestedVisualAsset(timeline.cues.slice(firstCue.index, cueEndIndex + 1).map((cue) => cue.text).join("\n"), assets);
   return {
     segmentIndex,
     cueStartIndex: firstCue.index,
-    cueEndIndex: firstCue.index,
+    cueEndIndex,
     motionKind: "none",
     motionAmountPpm: 0,
     fadeMs: 300,
     expectedRevision: 0,
-    assetIds: [],
-    selectedAssetId: "",
-    selectedCandidateId: "",
+    assetIds: selected ? [selected.assetId] : [],
+    selectedAssetId: selected?.assetId ?? "",
+    selectedCandidateId: selected?.candidateId ?? "",
   };
+}
+
+function suggestedVisualAsset(text: string, assets: VisualAsset[]) {
+  const approved = assets.flatMap((asset) => asset.candidates
+    .filter((candidate) => candidate.reviewStatus === "approved")
+    .map((candidate) => ({ asset, candidate })));
+  if (!approved.length) return undefined;
+  const lowerText = text.toLocaleLowerCase();
+  const matched = approved.find(({ asset }) => [asset.name, asset.stateLabel, ...asset.aliases]
+    .filter(Boolean)
+    .some((value) => lowerText.includes(String(value).toLocaleLowerCase())));
+  const picked = matched ?? approved[0];
+  if (!picked) return undefined;
+  return { assetId: picked.asset.id, candidateId: picked.candidate.id };
 }
 
 export function visualSegmentPayload(timelineHash: string, draft: VisualSegmentDraft) {

@@ -161,6 +161,35 @@ test("MiniMax TTS 使用 MuseDock 请求合同并解码 hex 音频", async () =>
   assert.equal(body.audio_setting.format, "wav");
 });
 
+test("MiniMax/MiMo TTS 已取消时不发请求并返回取消错误", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let called = false;
+  await assert.rejects(
+    callHttpTtsModel({
+      text: "取消测试",
+      outputPath: "unused.wav",
+      scriptVersionId: "script",
+      contentHash: "d".repeat(64),
+      signal: controller.signal,
+      fetchImpl: (async () => {
+        called = true;
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+      queueIntervalMs: 0,
+    }, runtime({
+      providerId: "minimax",
+      providerKind: "minimax",
+      providerName: "MiniMax",
+      baseUrl: "https://api.minimaxi.com/v1",
+      apiKey: "secret-key",
+      modelId: "speech-2.8-hd",
+    })),
+    (error) => error instanceof TtsCancelledError,
+  );
+  assert.equal(called, false);
+});
+
 test("MiMo TTS 使用 MuseDock chat/completions 合同并解码 base64 音频", async () => {
   let request!: { url: string; init: RequestInit };
   const audio = Buffer.from("mimo-audio");

@@ -275,14 +275,15 @@ test("语音时间轴消费当前 TTS runtime 并登记 provider 身份", async 
     assert(rows.length > 0);
     assert(rows.every((row) => row.provider_id === "edge-tts" && row.voice === "zh-CN-YunjianNeural"));
     const cues = connection.database.prepare(
-      "SELECT segment_index, start_ms, end_ms, text FROM subtitle_cues WHERE episode_id = ? ORDER BY cue_index LIMIT 2",
+      "SELECT segment_index, start_ms, end_ms, text FROM subtitle_cues WHERE episode_id = ? ORDER BY cue_index LIMIT 1",
     ).all("episode_tts") as unknown as Array<{ segment_index: number; start_ms: number; end_ms: number; text: string }>;
-    assert.deepEqual(cues.map((cue) => ({ ...cue })), [
-      { segment_index: 0, start_ms: 0, end_ms: 400, text: "吴邪" },
-      { segment_index: 0, start_ms: 400, end_ms: 900, text: "墓道" },
-    ]);
+    assert.equal(cues[0]?.segment_index, 0);
+    assert.equal(cues[0]?.start_ms, 0);
+    assert.equal(cues[0]?.end_ms, 900);
+    assert.notEqual(cues[0]?.text, "吴邪");
+    assert.notEqual(cues[0]?.text, "墓道");
     const result = getJob(connection.database, job.id)?.result as { srtRelativePath: string };
-    assert.match(await readFile(join(dataRoot, result.srtRelativePath), "utf8"), /吴邪/);
+    assert.doesNotMatch(await readFile(join(dataRoot, result.srtRelativePath), "utf8"), /^吴邪$/mu);
   } finally {
     connection.close();
     await rm(dataRoot, { recursive: true, force: true });

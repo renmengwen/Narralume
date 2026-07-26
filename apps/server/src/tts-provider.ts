@@ -241,12 +241,18 @@ export function parseEdgeSubtitleJson(value: unknown): TtsWordBoundary[] {
 async function synthesizeEdgeTts(input: TtsSynthesisInput, runtime: RuntimeModelConfig): Promise<TtsSynthesisResult> {
   const text = input.text.trim();
   if (!text) throw new TtsProviderError("语音文本不能为空");
+  if (input.signal?.aborted) throw new TtsCancelledError("语音生成已取消");
   const outputPath = resolve(input.outputPath);
   const outputDirectory = dirname(outputPath);
   const temporaryAudio = join(outputDirectory, `.${basename(outputPath)}.${randomUUID()}.tmp.mp3`);
   const subtitlePath = `${temporaryAudio}.json`;
   await mkdir(outputDirectory, { recursive: true });
   let published = false;
+  const cleanup = async () => {
+    await rm(temporaryAudio, { force: true });
+    await rm(subtitlePath, { force: true });
+    if (!published) await rm(outputPath, { force: true });
+  };
   try {
     const tts = new EdgeTTS({
       voice: runtime.voiceId || DEFAULT_EDGE_VOICE,
@@ -258,7 +264,19 @@ async function synthesizeEdgeTts(input: TtsSynthesisInput, runtime: RuntimeModel
       volume: "default",
       timeout: input.requestTimeoutMs ?? 10_000,
     });
-    await tts.ttsPromise(text, temporaryAudio);
+    const ttsPromise = tts.ttsPromise(text, temporaryAudio);
+    let aborted = false;
+    const abortPromise = new Promise<never>((_, reject) => {
+      const abort = () => {
+        aborted = true;
+        reject(new TtsCancelledError("语音生成已取消"));
+      };
+      input.signal?.addEventListener("abort", abort, { once: true });
+      ttsPromise.finally(() => input.signal?.removeEventListener("abort", abort));
+    });
+    void ttsPromise.finally(() => { if (aborted) void cleanup(); });
+    await (input.signal ? Promise.race([ttsPromise, abortPromise]) : ttsPromise);
+    if (aborted || input.signal?.aborted) throw new TtsCancelledError("语音生成已取消");
     const temporaryInfo = await stat(temporaryAudio);
     if (!temporaryInfo.isFile() || temporaryInfo.size < 1_024) throw new TtsProviderError("Edge TTS 未返回有效音频");
     const wordBoundaries = parseEdgeSubtitleJson(JSON.parse(await readFile(subtitlePath, "utf8")));
@@ -280,19 +298,21 @@ async function synthesizeEdgeTts(input: TtsSynthesisInput, runtime: RuntimeModel
     if (error instanceof TtsProviderError) throw error;
     throw new TtsProviderError(`Edge TTS 生成失败：${normalizeError(error)}`);
   } finally {
-    await rm(temporaryAudio, { force: true });
-    await rm(subtitlePath, { force: true });
-    if (!published) await rm(outputPath, { force: true });
+    await cleanup();
   }
 }
 
 async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
+  if (signal?.aborted) throw new TtsCancelledError("语音生成已取消");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (signal?.aborted || (error as NodeJS.ErrnoException).name === "AbortError") throw new TtsCancelledError("语音生成已取消");
+    throw error;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);

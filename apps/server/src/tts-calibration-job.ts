@@ -262,13 +262,22 @@ export function createTtsCalibrationJobHandler(
     const samples: TtsCalibrationSample[] = [];
     const providerId = runtime?.providerId ?? "windows-system-speech";
     const providerVoice = runtime?.voiceId;
-    for (const [index, combination] of payload.combinations.entries()) {
+    const seenCombinations = new Set<string>();
+    const combinations = payload.combinations.filter((combination) => {
+      const voice = providerVoice || combination.voice;
+      const key = `${providerId}:${voice}:${combination.rate}`;
+      if (seenCombinations.has(key)) return false;
+      seenCombinations.add(key);
+      return true;
+    });
+    for (const [index, combination] of combinations.entries()) {
       context.throwIfCancellationRequested();
+      const voice = providerVoice || combination.voice;
       const inputHash = ttsInputHash({
         text: payload.exactText,
         scriptVersionId: payload.scriptVersionId,
         contentHash: payload.contentHash,
-        voice: combination.voice,
+        voice,
         rate: combination.rate,
         contractVersion: CONTRACT,
         runtime,
@@ -288,7 +297,7 @@ export function createTtsCalibrationJobHandler(
             outputPath,
             scriptVersionId: payload.scriptVersionId,
             contentHash: payload.contentHash,
-            voice: combination.voice,
+            voice,
             rate: combination.rate,
             contractVersion: CONTRACT,
             runtime,
@@ -310,7 +319,7 @@ export function createTtsCalibrationJobHandler(
         characterCountMethod: payload.characterCountMethod,
         durationMs: measured.durationMs,
         charactersPerSecond,
-        voice: providerVoice || combination.voice,
+        voice,
         rate: combination.rate,
         providerId,
         relativePath: relativePath(dataRoot, outputPath),
@@ -321,7 +330,7 @@ export function createTtsCalibrationJobHandler(
         contentHash: payload.contentHash,
         approvalRevision: payload.approvalRevision,
       });
-      context.reportProgress((index + 1) / payload.combinations.length);
+      context.reportProgress((index + 1) / combinations.length);
     }
     context.throwIfCancellationRequested();
     assertIdentity(database, payload);

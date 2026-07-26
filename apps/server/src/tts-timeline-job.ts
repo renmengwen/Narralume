@@ -207,13 +207,15 @@ export function createTtsTimelineJobHandler(
       const startMs = cursor;
       cursor += segment.durationMs;
       if (segment.wordBoundaries?.length) {
-        return segment.wordBoundaries.map((word) => ({
+        const first = segment.wordBoundaries[0]!;
+        const last = segment.wordBoundaries[segment.wordBoundaries.length - 1]!;
+        return [{
           index: 0,
           segmentIndex: segment.index,
-          text: word.part,
-          startMs: startMs + Math.min(word.startMs, segment.durationMs),
-          endMs: startMs + Math.min(Math.max(word.endMs, word.startMs + 1), segment.durationMs),
-        }));
+          text: segment.subtitleText,
+          startMs: startMs + Math.min(first.startMs, segment.durationMs),
+          endMs: startMs + Math.min(Math.max(last.endMs, first.startMs + 1), segment.durationMs),
+        }];
       }
       return [{ index: 0, segmentIndex: segment.index, text: segment.subtitleText, startMs, endMs: cursor }];
     });

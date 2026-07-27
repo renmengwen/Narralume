@@ -176,7 +176,8 @@ export function replaceEpisode(
   if (existing && existing.title === title && existing.story_arc === storyArc &&
       existing.target_duration_seconds === input.targetDurationSeconds && existing.recap === recap &&
       existing.next_hook === nextHook && sourcesMatch) return episodeResult(existing);
-  database.exec("BEGIN IMMEDIATE");
+  const nested = database.isTransaction;
+  database.exec(nested ? "SAVEPOINT replace_episode" : "BEGIN IMMEDIATE");
   try {
     database.prepare(
       `INSERT INTO episodes (
@@ -203,9 +204,12 @@ export function replaceEpisode(
     if (existing && (existing.target_duration_seconds !== input.targetDurationSeconds || !sourcesMatch)) {
       withdrawScriptApprovalForEpisodeChange(database, id, now);
     }
-    database.exec("COMMIT");
+    database.exec(nested ? "RELEASE SAVEPOINT replace_episode" : "COMMIT");
   } catch (error) {
-    try { database.exec("ROLLBACK"); } catch { /* 保留原始写入错误。 */ }
+    try {
+      if (nested) database.exec("ROLLBACK TO SAVEPOINT replace_episode; RELEASE SAVEPOINT replace_episode");
+      else database.exec("ROLLBACK");
+    } catch { /* 保留原始写入错误。 */ }
     throw error;
   }
   return episodeResult(database.prepare(

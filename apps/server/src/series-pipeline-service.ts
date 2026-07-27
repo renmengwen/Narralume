@@ -22,19 +22,35 @@ import {
   type BookStoryBibleJobPayload,
 } from "./book-story-bible-job-handler.js";
 import {
+  FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
+  buildFullBookPlanIntervalRequests,
+  type FullBookPlanBuildLimits,
+  type FullBookPlanChapterInput,
+} from "./full-book-plan-job.js";
+import {
+  FULL_BOOK_PLAN_JOB_TYPE,
+  fullBookPlanJobRequestHash,
+  type FullBookPlanJobPayload,
+} from "./full-book-plan-job-handler.js";
+import { freezeFullBookPlan } from "./full-book-plan-store.js";
+import { canonicalFullBookPlanJson, parseFullBookPlan } from "./full-book-plan-contract.js";
+import {
   cancelSeriesPipelineRun,
   createSeriesPipelineRun,
   finishChapterAnalysis,
+  finishEpisodePlan,
   finishStoryBible,
   failEmptyChapterAnalysisJobs,
   getCurrentSeriesPipelineRun,
   getMappedChapterJobs,
+  getMappedEpisodePlanJob,
   getMappedStoryBibleJob,
   getMappedScriptJobs,
   getSeriesPipelineRun,
   listPipelineChapters,
   listRunnableSeriesPipelineRuns,
   mapSeriesPipelineJob,
+  mapSeriesPipelineEpisodePlanJob,
   mapSeriesPipelineStoryBibleJob,
   mapSeriesPipelineScriptJob,
   pauseSeriesPipelineRun,
@@ -92,6 +108,10 @@ export class SeriesPipelineService {
         }
         if (run.status === "generating_scripts") {
           await this.reconcileScripts(run);
+          continue;
+        }
+        if (["planning_episodes", "validating_plan", "freezing_plan"].includes(run.status)) {
+          await this.reconcileEpisodePlan(run);
           continue;
         }
         if (run.status === "building_story_bible") {
@@ -236,6 +256,149 @@ export class SeriesPipelineService {
       `UPDATE jobs SET status = 'failed', progress = 0, error_code = 'story_bible_result_invalid',
          error_message = ?, finished_at = ?, updated_at = ? WHERE id = ? AND status = 'succeeded'`,
     ).run(message, now, now, jobId);
+  }
+
+  private async reconcileEpisodePlan(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
+    const provider = await this.options.resolveChapterTextProvider();
+    if (!provider) {
+      setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
+      return;
+    }
+    const bookId = this.bookId(run.seriesProjectId);
+    const bible = run.storyBibleId ? this.options.database.prepare(
+      `SELECT id, content_hash FROM book_story_bibles
+       WHERE id = ? AND book_id = ? AND scope = 'final' AND invalidated_at IS NULL`,
+    ).get(run.storyBibleId, bookId) as { id: string; content_hash: string } | undefined : undefined;
+    if (!bible) throw new Error("全书规划缺少当前故事圣经");
+    const limits: FullBookPlanBuildLimits = {
+      maxChaptersPerInterval: 20, maxEventsPerInterval: 500, maxInputBytesPerInterval: 1_000_000,
+      maxFinalIntervals: 1000, maxFinalInputBytes: 5_000_000,
+    };
+    const chapters = this.fullBookPlanInputs(run);
+    const intervals = buildFullBookPlanIntervalRequests(
+      bookId, { id: bible.id, contentHash: bible.content_hash }, chapters, run.episodeCount,
+      { providerId: provider.providerId, model: provider.model }, limits,
+    );
+    const base: Omit<FullBookPlanJobPayload, "providerId" | "model" | "requestHash"> = {
+      contractVersion: FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
+      bookId, storyBible: { id: bible.id, contentHash: bible.content_hash },
+      episodeCount: run.episodeCount, intervals, limits,
+    };
+    const requestHash = fullBookPlanJobRequestHash(base);
+    const pipelineIdentity = createHash("sha256").update(`${requestHash}:${run.configHash}`).digest("hex");
+    const mapping = getMappedEpisodePlanJob(this.options.database, run.id);
+    const job = mapping?.subject_id === pipelineIdentity ? getJob(this.options.database, mapping.job_id) : undefined;
+    if (job?.status === "failed" || job?.status === "cancelled") {
+      setSeriesPipelineFailure(this.options.database, run.id,
+        job.status === "cancelled" ? "job_cancelled" : job.errorCode ?? "episode_plan_failed",
+        job.status === "cancelled" ? "全书规划已中断，请重试" : "全书规划失败，请重试");
+      return;
+    }
+    if (job?.status === "queued") {
+      if (job.runAfter === Number.MAX_SAFE_INTEGER) {
+        mapSeriesPipelineEpisodePlanJob(this.options.database, run.id, pipelineIdentity, job.id);
+      }
+      return;
+    }
+    if (job?.status === "running") return;
+    if (job?.status === "succeeded") {
+      const result = job.result as { plan?: unknown; planHash?: unknown } | null;
+      if (!result || typeof result.planHash !== "string") {
+        this.failInvalidPlanJob(job.id, "全书规划任务缺少有效结果");
+        return;
+      }
+      if (run.status === "planning_episodes") {
+        setSeriesPipelineStatus(this.options.database, run.id, "planning_episodes", "validating_plan");
+      }
+      const sourceEvents = intervals.flatMap((interval) => interval.sourceEvents);
+      const planOptions = {
+        startChapterIndex: chapters[0]!.chapterIndex,
+        endChapterIndex: chapters.at(-1)!.chapterIndex,
+        episodeCount: run.episodeCount,
+        allowedSourceEvents: new Map(sourceEvents.map(({ id, chapterId, chapterIndex, byteRanges }) =>
+          [id, { chapterId, chapterIndex, byteRanges }])),
+        intervalQuotas: intervals.map(({ identity }) => ({
+          startChapterIndex: identity.startChapterIndex,
+          endChapterIndex: identity.endChapterIndex,
+          episodeCount: identity.episodeCount,
+        })),
+      };
+      const verifiedPlan = parseFullBookPlan(result.plan, planOptions);
+      const verifiedHash = createHash("sha256").update(canonicalFullBookPlanJson(verifiedPlan)).digest("hex");
+      if (verifiedHash !== result.planHash) {
+        this.failInvalidPlanJob(job.id, "全书规划结果 hash 不一致");
+        return;
+      }
+      if (getSeriesPipelineRun(this.options.database, run.id)?.status === "validating_plan") {
+        setSeriesPipelineStatus(this.options.database, run.id, "validating_plan", "freezing_plan");
+      }
+      const frozen = freezeFullBookPlan(this.options.database, {
+        seriesProjectId: run.seriesProjectId,
+        plan: verifiedPlan,
+        options: planOptions,
+        targetDurationSeconds: run.targetDurationSeconds,
+      });
+      if (frozen.planHash !== verifiedHash) throw new Error("全书规划冻结 hash 不一致");
+      finishEpisodePlan(this.options.database, run.id, frozen.planHash);
+      return;
+    }
+    const payload: FullBookPlanJobPayload = {
+      ...base, providerId: provider.providerId, model: provider.model, requestHash,
+    };
+    const id = `job_full_book_plan_${requestHash}`;
+    let queued = getJob(this.options.database, id);
+    if (!queued) {
+      try {
+        queued = createJob(this.options.database, {
+          id, type: FULL_BOOK_PLAN_JOB_TYPE, payload, maxAttempts: 3, runAfter: Number.MAX_SAFE_INTEGER,
+        });
+      } catch (error) {
+        queued = getJob(this.options.database, id);
+        if (!queued) throw error;
+      }
+    }
+    if (queued.type !== FULL_BOOK_PLAN_JOB_TYPE ||
+        (queued.payload as { requestHash?: unknown }).requestHash !== requestHash) {
+      throw new Error("全书规划任务 identity 冲突");
+    }
+    mapSeriesPipelineEpisodePlanJob(this.options.database, run.id, pipelineIdentity, queued.id);
+  }
+
+  private failInvalidPlanJob(jobId: string, message: string) {
+    const now = Date.now();
+    this.options.database.prepare(
+      `UPDATE jobs SET status = 'failed', progress = 0, error_code = 'episode_plan_result_invalid',
+         error_message = ?, finished_at = ?, updated_at = ? WHERE id = ? AND status = 'succeeded'`,
+    ).run(message, now, now, jobId);
+  }
+
+  private fullBookPlanInputs(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>): FullBookPlanChapterInput[] {
+    return listPipelineChapters(this.options.database, run).map((chapter) => {
+      const rows = this.options.database.prepare(
+        `SELECT event.id, event.event_index, event.occurrence, event.event_type, event.payload_json,
+                source.source_index, source.source_byte_start, source.source_byte_end, source.source_hash
+         FROM chapter_events event
+         JOIN chapter_event_sources source ON source.event_id = event.id
+         WHERE event.chapter_id = ? ORDER BY event.event_index, event.id, source.source_index`,
+      ).all(chapter.id) as unknown as Array<Record<string, unknown> & {
+        id: string; source_byte_start: number; source_byte_end: number;
+      }>;
+      const byId = new Map<string, typeof rows>();
+      for (const row of rows) byId.set(row.id, [...(byId.get(row.id) ?? []), row]);
+      return {
+        chapterId: chapter.id,
+        chapterIndex: chapter.index,
+        sourceEvents: [...byId].map(([id, eventRows]) => {
+          const json = JSON.stringify(eventRows);
+          return {
+            id, chapterId: chapter.id, chapterIndex: chapter.index,
+            byteRanges: eventRows.map((row) => ({ byteStart: row.source_byte_start, byteEnd: row.source_byte_end })),
+            contentHash: createHash("sha256").update(json).digest("hex"),
+            inputBytes: Buffer.byteLength(json),
+          };
+        }),
+      };
+    });
   }
 
   private storyBibleInputs(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>): StoryBibleChapterInput[] {

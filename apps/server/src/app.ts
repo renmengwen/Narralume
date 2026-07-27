@@ -130,6 +130,10 @@ import {
   createBookStoryBibleJobHandler,
 } from "./book-story-bible-job-handler.js";
 import {
+  FULL_BOOK_PLAN_JOB_TYPE,
+  createFullBookPlanJobHandler,
+} from "./full-book-plan-job-handler.js";
+import {
   assertSeriesPipelineAllowsChapterEventMutation,
   SeriesPipelineError,
 } from "./series-pipeline-store.js";
@@ -350,6 +354,11 @@ export function buildApp(options: BuildAppOptions = {}) {
       if (!provider) throw new Error("故事圣经任务对应的模型配置不可用");
       return createBookStoryBibleJobHandler(connection.database, provider)(context);
     },
+    [FULL_BOOK_PLAN_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("全书规划任务对应的模型配置不可用");
+      return createFullBookPlanJobHandler(provider)(context);
+    },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
@@ -368,6 +377,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
   supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
   supportedJobTypes.add(BOOK_STORY_BIBLE_JOB_TYPE);
+  supportedJobTypes.add(FULL_BOOK_PLAN_JOB_TYPE);
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
   let pipelineWorker: SeriesPipelineWorker;

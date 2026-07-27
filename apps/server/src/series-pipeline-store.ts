@@ -152,8 +152,54 @@ export function listPipelineChapters(database: DatabaseSync, run: SeriesPipeline
 
 export function listRunnableSeriesPipelineRuns(database: DatabaseSync) {
   return (database.prepare(
-    "SELECT * FROM series_pipeline_runs WHERE status IN ('configured', 'analyzing_chapters', 'building_story_bible', 'generating_scripts') ORDER BY created_at, id",
+    "SELECT * FROM series_pipeline_runs WHERE status IN ('configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes', 'validating_plan', 'freezing_plan', 'generating_scripts') ORDER BY created_at, id",
   ).all() as unknown as RunRow[]).map(runRecord);
+}
+
+export function getMappedEpisodePlanJob(database: DatabaseSync, runId: string) {
+  return database.prepare(
+    `SELECT mapping.subject_id, mapping.job_id FROM series_pipeline_jobs mapping
+     WHERE mapping.run_id = ? AND mapping.stage = 'episode_plan' LIMIT 1`,
+  ).get(runId) as { subject_id: string; job_id: string } | undefined;
+}
+
+export function mapSeriesPipelineEpisodePlanJob(
+  database: DatabaseSync, runId: string, subjectId: string, jobId: string, now = Date.now(),
+) {
+  return immediateTransaction(database, () => {
+    const active = database.prepare(
+      "SELECT 1 FROM series_pipeline_runs WHERE id = ? AND status IN ('planning_episodes', 'validating_plan', 'freezing_plan')",
+    ).get(runId);
+    if (!active) return false;
+    database.prepare("DELETE FROM series_pipeline_jobs WHERE run_id = ? AND stage = 'episode_plan'").run(runId);
+    database.prepare(
+      `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
+       VALUES (?, 'episode_plan', 'plan', ?, ?, ?)
+       ON CONFLICT(run_id, stage, subject_type, subject_id) DO NOTHING`,
+    ).run(runId, subjectId, jobId, now);
+    database.prepare(
+      `UPDATE jobs SET run_after = ?, updated_at = ?
+       WHERE id = ? AND status = 'queued' AND run_after = ?
+         AND EXISTS (
+           SELECT 1 FROM series_pipeline_jobs mapping
+           JOIN series_pipeline_runs run ON run.id = mapping.run_id
+           WHERE mapping.job_id = jobs.id
+             AND run.status NOT IN ('paused', 'cancelled', 'completed')
+         )`,
+    ).run(now, now, jobId, PAUSED_JOB_RUN_AFTER);
+    return true;
+  });
+}
+
+export function finishEpisodePlan(
+  database: DatabaseSync, runId: string, planHash: string, now = Date.now(),
+) {
+  database.prepare(
+    `UPDATE series_pipeline_runs SET status = 'generating_scripts', plan_hash = ?,
+       failure_code = NULL, failure_message = NULL, updated_at = ?
+     WHERE id = ? AND status = 'freezing_plan'`,
+  ).run(planHash, now, runId);
+  return getSeriesPipelineRun(database, runId);
 }
 
 export function getMappedStoryBibleJob(database: DatabaseSync, runId: string) {
@@ -430,6 +476,7 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
          resume_status = CASE WHEN status = 'cancelled' THEN NULL ELSE resume_status END,
          failure_code = NULL, failure_message = NULL, updated_at = ? WHERE id = ?`,
     ).run(cancelledStage?.stage === "script_generation" ? "generating_scripts"
+      : cancelledStage?.stage === "episode_plan" ? "planning_episodes"
       : cancelledStage?.stage === "story_bible" ? "building_story_bible" : "analyzing_chapters", now, id);
     return getSeriesPipelineRun(database, id)!;
   });
@@ -471,6 +518,14 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     message: storyJob.status === "cancelled" ? "故事圣经生成已中断，请重试" : "故事圣经生成失败，请重试",
     canRetry: true,
   }] : [];
+  const planMapping = getMappedEpisodePlanJob(database, run.id);
+  const planJob = planMapping ? getJob(database, planMapping.job_id) : undefined;
+  const planFailure = planJob && (planJob.status === "failed" || planJob.status === "cancelled") ? [{
+    stage: "episode_plan", subjectType: "plan", subjectId: planMapping!.subject_id,
+    jobId: planJob.id, code: planJob.status === "cancelled" ? "job_cancelled" : planJob.errorCode,
+    message: planJob.status === "cancelled" ? "全书规划已中断，请重试" : "全书规划失败，请重试",
+    canRetry: true,
+  }] : [];
   return {
     ...run,
     progress: {
@@ -482,20 +537,22 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
         failed: failures.length,
       },
       storyBible: { completed: run.storyBibleId ? 1 : 0, total: 1 },
-      episodePlan: { completed: 0, total: run.episodeCount },
+      episodePlan: { completed: run.planHash ? run.episodeCount : 0, total: run.episodeCount },
       scripts: { completed: scriptJobs.filter((item) => item.job.status === "succeeded").length * 2, total: run.episodeCount * 2 },
     },
     current: current ? { stage: "chapter_analysis", subjectType: "chapter", subjectId: current.chapterId, jobId: current.job.id }
       : storyJob && (storyJob.status === "queued" || storyJob.status === "running")
         ? { stage: "story_bible", subjectType: "bible_chunk", subjectId: storyMapping!.subject_id, jobId: storyJob.id }
+      : planJob && (planJob.status === "queued" || planJob.status === "running")
+        ? { stage: "episode_plan", subjectType: "plan", subjectId: planMapping!.subject_id, jobId: planJob.id }
       : currentScript ? { stage: "script_generation", subjectType: "episode", subjectId: currentScript.episodeId, jobId: currentScript.job.id }
       : null,
-    failures: [...failures, ...storyFailure, ...scriptFailures],
+    failures: [...failures, ...storyFailure, ...planFailure, ...scriptFailures],
     actions: {
       canPause: !["paused", "cancelled", "completed"].includes(run.status),
       canResume: run.status === "paused",
       canCancel: !["cancelled", "completed"].includes(run.status),
-      canRetry: failures.length + storyFailure.length + scriptFailures.length > 0,
+      canRetry: failures.length + storyFailure.length + planFailure.length + scriptFailures.length > 0,
     },
   };
 }

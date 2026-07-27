@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { BOOK_STORY_BIBLE_JOB_TYPE, createBookStoryBibleJobHandler } from "./book-story-bible-job-handler.js";
+import { createBookStoryBible } from "./book-story-bible-store.js";
 import { createChapterEventsAnalysisJobHandler, CHAPTER_EVENTS_ANALYZE_JOB_TYPE } from "./chapter-events-job.js";
 import { openDatabase } from "./database.js";
 import {
@@ -15,16 +16,20 @@ import {
   type GenerateEpisodeScript,
 } from "./episode-script-generation-job.js";
 import { createJob, getJob } from "./job-store.js";
+import { canonicalFullBookPlanJson } from "./full-book-plan-contract.js";
+import { FULL_BOOK_PLAN_JOB_TYPE } from "./full-book-plan-job-handler.js";
 import { JobWorker } from "./job-worker.js";
 import { SeriesPipelineService } from "./series-pipeline-service.js";
 import {
   assertSeriesPipelineAllowsChapterEventMutation,
   createSeriesPipelineRun,
   getMappedChapterJobs,
+  getMappedEpisodePlanJob,
   getMappedScriptJobs,
   getMappedStoryBibleJob,
   getSeriesPipelineRun,
   mapSeriesPipelineJob,
+  mapSeriesPipelineEpisodePlanJob,
   mapSeriesPipelineStoryBibleJob,
   pauseSeriesPipelineRun,
   resumeSeriesPipelineRun,
@@ -625,6 +630,108 @@ test("Story Bible parked Job 在 pause 或 cancel 先完成时不会映射或被
     resumeSeriesPipelineRun(database, run.id);
     cancelSeriesPipelineRun(database, run.id);
     assert.equal(mapSeriesPipelineStoryBibleJob(database, run.id, "1".repeat(64), job.id), false);
+    assert.equal(getJob(database, job.id)!.runAfter, Number.MAX_SAFE_INTEGER);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("全书规划以当前 identity parked 映射，旧结果不推进并原子冻结恰好 N 集", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-plan-"));
+  const connection = await seed(dataRoot);
+  try {
+    const database = connection.database;
+    for (const index of [1, 2]) {
+      const eventId = `event_plan_${index}`;
+      const start = index === 1 ? 0 : Buffer.byteLength("a甲在庭院出现。", "utf8");
+      const end = start + 3;
+      database.prepare(`INSERT INTO chapter_events
+        (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+        VALUES (?,?,?,?,?,?,1)`).run(
+        eventId, `chapter_a_${index}`, 0, 0, "revelation", JSON.stringify({ summary: `事件${index}` }),
+      );
+      database.prepare(`INSERT INTO chapter_event_sources
+        (event_id,source_index,source_byte_start,source_byte_end,source_hash) VALUES (?,0,?,?,?)`)
+        .run(eventId, start, end, String(index).repeat(64));
+    }
+    const bibleContent = {
+      characters: [], relationships: [], locations: [], organizations: [], items: [], concepts: [],
+      timeline: [
+        { summary: "事件1", chapterIds: ["chapter_a_1"], sourceEventIds: ["event_plan_1"] },
+        { summary: "事件2", chapterIds: ["chapter_a_2"], sourceEventIds: ["event_plan_2"] },
+      ],
+      flashbacks: [], plotThreads: [], confusingFacts: [], spoilerRestrictions: [], properNouns: [],
+    };
+    const bible = createBookStoryBible(database, {
+      bookId: "book_a", scope: "final", sourceStartChapterId: "chapter_a_1",
+      sourceEndChapterId: "chapter_a_2", sourceEventIds: ["event_plan_1", "event_plan_2"],
+      parentBibleIds: [], providerId: provider.providerId, model: provider.model, content: bibleContent,
+    });
+    const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 2, targetDurationSeconds: 240 });
+    setSeriesPipelineStatus(database, run.id, "configured", "building_story_bible");
+    database.prepare(
+      "UPDATE series_pipeline_runs SET status='planning_episodes',story_bible_id=? WHERE id=?",
+    ).run(bible.id, run.id);
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    await service.reconcile();
+    const first = getMappedEpisodePlanJob(database, run.id)!;
+    assert.equal(getJob(database, first.job_id)!.type, FULL_BOOK_PLAN_JOB_TYPE);
+    assert.notEqual(getJob(database, first.job_id)!.runAfter, Number.MAX_SAFE_INTEGER);
+    assert.equal(service.cancel(run.id).status, "cancelled");
+    assert.equal(getJob(database, first.job_id)!.status, "cancelled");
+    assert.equal(service.retry(run.id).status, "planning_episodes");
+    assert.equal(getJob(database, first.job_id)!.status, "queued");
+
+    service.pause(run.id);
+    database.prepare("UPDATE chapter_events SET payload_json=? WHERE id='event_plan_1'")
+      .run(JSON.stringify({ summary: "暂停后修正" }));
+    const stalePlan = { episodes: [
+      { index: 1, title: "旧一", storyArc: "旧", sourceEventIds: ["event_plan_1"], recap: null, nextHook: "旧" },
+      { index: 2, title: "旧二", storyArc: "旧", sourceEventIds: ["event_plan_2"], recap: "旧", nextHook: null },
+    ] };
+    const staleHash = createHash("sha256").update(canonicalFullBookPlanJson(stalePlan)).digest("hex");
+    database.prepare("UPDATE jobs SET status='succeeded',result_json=?,progress=1,finished_at=? WHERE id=?")
+      .run(JSON.stringify({ plan: stalePlan, planHash: staleHash }), Date.now(), first.job_id);
+    service.resume(run.id);
+    await service.reconcile();
+    const current = getMappedEpisodePlanJob(database, run.id)!;
+    assert.notEqual(current.job_id, first.job_id);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM episodes").get()!.total, 0);
+
+    const plan = { episodes: [
+      { index: 1, title: "第一集", storyArc: "开端", sourceEventIds: ["event_plan_1"], recap: null, nextHook: "继续" },
+      { index: 2, title: "第二集", storyArc: "收束", sourceEventIds: ["event_plan_2"], recap: "前情", nextHook: null },
+    ] };
+    const planHash = createHash("sha256").update(canonicalFullBookPlanJson(plan)).digest("hex");
+    database.prepare("UPDATE jobs SET status='succeeded',result_json=?,progress=1,finished_at=? WHERE id=?")
+      .run(JSON.stringify({ plan, planHash }), Date.now(), current.job_id);
+    setSeriesPipelineStatus(database, run.id, "planning_episodes", "validating_plan");
+    setSeriesPipelineStatus(database, run.id, "validating_plan", "freezing_plan");
+    const restarted = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    await restarted.reconcile();
+    const completed = restarted.get(run.id)!;
+    assert.equal(completed.status, "generating_scripts");
+    assert.equal(completed.planHash, planHash);
+    assert.equal(completed.progress.episodePlan.completed, 2);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM episodes").get()!.total, 2);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()!.total, 0);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("全书规划 parked Job 在 pause 或 cancel 先完成时不会映射", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-plan-race-"));
+  const connection = await seed(dataRoot);
+  try {
+    const database = connection.database;
+    const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 2 });
+    setSeriesPipelineStatus(database, run.id, "configured", "planning_episodes");
+    const job = createJob(database, {
+      id: "job_plan_parked", type: FULL_BOOK_PLAN_JOB_TYPE, payload: {}, runAfter: Number.MAX_SAFE_INTEGER,
+    });
+    pauseSeriesPipelineRun(database, run.id);
+    assert.equal(mapSeriesPipelineEpisodePlanJob(database, run.id, "1".repeat(64), job.id), false);
+    resumeSeriesPipelineRun(database, run.id);
+    cancelSeriesPipelineRun(database, run.id);
+    assert.equal(mapSeriesPipelineEpisodePlanJob(database, run.id, "1".repeat(64), job.id), false);
+    assert.equal(getMappedEpisodePlanJob(database, run.id), undefined);
     assert.equal(getJob(database, job.id)!.runAfter, Number.MAX_SAFE_INTEGER);
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });

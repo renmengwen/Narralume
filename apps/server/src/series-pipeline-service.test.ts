@@ -445,7 +445,7 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
     database.prepare(`INSERT INTO chapter_events
       (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
       VALUES ('event_script','chapter_a_1',0,0,'revelation','{"fact":"入口"}',1)`).run();
-    for (const index of [1, 2]) {
+    for (const index of [1, 2, 3]) {
       database.prepare(`INSERT INTO episodes
         (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,recap,next_hook,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,1,1)`).run(
@@ -461,19 +461,19 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
         `episode_${index}`, chapter.byte_start, chapter.byte_end, chapter.content_hash,
       );
     }
-    const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 2 });
+    const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 3 });
     setSeriesPipelineStatus(database, run.id, "configured", "generating_scripts");
     let service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
-    const seenHandoffs: unknown[] = [];
-    let generatingSecond = false;
+    const seenHandoffs: Array<{ episodeId: string; handoff: unknown }> = [];
+    let generatingEpisodeId = "";
     const generate: GenerateEpisodeScript = async (stage) => {
       if (stage.stage === "skeleton") {
-        seenHandoffs.push(stage.previousScriptHandoff);
-        generatingSecond = stage.previousScriptHandoff != null;
+        generatingEpisodeId = stage.episode.id;
+        seenHandoffs.push({ episodeId: stage.episode.id, handoff: stage.previousScriptHandoff });
         return { beats: [{ intent: stage.episode.storyArc, sourceIndexes: [0] }] };
       }
       if (stage.stage === "faithful") return { text: stage.sources[0]!.sourceText };
-      if (failSecond && generatingSecond) throw new Error("第二集暂时失败");
+      if (failSecond && generatingEpisodeId === "episode_2") throw new Error("第二集暂时失败");
       return { paragraphs: stage.paragraphs };
     };
     let worker = new JobWorker(database, {
@@ -516,8 +516,25 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
     await service.reconcile();
     assert.equal(service.get(run.id)!.progress.scripts.completed, 2);
     assert.equal(service.get(run.id)!.failures[0]!.subjectId, "episode_2");
+    assert.deepEqual(getMappedScriptJobs(database, run.id).map((item) => item.subject_id), ["episode_1", "episode_2"]);
+    assert.deepEqual(database.prepare(
+      "SELECT episode_id,kind FROM script_versions ORDER BY episode_id,kind",
+    ).all().map((row) => ({ ...row })), [
+      { episode_id: "episode_1", kind: "faithful" },
+      { episode_id: "episode_1", kind: "packaged" },
+    ]);
     service.retry(run.id);
     failSecond = false;
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    assert.deepEqual(getMappedScriptJobs(database, run.id).map((item) => item.subject_id), [
+      "episode_1", "episode_2", "episode_3",
+    ]);
+    const thirdJobId = getMappedScriptJobs(database, run.id)[2]!.job_id;
+    const thirdPayload = getJob(database, thirdJobId)!.payload as { previousScriptHandoff?: unknown };
+    assert.deepEqual(thirdPayload.previousScriptHandoff, {
+      summary: "故事弧2", continuityNotes: ["钩子2", "故事弧2"],
+    });
     assert.equal(await worker.runOne(), true);
 
     connection.close();
@@ -526,9 +543,23 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
     service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
     await service.reconcile();
     assert.equal(service.get(run.id)!.status, "checking_coverage");
-    assert.equal(service.get(run.id)!.progress.scripts.completed, 4);
-    assert.equal(seenHandoffs[0], null);
-    assert.deepEqual(seenHandoffs.at(-1), secondPayload.previousScriptHandoff);
+    assert.deepEqual(service.get(run.id)!.progress.scripts, { completed: 6, total: 6 });
+    assert.deepEqual(seenHandoffs.find((item) => item.episodeId === "episode_1")?.handoff, null);
+    assert.deepEqual(seenHandoffs.find((item) => item.episodeId === "episode_2")?.handoff,
+      secondPayload.previousScriptHandoff);
+    assert.deepEqual(seenHandoffs.find((item) => item.episodeId === "episode_3")?.handoff,
+      thirdPayload.previousScriptHandoff);
+    assert.deepEqual(database.prepare(
+      `SELECT episode_id,kind,COUNT(*) AS total FROM script_versions
+       GROUP BY episode_id,kind ORDER BY episode_id,kind`,
+    ).all().map((row) => ({ ...row })), [
+      { episode_id: "episode_1", kind: "faithful", total: 1 },
+      { episode_id: "episode_1", kind: "packaged", total: 1 },
+      { episode_id: "episode_2", kind: "faithful", total: 1 },
+      { episode_id: "episode_2", kind: "packaged", total: 1 },
+      { episode_id: "episode_3", kind: "faithful", total: 1 },
+      { episode_id: "episode_3", kind: "packaged", total: 1 },
+    ]);
     assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });

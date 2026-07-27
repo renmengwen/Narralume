@@ -9,10 +9,14 @@ import {
   exportWorkflowState,
   parseExportApiJob,
   parseExportReadiness,
+  parseProjectPackageResult,
+  projectPackageMatchesFinal,
+  projectPackageUrl,
   selectReadinessJob,
   type ExportJob,
   type ExportJobType,
   type ExportReadiness,
+  type ProjectPackageResult,
 } from "./export-logic";
 
 export interface ExportWorkspaceOptions {
@@ -26,6 +30,7 @@ export function useExportWorkspace({ episodeId, timelineHash, initialJobId, onJo
   const identity = useMemo(() => ({ episodeId, timelineHash }), [episodeId, timelineHash]);
   const routeKey = `${episodeId}:${timelineHash}`;
   const routeRef = useRef(routeKey);
+  const verifiedFinalRef = useRef<{ routeKey: string; episodeId: string; exportHash: string } | undefined>(undefined);
   const mountedRef = useRef(false);
   const onJobIdChangeRef = useRef(onJobIdChange);
   const [readiness, setReadiness] = useState<ExportReadiness>();
@@ -35,6 +40,9 @@ export function useExportWorkspace({ episodeId, timelineHash, initialJobId, onJo
   const [actionBusy, setActionBusy] = useState(false);
   const [message, setMessage] = useState("正在复核生产就绪状态…");
   const [error, setError] = useState<string>();
+  const [projectPackage, setProjectPackage] = useState<ProjectPackageResult>();
+  const [packageStatus, setPackageStatus] = useState<"idle" | "loading" | "success" | "failure" | "interrupted">("idle");
+  const [packageMessage, setPackageMessage] = useState("最终视频复核通过后可创建受控项目包。");
 
   useLayoutEffect(() => {
     mountedRef.current = true;
@@ -59,6 +67,13 @@ export function useExportWorkspace({ episodeId, timelineHash, initialJobId, onJo
       const body = await responseJson<unknown>(await fetch(exportReadinessUrl(episodeId, timelineHash)));
       const next = parseExportReadiness(body, identity);
       if (!current(expected)) return;
+      const nextFinalHash = next.finalExport?.verified ? next.finalExport.exportHash : undefined;
+      if (verifiedFinalRef.current?.routeKey !== expected || verifiedFinalRef.current.exportHash !== nextFinalHash) {
+        setProjectPackage(undefined);
+        setPackageStatus("idle");
+        setPackageMessage("最终视频复核通过后可创建受控项目包。");
+      }
+      verifiedFinalRef.current = nextFinalHash ? { routeKey: expected, episodeId, exportHash: nextFinalHash } : undefined;
       setReadiness(next);
       const recovered = recoverJob ? selectReadinessJob(next) : undefined;
       if (recoverJob) {
@@ -74,6 +89,10 @@ export function useExportWorkspace({ episodeId, timelineHash, initialJobId, onJo
         : operation.message);
     } catch (caught) {
       if (!current(expected)) return;
+      verifiedFinalRef.current = undefined;
+      setProjectPackage(undefined);
+      setPackageStatus("idle");
+      setPackageMessage("最终视频复核通过后可创建受控项目包。");
       setReadiness(undefined);
       if (recoverJob) {
         setJob(undefined);
@@ -98,6 +117,10 @@ export function useExportWorkspace({ episodeId, timelineHash, initialJobId, onJo
     setJobId(initialJobId);
     setActionBusy(false);
     setError(undefined);
+    setProjectPackage(undefined);
+    verifiedFinalRef.current = undefined;
+    setPackageStatus("idle");
+    setPackageMessage("最终视频复核通过后可创建受控项目包。");
     void refresh(true, undefined, !initialJobId);
   }, [initialJobId, refresh, routeKey]);
 
@@ -184,7 +207,34 @@ export function useExportWorkspace({ episodeId, timelineHash, initialJobId, onJo
     else if (workflow.action === "refresh") await refresh(true, terminalJobForRefresh(job, identity));
   }
 
-  return { readiness, job, loading, actionBusy, message, error, workflow, refresh, runPrimary };
+  async function createServerProjectPackage() {
+    const final = readiness?.finalExport;
+    if (packageStatus === "loading" || readiness?.episodeId !== episodeId || readiness.timelineHash !== timelineHash || !final?.verified) return;
+    const expected = routeKey;
+    setPackageStatus("loading");
+    setPackageMessage("正在服务端创建受控项目包…");
+    try {
+      const body = await responseJson<unknown>(await fetch(projectPackageUrl(episodeId, final.exportHash), { method: "POST" }));
+      const result = parseProjectPackageResult(body, { episodeId, exportHash: final.exportHash });
+      const currentFinal = verifiedFinalRef.current;
+      if (!current(expected) || currentFinal?.routeKey !== expected ||
+          !projectPackageMatchesFinal(result, currentFinal && { episodeId: currentFinal.episodeId, exportHash: currentFinal.exportHash })) return;
+      setProjectPackage(result);
+      setPackageStatus("success");
+      setPackageMessage("项目包已在服务端受控目录创建。");
+    } catch (caught) {
+      const currentFinal = verifiedFinalRef.current;
+      if (!current(expected) || currentFinal?.routeKey !== expected || currentFinal.exportHash !== final.exportHash) return;
+      const interrupted = caught instanceof DOMException && caught.name === "AbortError";
+      setPackageStatus(interrupted ? "interrupted" : "failure");
+      setPackageMessage(interrupted ? "项目包创建已中断，可重新创建。" : `项目包创建失败：${(caught as Error).message}`);
+    }
+  }
+
+  return {
+    readiness, job, loading, actionBusy, message, error, workflow, refresh, runPrimary,
+    projectPackage, packageStatus, packageMessage, createServerProjectPackage,
+  };
 }
 
 function jobMessage(job: ExportJob, type: ExportJobType) {

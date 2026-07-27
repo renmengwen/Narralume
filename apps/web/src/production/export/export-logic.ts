@@ -26,6 +26,14 @@ export interface ExportReadiness {
   };
 }
 
+export interface ProjectPackageResult {
+  episodeId: string;
+  finalExportHash: string;
+  packagePath: string;
+  packageHash: string;
+  manifest: Record<string, unknown>;
+}
+
 export type ExportPrimaryAction = "render" | "finalize" | "cancel" | "retry" | "download" | "refresh" | "none";
 
 export interface ExportWorkflowState {
@@ -178,6 +186,38 @@ export function exportReadinessUrl(episodeId: string, timelineHash: string) {
 
 export function exportArtifactUrl(episodeId: string, exportHash: string, artifact: "manifest" | "video") {
   return `/api/episodes/${encodeURIComponent(episodeId)}/exports/${encodeURIComponent(exportHash)}/${artifact}`;
+}
+
+export function projectPackageUrl(episodeId: string, exportHash: string) {
+  return `/api/episodes/${encodeURIComponent(episodeId)}/exports/${encodeURIComponent(exportHash)}/project-package`;
+}
+
+export function parseProjectPackageResult(
+  value: unknown,
+  expected: { episodeId: string; exportHash: string },
+): ProjectPackageResult {
+  const root = object(value);
+  const manifest = object(root.manifest);
+  const project = object(manifest.project);
+  if (typeof root.packagePath !== "string" || !root.packagePath.trim() || !HASH.test(String(root.packageHash)) ||
+      manifest.packageHash !== root.packageHash || project.episodeId !== expected.episodeId ||
+      project.finalExportHash !== expected.exportHash) {
+    throw new Error("项目包响应身份无效");
+  }
+  return {
+    episodeId: expected.episodeId,
+    finalExportHash: expected.exportHash,
+    packagePath: root.packagePath,
+    packageHash: String(root.packageHash),
+    manifest,
+  };
+}
+
+export function projectPackageMatchesFinal(
+  result: ProjectPackageResult | undefined,
+  expected: { episodeId: string; exportHash: string } | undefined,
+) {
+  return Boolean(result && expected && result.episodeId === expected.episodeId && result.finalExportHash === expected.exportHash);
 }
 
 export function formatExportBytes(bytes: number) {

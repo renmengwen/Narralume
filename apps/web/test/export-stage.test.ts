@@ -8,8 +8,11 @@ import {
   exportArtifactUrl,
   exportReadinessUrl,
   exportWorkflowState,
+  parseProjectPackageResult,
   parseExportApiJob,
   parseExportReadiness,
+  projectPackageUrl,
+  projectPackageMatchesFinal,
   selectReadinessJob,
   type ExportReadiness,
 } from "../src/production/export/export-logic.ts";
@@ -105,6 +108,31 @@ test("已有 verified final 时下载优先于旧失败任务", () => {
 test("受控下载地址只由分集和哈希构造", () => {
   assert.equal(exportReadinessUrl("episode/1", timelineHash), `/api/episodes/episode%2F1/export-readiness?timelineHash=${timelineHash}`);
   assert.equal(exportArtifactUrl("episode/1", exportHash, "video"), `/api/episodes/episode%2F1/exports/${exportHash}/video`);
+  assert.equal(projectPackageUrl("episode/1", exportHash), `/api/episodes/episode%2F1/exports/${exportHash}/project-package`);
+});
+
+test("项目包响应严格绑定当前分集和最终导出身份", () => {
+  const manifest = { packageHash: fileHash, project: { episodeId: identity.episodeId, finalExportHash: exportHash } };
+  assert.deepEqual(parseProjectPackageResult({ packagePath: "D:/data/packages/example", packageHash: fileHash, manifest }, { episodeId: identity.episodeId, exportHash }), {
+    episodeId: identity.episodeId, finalExportHash: exportHash,
+    packagePath: "D:/data/packages/example", packageHash: fileHash, manifest,
+  });
+  assert.throws(() => parseProjectPackageResult({ packagePath: "D:/data/packages/example", packageHash: fileHash, manifest: { ...manifest, project: { ...manifest.project, episodeId: "episode_2" } } }, { episodeId: identity.episodeId, exportHash }), /项目包响应身份无效/);
+  assert.throws(() => parseProjectPackageResult({ packagePath: "D:/data/packages/example", packageHash: fileHash, manifest: { ...manifest, packageHash: exportHash } }, { episodeId: identity.episodeId, exportHash }), /项目包响应身份无效/);
+});
+
+test("同一路由 final hash 从 A 切到 B 后清除旧结果并拒绝旧响应落地", () => {
+  const resultA = parseProjectPackageResult({
+    packagePath: "D:/data/packages/a",
+    packageHash: fileHash,
+    manifest: { packageHash: fileHash, project: { episodeId: identity.episodeId, finalExportHash: exportHash } },
+  }, { episodeId: identity.episodeId, exportHash });
+  const finalB = { episodeId: identity.episodeId, exportHash: "d".repeat(64) };
+  assert.equal(projectPackageMatchesFinal(resultA, { episodeId: identity.episodeId, exportHash }), true);
+  const retainedAfterRefresh = projectPackageMatchesFinal(resultA, finalB) ? resultA : undefined;
+  assert.equal(retainedAfterRefresh, undefined, "旧 A 结果必须在 B 成为当前 final 时清除");
+  const acceptedDelayedResponse = projectPackageMatchesFinal(resultA, finalB) ? resultA : undefined;
+  assert.equal(acceptedDelayedResponse, undefined, "延迟返回的 A 响应不得落入当前 B 状态");
 });
 
 test("终态任务刷新 readiness 后仍保留失败原因或中断状态", () => {
@@ -130,12 +158,12 @@ test("手工重新复核只保留当前身份的 failed 或 cancelled Job", () =
   assert.equal(terminalJobForRefresh(job("succeeded"), identity), undefined);
 });
 
-test("独立导出页保留单主操作、44px 控件和明确禁用的项目包入口", () => {
+test("独立导出页保留单主操作、44px 控件并等待 verified final 后显示项目包入口", () => {
   const html = renderToString(createElement(ExportStage, identity));
   assert.match(html, /审核与导出/);
   assert.match(html, /这里不会批准任何上游产物/);
   assert.match(html, /min-h-11/);
-  assert.match(html, /创建服务端项目包（尚未接线）/);
-  assert.match(html, /disabled=""/);
+  assert.match(html, /最终视频复核通过后可创建/);
+  assert.doesNotMatch(html, />创建服务端项目包</);
   assert.equal((html.match(/bg-\[var\(--accent\)\]/g) ?? []).length, 1);
 });

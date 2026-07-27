@@ -1,13 +1,21 @@
+import { useState } from "react";
+
 import {
   exportArtifactUrl,
   formatExportBytes,
   formatExportDuration,
+  projectPackageMatchesFinal,
 } from "./export-logic";
 import { useExportWorkspace, type ExportWorkspaceOptions } from "./use-export-workspace";
 
 export function ExportStage(props: ExportWorkspaceOptions) {
   const state = useExportWorkspace(props);
-  const final = state.readiness?.finalExport?.verified ? state.readiness.finalExport : undefined;
+  const final = state.readiness?.episodeId === props.episodeId && state.readiness.timelineHash === props.timelineHash && state.readiness.finalExport?.verified
+    ? state.readiness.finalExport
+    : undefined;
+  const projectPackage = projectPackageMatchesFinal(state.projectPackage, final && { episodeId: props.episodeId, exportHash: final.exportHash })
+    ? state.projectPackage
+    : undefined;
   const isInterrupted = state.job?.status === "cancelled";
   const statusRole = state.error || isInterrupted ? "alert" : "status";
 
@@ -60,11 +68,41 @@ export function ExportStage(props: ExportWorkspaceOptions) {
 
       <div className="mt-6 border-t border-[var(--border-subtle)] pt-5">
         <h3 className="text-sm font-semibold">项目包</h3>
-        <p className="mt-2 text-xs leading-6 text-[var(--fg-secondary)]">服务端受控项目包尚未接线。本入口不会创建本地替代包。</p>
-        <button type="button" disabled className="mt-3 min-h-11 w-full cursor-not-allowed rounded-md border border-[var(--border-subtle)] px-4 text-xs font-semibold text-[var(--fg-muted)] opacity-60">创建服务端项目包（尚未接线）</button>
+        <p className="mt-2 text-xs leading-6 text-[var(--fg-secondary)]">项目包仅保存在服务端受控目录，不会触发浏览器下载。</p>
+        {final ? <>
+          <div className="mt-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3 text-xs leading-5" role={state.packageStatus === "failure" || state.packageStatus === "interrupted" ? "alert" : "status"} aria-live="polite">
+            <strong className="block">{state.packageStatus === "loading" ? "正在进行" : state.packageStatus === "success" ? "成功" : state.packageStatus === "failure" ? "失败" : state.packageStatus === "interrupted" ? "已中断" : "就绪"}</strong>
+            {state.packageMessage}
+          </div>
+          <button type="button" className="mt-3 min-h-11 w-full rounded-md border border-[var(--border-subtle)] px-4 text-xs font-semibold hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45" disabled={state.packageStatus === "loading"} onClick={() => void state.createServerProjectPackage()}>{state.packageStatus === "loading" ? "正在创建项目包…" : projectPackage ? "重新创建服务端项目包" : "创建服务端项目包"}</button>
+          {projectPackage ? <div className="mt-3 grid gap-2 text-xs">
+            <CopyPath value={projectPackage.packagePath} />
+            <p><span className="block text-[var(--fg-muted)]">项目包哈希</span><code className="break-all text-[11px]">{projectPackage.packageHash}</code></p>
+          </div> : null}
+        </> : <p className="mt-2 text-xs leading-6 text-[var(--fg-muted)]">最终视频复核通过后可创建。</p>}
       </div>
     </aside>
   </section>;
+}
+
+function CopyPath({ value }: { value: string }) {
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "failure" | "interrupted">("idle");
+  async function copy() {
+    if (status === "loading") return;
+    setStatus("loading");
+    try {
+      if (!navigator.clipboard) throw new Error("当前浏览器不支持剪贴板写入");
+      await navigator.clipboard.writeText(value);
+      setStatus("success");
+    } catch (caught) {
+      setStatus(caught instanceof DOMException && caught.name === "AbortError" ? "interrupted" : "failure");
+    }
+  }
+  const message = status === "loading" ? "正在复制…" : status === "success" ? "路径已复制" : status === "failure" ? "复制失败，请手工选择" : status === "interrupted" ? "复制已中断" : "复制路径";
+  return <div className="grid gap-1">
+    <label><span className="block text-[var(--fg-muted)]">服务端路径</span><input className="mt-1 min-h-11 w-full rounded-md border border-[var(--border-subtle)] bg-transparent px-3 font-mono text-[11px]" readOnly value={value} onFocus={(event) => event.currentTarget.select()} /></label>
+    <button type="button" className="min-h-11 rounded-md border border-[var(--border-subtle)] px-3 font-semibold hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45" disabled={status === "loading"} onClick={() => void copy()}>{message}</button>
+  </div>;
 }
 
 function Identity({ label, value }: { label: string; value: string }) {

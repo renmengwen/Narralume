@@ -128,6 +128,14 @@ export function usesChapterWorkspaceStatus(stage: ProductionStageId) {
   return stage === "events" || stage === "episode";
 }
 
+export function resolveExportStageIdentity(episodeId: string | undefined, timelineHash: string | undefined) {
+  if (!episodeId) return { blocker: "当前分集尚未创建或加载，无法进入审核与导出。" } as const;
+  if (!timelineHash || !/^[0-9a-f]{64}$/u.test(timelineHash)) {
+    return { blocker: "缺少有效语音时间轴，请先完成音频与字幕阶段。" } as const;
+  }
+  return { episodeId, timelineHash } as const;
+}
+
 export function jobStatusText(status: JobStatus) {
   if (status === "queued") return "任务已排队";
   if (status === "running") return "任务正在执行";

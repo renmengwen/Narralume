@@ -38,6 +38,7 @@ import {
   productionWorkspaceFromSearch,
   productionWorkspacePath,
   resolveProductionStage,
+  resolveExportStageIdentity,
   stageDependencyLabel,
   updateWorkspaceStatusLayer,
 } from "../src/production-logic.ts";
@@ -71,6 +72,7 @@ import {
 } from "../src/production/scripts/script-editor.ts";
 import { visualCandidateState } from "../src/production/visual/visual-editor.ts";
 import { AudioStage } from "../src/production/audio/AudioStage.tsx";
+import { ProductionExportStage } from "../src/ProductionWorkspace.tsx";
 
 test("保存的主题优先于系统偏好", () => {
   assert.equal(resolveTheme("light", true), "light");
@@ -147,6 +149,33 @@ test("生产工作台地址更新可显式清除旧任务且保留未修改字�
     pipelineRunId: "pipeline_1",
   });
   assert.equal(mergeProductionWorkspaceLocation(current, { pipelineRunId: undefined }).pipelineRunId, undefined);
+});
+
+test("审核与导出绑定真实 Episode、时间轴和普通 Job URL", () => {
+  const timeline = "a".repeat(64);
+  assert.deepEqual(resolveExportStageIdentity("episode_7", timeline), { episodeId: "episode_7", timelineHash: timeline });
+  const path = productionWorkspacePath({ bookId: "book", seriesId: "series", stage: "export", episodeIndex: 7, timelineHash: timeline, jobId: "job_export", pipelineRunId: "pipeline_run" });
+  const restored = productionWorkspaceFromSearch(path);
+  assert.equal(restored?.jobId, "job_export");
+  assert.equal(restored?.pipelineRunId, "pipeline_run");
+  const html = renderToString(createElement(ProductionExportStage, { episodeId: "episode_7", timelineHash: timeline, jobId: "job_export", onJobIdChange: () => undefined }));
+  assert.match(html, /审核与导出/);
+  assert.match(html, /episode_7/);
+  assert.match(html, new RegExp(timeline));
+  assert.doesNotMatch(html, /该阶段将直接接通/);
+});
+
+test("审核与导出缺少 Episode 或时间轴时只有中文阻断且无动作", () => {
+  assert.match(resolveExportStageIdentity(undefined, "a".repeat(64)).blocker!, /当前分集/);
+  assert.match(resolveExportStageIdentity("episode_1", undefined).blocker!, /时间轴/);
+  for (const props of [
+    { episodeId: undefined, timelineHash: "a".repeat(64) },
+    { episodeId: "episode_1", timelineHash: undefined },
+  ]) {
+    const html = renderToString(createElement(ProductionExportStage, { ...props, onJobIdChange: () => undefined }));
+    assert.match(html, /审核与导出暂不可用/);
+    assert.doesNotMatch(html, /<button|<a /);
+  }
 });
 
 test("阶段导航显示静态依赖而不是虚假等待状态", () => {

@@ -63,10 +63,20 @@ function inputHash(events: readonly PreparedChapterEvent[]) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
-interface AnalyzeJobPayload {
+const CHAPTER_ANALYSIS_CONTRACT_VERSION = "chapter-events-analysis-v1";
+const CHAPTER_ANALYSIS_PROMPT_VERSION = "chapter-events-prompt-v1";
+const CHAPTER_ANALYSIS_PARSER_VERSION = "chapter-events-parser-v1";
+
+interface AnalyzeReuseIdentity {
   bookId: string;
   chapterId: string;
   contentHash: string;
+  analysisContractVersion: string;
+  promptContractVersion: string;
+  parserContractVersion: string;
+}
+
+interface AnalyzeJobPayload extends AnalyzeReuseIdentity {
   providerId: string;
   model: string;
   requestHash: string;
@@ -76,7 +86,10 @@ function analyzePayload(value: unknown): AnalyzeJobPayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("章节自动分析任务参数无效");
   const input = value as Record<string, unknown>;
   const result = {} as Record<keyof AnalyzeJobPayload, string>;
-  for (const key of ["bookId", "chapterId", "contentHash", "providerId", "model", "requestHash"] as const) {
+  for (const key of [
+    "bookId", "chapterId", "contentHash", "analysisContractVersion", "promptContractVersion",
+    "parserContractVersion", "providerId", "model", "requestHash",
+  ] as const) {
     if (typeof input[key] !== "string" || !input[key].trim()) throw new Error("章节自动分析任务冻结身份无效");
     result[key] = input[key].trim();
   }
@@ -86,8 +99,30 @@ function analyzePayload(value: unknown): AnalyzeJobPayload {
   return result;
 }
 
-function analysisRequestHash(input: Omit<AnalyzeJobPayload, "requestHash">) {
-  return createHash("sha256").update(JSON.stringify({ contract: "chapter-events-analyze-v1", ...input })).digest("hex");
+function analysisRequestHash(input: AnalyzeReuseIdentity) {
+  return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+
+function reuseIdentity(input: AnalyzeJobPayload): AnalyzeReuseIdentity {
+  return {
+    bookId: input.bookId,
+    chapterId: input.chapterId,
+    contentHash: input.contentHash,
+    analysisContractVersion: input.analysisContractVersion,
+    promptContractVersion: input.promptContractVersion,
+    parserContractVersion: input.parserContractVersion,
+  };
+}
+
+function hasSameReuseIdentity(job: JobRecord, expected: AnalyzeReuseIdentity) {
+  if (job.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE) return false;
+  try {
+    const existing = analyzePayload(job.payload);
+    return JSON.stringify(reuseIdentity(existing)) === JSON.stringify(expected) &&
+      existing.requestHash === analysisRequestHash(expected);
+  } catch {
+    return false;
+  }
 }
 
 export async function enqueueChapterEventsAnalysisJob(
@@ -95,6 +130,7 @@ export async function enqueueChapterEventsAnalysisJob(
   dataRoot: string,
   config: ChapterTextModelConfig,
   input: Omit<CreateJobInput, "id" | "type">,
+  canCreate: () => boolean = () => true,
 ): Promise<{ job: JobRecord; created: boolean }> {
   const request = input.payload && typeof input.payload === "object" && !Array.isArray(input.payload)
     ? input.payload as { bookId?: unknown; chapterId?: unknown }
@@ -110,16 +146,20 @@ export async function enqueueChapterEventsAnalysisJob(
     bookId: request.bookId.trim(),
     chapterId: request.chapterId.trim(),
     contentHash,
-    providerId: config.providerId.trim(),
-    model: config.model.trim(),
+    analysisContractVersion: CHAPTER_ANALYSIS_CONTRACT_VERSION,
+    promptContractVersion: CHAPTER_ANALYSIS_PROMPT_VERSION,
+    parserContractVersion: CHAPTER_ANALYSIS_PARSER_VERSION,
   };
-  if (!identity.providerId || !identity.model) throw new Error("章节分析模型配置无效");
+  const providerId = config.providerId.trim();
+  const model = config.model.trim();
+  if (!providerId || !model) throw new Error("章节分析模型配置无效");
   const requestHash = analysisRequestHash(identity);
-  const payload: AnalyzeJobPayload = { ...identity, requestHash };
+  const payload: AnalyzeJobPayload = { ...identity, providerId, model, requestHash };
   const id = `job_chapter_analyze_${requestHash}`;
+  if (!canCreate()) throw new Error("章节分析派发已停止");
   const existing = getJob(database, id);
   if (existing) {
-    if (existing.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
+    if (!hasSameReuseIdentity(existing, identity)) {
       throw new Error("章节自动分析任务身份冲突");
     }
     return { job: existing, created: false };
@@ -131,8 +171,7 @@ export async function enqueueChapterEventsAnalysisJob(
     };
   } catch (error) {
     const raced = getJob(database, id);
-    if (!raced || raced.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE ||
-        JSON.stringify(raced.payload) !== JSON.stringify(payload)) throw error;
+    if (!raced || !hasSameReuseIdentity(raced, identity)) throw error;
     return { job: raced, created: false };
   }
 }
@@ -185,13 +224,8 @@ export function createChapterEventsAnalysisJobHandler(
   return async (context) => {
     const task = analyzePayload(context.job.payload);
     if (context.job.id !== `job_chapter_analyze_${task.requestHash}` ||
-        task.requestHash !== analysisRequestHash({
-          bookId: task.bookId,
-          chapterId: task.chapterId,
-          contentHash: task.contentHash,
-          providerId: task.providerId,
-          model: task.model,
-        }) || task.providerId !== config.providerId.trim() || task.model !== config.model.trim()) {
+        task.requestHash !== analysisRequestHash(reuseIdentity(task)) ||
+        task.providerId !== config.providerId.trim() || task.model !== config.model.trim()) {
       throw new Error("章节自动分析任务冻结身份不一致");
     }
     context.throwIfCancellationRequested();
@@ -214,7 +248,11 @@ export function createChapterEventsAnalysisJobHandler(
       clearInterval(poll);
     }
     context.throwIfCancellationRequested();
-    if (inputs.length === 0) return { analyzed: 0, preserved: true };
+    if (inputs.length === 0) {
+      const existing = database.prepare("SELECT 1 FROM chapter_events WHERE chapter_id = ? LIMIT 1").get(task.chapterId);
+      if (!existing) throw new Error("章节分析未生成可持久事件");
+      return { analyzed: 0, preserved: true };
+    }
     const prepared = await prepareChapterEvents(database, dataRoot, task.bookId, task.chapterId, inputs);
     context.throwIfCancellationRequested();
     const result = context.commitCheckpoint("chapter-events-analyze", task.chapterId, inputHash(prepared), (transaction) => {

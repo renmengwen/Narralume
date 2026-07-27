@@ -41,6 +41,92 @@ test("健康检查返回服务状态", async () => {
   }
 });
 
+test("全本流水线 HTTP 创建、查询和控制保持幂等", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-pipeline-"));
+  const app = buildApp({
+    dataRoot,
+    logger: false,
+    pipelinePollMs: 10_000,
+    jobPollMs: 10_000,
+    chapterTextProvider: {
+      baseUrl: "http://local.invalid", apiKey: "test", model: "test", providerId: "test",
+    },
+    chapterAnalyzer: async ({ chapterId, atoms }) => [{
+      type: "character",
+      payload: { name: chapterId },
+      sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+    }],
+  });
+  try {
+    const imported = await app.inject({
+      method: "POST", url: "/api/books/import", headers: { "content-type": "text/plain" },
+      payload: Buffer.from("第一章\n甲在庭院出现。", "utf8"),
+    });
+    const bookId = imported.json().book.id as string;
+    const chapters = await app.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const series = await app.inject({
+      method: "POST", url: `/api/books/${bookId}/series`, payload: { title: "全本系列" },
+    });
+    const seriesId = series.json().series.id as string;
+    const payload = {
+      episodeCount: 10, targetDurationSeconds: 1200,
+      sourceStartChapterId: chapterId, sourceEndChapterId: chapterId,
+    };
+    const created = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/pipeline-runs`, payload,
+    });
+    assert.equal(created.statusCode, 201);
+    const runId = created.json().run.id as string;
+    const blockedJob = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: "chapter_events_analyze", payload: { bookId, chapterId } },
+    });
+    assert.equal(blockedJob.statusCode, 409);
+    assert.match(blockedJob.json().message, /只读/);
+    const otherImported = await app.inject({
+      method: "POST", url: "/api/books/import", headers: { "content-type": "text/plain" },
+      payload: Buffer.from("第一章\n乙在书房出现。", "utf8"),
+    });
+    const otherBookId = otherImported.json().book.id as string;
+    const otherChapters = await app.inject({ method: "GET", url: `/api/books/${otherBookId}/chapters` });
+    const otherChapterId = otherChapters.json().items[0].id as string;
+    const otherBookJob = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: "chapter_events_analyze", payload: { bookId: otherBookId, chapterId: otherChapterId } },
+    });
+    assert.equal(otherBookJob.statusCode, 201);
+    const duplicate = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/pipeline-runs`, payload,
+    });
+    const current = await app.inject({ method: "GET", url: `/api/series/${seriesId}/pipeline-runs/current` });
+    const byId = await app.inject({ method: "GET", url: `/api/pipeline-runs/${runId}` });
+    const paused = await app.inject({ method: "POST", url: `/api/pipeline-runs/${runId}/pause` });
+    const allowedWhilePaused = await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: "chapter_events_analyze", payload: { bookId, chapterId } },
+    });
+    const pausedAgain = await app.inject({ method: "POST", url: `/api/pipeline-runs/${runId}/pause` });
+    const resumed = await app.inject({ method: "POST", url: `/api/pipeline-runs/${runId}/resume` });
+    const retried = await app.inject({ method: "POST", url: `/api/pipeline-runs/${runId}/retry` });
+    const cancelled = await app.inject({ method: "POST", url: `/api/pipeline-runs/${runId}/cancel` });
+    const cancelledAgain = await app.inject({ method: "POST", url: `/api/pipeline-runs/${runId}/cancel` });
+    assert.equal(duplicate.statusCode, 409);
+    assert.equal(current.statusCode, 200);
+    assert.equal(byId.json().run.id, runId);
+    assert.equal(paused.json().run.status, "paused");
+    assert.notEqual(allowedWhilePaused.statusCode, 409);
+    assert.equal(pausedAgain.json().run.status, "paused");
+    assert.notEqual(resumed.json().run.status, "paused");
+    assert.equal(retried.statusCode, 200);
+    assert.equal(cancelled.json().run.status, "cancelled");
+    assert.equal(cancelledAgain.json().run.status, "cancelled");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("HTTP 原始流导入 TXT 并返回中文幂等状态", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-import-"));
   const app = buildApp({ dataRoot, logger: false });

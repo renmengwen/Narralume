@@ -160,3 +160,62 @@ test("运行中的自动分析任务响应持久取消请求", async () => {
     await rm(dataRoot, { recursive: true, force: true });
   }
 });
+
+test("自动分析复用身份不包含 provider 和 model 且保留首次执行溯源", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-chapter-analysis-provenance-"));
+  const source = Buffer.from("第一章\n甲进入庭院。", "utf8");
+  const firstProvider = { ...textProvider, providerId: "provider-a", model: "model-a" };
+  const secondProvider = { ...textProvider, providerId: "provider-b", model: "model-b" };
+  let firstApp = buildApp({
+    dataRoot,
+    logger: false,
+    chapterTextProvider: firstProvider,
+    chapterAnalyzer: async ({ atoms }) => [{
+      type: "character",
+      payload: { name: "甲" },
+      sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+    }],
+    jobPollMs: 5,
+  });
+  try {
+    const imported = await firstApp.inject({
+      method: "POST", url: "/api/books/import", headers: { "content-type": "text/plain" }, payload: source,
+    });
+    const bookId = imported.json().book.id as string;
+    const chapters = await firstApp.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const created = await firstApp.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } },
+    });
+    assert.equal(created.statusCode, 201);
+    const firstJob = await waitForJob(firstApp, created.json().job.id as string);
+    assert.equal(firstJob.status, "succeeded");
+    assert.equal(firstJob.payload.providerId, "provider-a");
+    assert.equal(firstJob.payload.model, "model-a");
+    assert.equal(firstJob.payload.analysisContractVersion, "chapter-events-analysis-v1");
+    assert.equal(firstJob.payload.promptContractVersion, "chapter-events-prompt-v1");
+    assert.equal(firstJob.payload.parserContractVersion, "chapter-events-parser-v1");
+    await firstApp.close();
+
+    const secondApp = buildApp({
+      dataRoot,
+      logger: false,
+      chapterTextProvider: secondProvider,
+      chapterAnalyzer: async () => { throw new Error("复用成功任务时不应重新分析"); },
+      jobPollMs: 5,
+    });
+    firstApp = secondApp;
+    const reused = await secondApp.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } },
+    });
+    assert.equal(reused.statusCode, 200);
+    assert.equal(reused.json().job.id, firstJob.id);
+    assert.equal(reused.json().job.payload.providerId, "provider-a");
+    assert.equal(reused.json().job.payload.model, "model-a");
+  } finally {
+    await firstApp.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});

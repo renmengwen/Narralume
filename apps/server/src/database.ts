@@ -538,6 +538,64 @@ const MIGRATION_13 = `
   END;
 `;
 
+const MIGRATION_14 = `
+  CREATE TABLE series_pipeline_runs (
+    id TEXT PRIMARY KEY,
+    series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN (
+      'configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes',
+      'validating_plan', 'freezing_plan', 'generating_scripts', 'checking_coverage',
+      'awaiting_review', 'paused', 'failed', 'cancelled', 'completed'
+    )),
+    resume_status TEXT CHECK (resume_status IS NULL OR resume_status IN (
+      'configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes',
+      'validating_plan', 'freezing_plan', 'generating_scripts', 'checking_coverage',
+      'awaiting_review', 'failed'
+    )),
+    episode_count INTEGER NOT NULL CHECK (episode_count BETWEEN 1 AND 1000),
+    target_duration_seconds INTEGER NOT NULL CHECK (target_duration_seconds BETWEEN 60 AND 3600),
+    source_start_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    source_end_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    config_hash TEXT NOT NULL CHECK (
+      length(config_hash) = 64 AND config_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    chapter_events_hash TEXT CHECK (
+      chapter_events_hash IS NULL OR (
+        length(chapter_events_hash) = 64 AND chapter_events_hash NOT GLOB '*[^0-9a-f]*'
+      )
+    ),
+    story_bible_id TEXT,
+    plan_hash TEXT CHECK (
+      plan_hash IS NULL OR (length(plan_hash) = 64 AND plan_hash NOT GLOB '*[^0-9a-f]*')
+    ),
+    failure_code TEXT CHECK (failure_code IS NULL OR length(failure_code) BETWEEN 1 AND 128),
+    failure_message TEXT CHECK (failure_message IS NULL OR length(failure_message) BETWEEN 1 AND 2000),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+    CHECK ((status = 'paused') = (resume_status IS NOT NULL))
+  ) STRICT;
+
+  CREATE UNIQUE INDEX series_pipeline_runs_one_current
+    ON series_pipeline_runs(series_project_id)
+    WHERE status NOT IN ('cancelled', 'completed');
+
+  CREATE INDEX series_pipeline_runs_status
+    ON series_pipeline_runs(status, updated_at, id);
+
+  CREATE TABLE series_pipeline_jobs (
+    run_id TEXT NOT NULL REFERENCES series_pipeline_runs(id) ON DELETE CASCADE,
+    stage TEXT NOT NULL CHECK (stage IN ('chapter_analysis', 'story_bible', 'episode_plan', 'script_generation')),
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('chapter', 'bible_chunk', 'plan', 'episode')),
+    subject_id TEXT NOT NULL CHECK (length(subject_id) BETWEEN 1 AND 200),
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (run_id, stage, subject_type, subject_id)
+  ) STRICT;
+
+  CREATE INDEX series_pipeline_jobs_job
+    ON series_pipeline_jobs(job_id);
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -545,6 +603,7 @@ const MIGRATIONS = [
   MIGRATION_11,
   MIGRATION_12,
   MIGRATION_13,
+  MIGRATION_14,
 ];
 
 export interface NarralumeDatabase {

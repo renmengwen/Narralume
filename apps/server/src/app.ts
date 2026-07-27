@@ -121,12 +121,19 @@ import {
   type PutVisualSegmentInput,
   VisualSegmentStoreError,
 } from "./visual-segment-store.js";
+import { registerSeriesPipelineRoutes } from "./series-pipeline-routes.js";
+import { SeriesPipelineService, SeriesPipelineWorker } from "./series-pipeline-service.js";
+import {
+  assertSeriesPipelineAllowsChapterEventMutation,
+  SeriesPipelineError,
+} from "./series-pipeline-store.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
   logger?: boolean;
   jobHandlers?: Readonly<Record<string, JobHandler>>;
   jobPollMs?: number;
+  pipelinePollMs?: number;
   jobWorker?: Partial<JobWorkerOptions>;
   imageProvider?: OpenAiImageConfig | null;
   chapterTextProvider?: ChapterTextModelConfig | null;
@@ -351,6 +358,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
+  let pipelineWorker: SeriesPipelineWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
       workerId: options.jobWorker?.workerId ?? `local_${randomUUID()}`,
@@ -359,6 +367,16 @@ export function buildApp(options: BuildAppOptions = {}) {
       retryDelayMs: options.jobWorker?.retryDelayMs,
       onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "本地任务 Worker 运行异常")),
     });
+    const pipelineService = new SeriesPipelineService({
+      database: connection.database,
+      dataRoot,
+      resolveChapterTextProvider: () => resolveChapterTextProvider(),
+    });
+    pipelineWorker = new SeriesPipelineWorker(
+      pipelineService,
+      options.jobWorker?.onError ?? ((error) => app.log.error(error, "全本流水线 Worker 运行异常")),
+    );
+    void app.register(registerSeriesPipelineRoutes, { service: pipelineService, worker: pipelineWorker });
   } catch (error) {
     connection.close();
     throw error;
@@ -367,9 +385,11 @@ export function buildApp(options: BuildAppOptions = {}) {
   app.addHook("onReady", async () => {
     const cleanup = await cleanupPendingBookDeletions(connection.database, dataRoot);
     if (cleanup.pending) app.log.warn({ pending: cleanup.pending }, "存在尚未清理的整书删除文件");
+    pipelineWorker.start(options.pipelinePollMs);
     if (supportedJobTypes.size > 0) worker.start(options.jobPollMs);
   });
   app.addHook("onClose", async () => {
+    await pipelineWorker.stop();
     await worker.stop();
     connection.close();
   });
@@ -1009,6 +1029,17 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
     if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE) {
       try {
+        const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+          ? body.payload as { bookId?: unknown; chapterId?: unknown }
+          : {};
+        if (typeof payload.bookId === "string" && typeof payload.chapterId === "string") {
+          assertSeriesPipelineAllowsChapterEventMutation(
+            connection.database,
+            payload.bookId.trim(),
+            payload.chapterId.trim(),
+            { allowPausedPipelineJobs: true },
+          );
+        }
         const result = await enqueueChapterEventsAnalysisJob(connection.database, dataRoot, requestTextProvider!, {
           payload: body.payload ?? {}, priority, maxAttempts, runAfter,
         });
@@ -1018,7 +1049,7 @@ export function buildApp(options: BuildAppOptions = {}) {
           job: result.job,
         });
       } catch (error) {
-        if (error instanceof ChapterEventError) {
+        if (error instanceof ChapterEventError || error instanceof SeriesPipelineError) {
           return reply.code(error.statusCode).send({ ok: false, message: error.message });
         }
         return reply.code(400).send({
@@ -1154,6 +1185,11 @@ export function buildApp(options: BuildAppOptions = {}) {
     Body: ReplaceChapterEventsBody;
   }>("/api/books/:bookId/chapters/:chapterId/events", async (request, reply) => {
     try {
+      assertSeriesPipelineAllowsChapterEventMutation(
+        connection.database,
+        request.params.bookId,
+        request.params.chapterId,
+      );
       const events = await replaceChapterEvents(
         connection.database,
         dataRoot,
@@ -1163,7 +1199,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       );
       return { ok: true, message: "章节事件已保存", items: events, total: events.length };
     } catch (error) {
-      if (error instanceof ChapterEventError) {
+      if (error instanceof ChapterEventError || error instanceof SeriesPipelineError) {
         return reply.code(error.statusCode).send({ ok: false, message: error.message });
       }
       throw error;

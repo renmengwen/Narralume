@@ -5,7 +5,10 @@ import { activeModelLabel, loadModelConfig, type ModelConfig } from "../../setti
 import type {
   Episode, JobRecord, ScriptApproval, TtsCalibrationWorkspace, TtsTimeline, TtsTimelineSummary,
 } from "../types";
-import { completedTtsCalibrationMode, completedTtsTimelineHash, ttsTimelinePayload } from "./audio-editor";
+import {
+  completedTtsCalibrationMode, completedTtsTimelineHash, listeningIdentityKey, listeningReviewPayload,
+  listeningReviewUrl, parseListeningReviewWorkspace, ttsTimelinePayload, type TtsListeningReviewWorkspace,
+} from "./audio-editor";
 
 export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, currentJob, jobActive, setBusy, setStatus, onTimelineChange, onJobCreated }: {
   seriesId: string; episodeIndex: number; timelineHash?: string; currentJob?: JobRecord; jobActive: boolean;
@@ -20,9 +23,20 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
   const [rate, setRate] = useState(0);
   const [modelConfig, setModelConfig] = useState<ModelConfig>();
   const [modelConfigError, setModelConfigError] = useState("");
+  const [listeningWorkspace, setListeningWorkspace] = useState<TtsListeningReviewWorkspace>();
+  const [checkedListeningSegments, setCheckedListeningSegments] = useState<Set<number>>(new Set());
+  const [checkedProperNouns, setCheckedProperNouns] = useState<Set<string>>(new Set());
+  const [listeningNotes, setListeningNotes] = useState("");
+  const [listeningStatus, setListeningStatus] = useState<"idle" | "loading" | "success" | "failure" | "interrupted">("idle");
+  const [listeningMessage, setListeningMessage] = useState("语音时间轴生成后可开始人工听审。");
+  const [listeningRefresh, setListeningRefresh] = useState(0);
   const mounted = useRef(true);
   const writing = useRef(false);
-  const routeKey = `${seriesId}:${episodeIndex}`;
+  const reviewing = useRef(false);
+  const reviewJobId = useRef("");
+  const listeningIdentity = useRef("");
+  const listeningRequest = useRef(0);
+  const routeKey = `${seriesId}:${episodeIndex}:${timelineHash ?? ""}`;
   const currentRoute = useRef(routeKey);
   useLayoutEffect(() => {
     mounted.current = true;
@@ -136,6 +150,59 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
     });
   }, [currentJob, episode, timeline?.timelineHash]);
 
+  useEffect(() => {
+    const expectedRoute = routeKey;
+    const expectedTimeline = timeline;
+    const request = ++listeningRequest.current;
+    listeningIdentity.current = "";
+    setListeningWorkspace(undefined);
+    setCheckedListeningSegments(new Set());
+    setCheckedProperNouns(new Set());
+    setListeningNotes("");
+    if (!expectedTimeline) {
+      setListeningStatus("idle");
+      setListeningMessage("语音时间轴生成后可开始人工听审。");
+      return;
+    }
+    setListeningStatus("loading");
+    setListeningMessage("正在读取当前语音时间轴的人工听审清单…");
+    void fetch(listeningReviewUrl(expectedTimeline.episodeId, expectedTimeline.timelineHash))
+      .then((response) => responseJson<unknown>(response))
+      .then((body) => parseListeningReviewWorkspace(body, {
+        episodeId: expectedTimeline.episodeId, timelineHash: expectedTimeline.timelineHash,
+      }))
+      .then((workspace) => {
+        if (!mounted.current || currentRoute.current !== expectedRoute || listeningRequest.current !== request) return;
+        listeningIdentity.current = listeningIdentityKey(workspace.identity);
+        setListeningWorkspace(workspace);
+        setCheckedListeningSegments(new Set(workspace.latestReview?.checkedSegmentIndexes ?? []));
+        setCheckedProperNouns(new Set(workspace.latestReview?.checkedProperNouns ?? []));
+        setListeningNotes(workspace.latestReview?.notes ?? "");
+        setListeningStatus("success");
+        setListeningMessage(workspace.latestReview
+          ? `已恢复当前身份的${workspace.latestReview.action === "approve" ? "通过" : "不通过"}听审记录。`
+          : `待人工核对 ${workspace.requiredSegmentIndexes.length} 个必听片段和 ${workspace.requiredProperNouns.length} 个专名。`);
+      })
+      .catch((error) => {
+        if (!mounted.current || currentRoute.current !== expectedRoute || listeningRequest.current !== request) return;
+        setListeningStatus("failure");
+        setListeningMessage(`人工听审清单读取失败：${(error as Error).message}`);
+      });
+  }, [listeningRefresh, routeKey, timeline]);
+
+  useEffect(() => {
+    if (!reviewJobId.current || currentJob?.id !== reviewJobId.current ||
+        (currentJob.status !== "succeeded" && currentJob.status !== "failed" && currentJob.status !== "cancelled")) return;
+    reviewJobId.current = "";
+    if (currentJob.status === "succeeded") setListeningRefresh((value) => value + 1);
+    else {
+      setListeningStatus(currentJob.status === "cancelled" ? "interrupted" : "failure");
+      setListeningMessage(currentJob.status === "cancelled"
+        ? "人工听审提交已中断，当前勾选仍保留。"
+        : `人工听审提交失败：${currentJob.errorMessage ?? "未提供错误详情"}`);
+    }
+  }, [currentJob?.id, currentJob?.status, currentJob?.errorMessage]);
+
   async function createTimeline() {
     if (writing.current || jobActive || !episode || approval?.status !== "approved") return;
     writing.current = true; setBusy(true); setStatus("正在创建语音时间轴任务…");
@@ -192,10 +259,60 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
     }
   }
 
+  function toggleListeningSegment(index: number) {
+    setCheckedListeningSegments((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index); else next.add(index);
+      return next;
+    });
+  }
+
+  function toggleProperNoun(term: string) {
+    setCheckedProperNouns((current) => {
+      const next = new Set(current);
+      if (next.has(term)) next.delete(term); else next.add(term);
+      return next;
+    });
+  }
+
+  async function submitListeningReview(action: "approve" | "reject") {
+    if (reviewing.current || jobActive || !listeningWorkspace) return;
+    const expectedRoute = routeKey;
+    const expectedIdentity = listeningIdentity.current;
+    const expectedTimeline = listeningWorkspace.identity.timelineHash;
+    reviewing.current = true;
+    setBusy(true);
+    setListeningStatus("loading");
+    setListeningMessage(action === "approve" ? "正在提交通过听审…" : "正在提交不通过听审…");
+    try {
+      const body = await responseJson<{ message: string; job: JobRecord }>(await fetch(
+        listeningReviewUrl(listeningWorkspace.identity.episodeId, expectedTimeline), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(listeningReviewPayload(action, checkedListeningSegments, checkedProperNouns, listeningNotes)),
+        },
+      ));
+      if (!mounted.current || currentRoute.current !== expectedRoute || listeningIdentity.current !== expectedIdentity) return;
+      reviewJobId.current = body.job.id;
+      onJobCreated(body.job.id);
+      setListeningStatus("loading");
+      setListeningMessage(body.message || "人工听审任务已创建并持久化。");
+    } catch (error) {
+      if (!mounted.current || currentRoute.current !== expectedRoute || listeningIdentity.current !== expectedIdentity) return;
+      const interrupted = error instanceof DOMException && error.name === "AbortError";
+      setListeningStatus(interrupted ? "interrupted" : "failure");
+      setListeningMessage(interrupted ? "人工听审提交已中断，当前勾选仍保留。" : `人工听审提交失败：${(error as Error).message}`);
+    } finally {
+      reviewing.current = false;
+      if (mounted.current && currentRoute.current === expectedRoute) setBusy(false);
+    }
+  }
+
   return {
     episode, approval, timeline, calibration, voice, rate, setVoice, setRate,
     runtimeLabel: modelConfig ? activeModelLabel(modelConfig, "tts") : "正在读取设置中心 TTS…",
     runtimeError: modelConfigError,
     createTimeline, createCalibration, selectCalibration,
+    listeningWorkspace, checkedListeningSegments, checkedProperNouns, listeningNotes, setListeningNotes,
+    listeningStatus, listeningMessage, toggleListeningSegment, toggleProperNoun, submitListeningReview,
   };
 }

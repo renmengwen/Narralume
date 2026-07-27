@@ -7,10 +7,10 @@ import type { Episode, TtsTimeline, TtsTimelineSummary } from "../types";
 import { conflictRevision, nextVisualDraft, visualDraft, visualPlanStatus, visualSegmentPayload } from "./visual-editor";
 import type { ContactSheetResult, VisualAsset, VisualSegment, VisualSegmentDraft } from "./types";
 
-export function useVisualWorkspace({ seriesId, episodeIndex, timelineHash, externalBusy, setBusy, setStatus, onEpisodeChange, onTimelineChange }: {
+export function useVisualWorkspace({ seriesId, episodeIndex, timelineHash, externalBusy, setBusy, setStatus, onTimelineChange }: {
   seriesId: string; episodeIndex: number; timelineHash?: string; externalBusy: boolean;
   setBusy: (busy: boolean) => void; setStatus: (message: string) => void;
-  onEpisodeChange: (index: number) => void; onTimelineChange: (hash: string | undefined) => void;
+  onTimelineChange: (hash: string | undefined) => void;
 }) {
   const [episode, setEpisode] = useState<Episode>();
   const [timelines, setTimelines] = useState<TtsTimelineSummary[]>([]);
@@ -119,5 +119,5 @@ export function useVisualWorkspace({ seriesId, episodeIndex, timelineHash, exter
     finally { writing.current = false; if (epoch.current === requestEpoch) { setLoading(false); setBusy(false); } }
   }
 
-  return { episode, timelines, timeline, assets, segments, draft, setDraft, contactSheet, plan, busy, chooseTimeline, chooseSegment, addSegment, saveSegment, exportContactSheet, onEpisodeChange };
+  return { episode, timelines, timeline, assets, segments, draft, setDraft, contactSheet, plan, busy, chooseTimeline, chooseSegment, addSegment, saveSegment, exportContactSheet };
 }

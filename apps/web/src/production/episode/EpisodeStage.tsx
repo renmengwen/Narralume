@@ -8,11 +8,11 @@ function summary(payload: Record<string, string>) { return Object.values(payload
 
 export function EpisodeStage({
   bookId, seriesId, episodeIndex, chapters, startChapterId, currentJob, busy, setBusy, setStatus,
-  onEpisodeChange, onStartChapterChange, onJobCreated, onOpenScripts,
+  onStartChapterChange, onJobCreated, onOpenScripts,
 }: {
   bookId: string; seriesId: string; episodeIndex: number; chapters: Chapter[]; startChapterId?: string;
   currentJob?: JobRecord; busy: boolean; setBusy: (busy: boolean) => void;
-  setStatus: (message: string) => void; onEpisodeChange: (index: number) => void;
+  setStatus: (message: string) => void;
   onStartChapterChange: (id: string | undefined) => void; onJobCreated: (id?: string) => void;
   onOpenScripts: () => void;
 }) {
@@ -35,7 +35,6 @@ export function EpisodeStage({
   return <div className="grid min-h-[calc(100vh-344px)] grid-cols-[minmax(300px,.9fr)_minmax(460px,1.2fr)_minmax(360px,1fr)] max-md:grid-cols-1">
     <section className="border-r border-[var(--border-subtle)] p-6 max-md:border-r-0 max-md:border-b">
       <div className="grid grid-cols-2 gap-3">
-        <label className="text-xs text-[var(--fg-secondary)]">分集序号<input aria-label="分集序号" type="number" min={1} step={1} disabled={busy} value={episodeIndex} onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value > 0) onEpisodeChange(value); }} className="mt-1 block w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
         <label className="text-xs text-[var(--fg-secondary)]">故事起点<select aria-label="故事起点" disabled={busy} value={startChapterId ?? ""} onChange={(event) => onStartChapterChange(event.target.value || undefined)} className="mt-1 block w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2"><option value="">{episodeIndex > 1 ? "从上一集边界继续" : "从故事开头开始"}</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.chapter_index + 1}. {chapter.title}</option>)}</select></label>
       </div>
       <label className="mt-4 block text-xs text-[var(--fg-secondary)]">结尾倾向（可选）<input disabled={busy} value={endingPreference} onChange={(event) => setEndingPreference(event.target.value)} placeholder="例如：在揭示前留下悬念" className="mt-1 block w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3 text-sm" /></label>

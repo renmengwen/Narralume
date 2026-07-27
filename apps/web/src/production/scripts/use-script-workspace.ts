@@ -57,7 +57,7 @@ export function applyIfCurrentScriptRoute(
 }
 
 export function useScriptWorkspace({
-  seriesId, episodeIndex, currentJob, jobActive, setBusy, setStatus, onJobCreated,
+  seriesId, episodeIndex, currentJob, jobActive, setBusy, setStatus, onDraftDirtyChange, onJobCreated,
 }: {
   seriesId: string;
   episodeIndex: number;
@@ -65,6 +65,7 @@ export function useScriptWorkspace({
   jobActive: boolean;
   setBusy: (busy: boolean) => void;
   setStatus: (message: string) => void;
+  onDraftDirtyChange?: (dirty: boolean) => void;
   onJobCreated: (id: string) => void;
 }) {
   const [episode, setEpisode] = useState<Episode>();
@@ -81,6 +82,7 @@ export function useScriptWorkspace({
   const [calibration, setCalibration] = useState<TtsCalibrationSelection>();
   const [initialDraftSignature, setInitialDraftSignature] = useState(() => scriptDraftSignature("faithful", "", [emptyScriptParagraph()]));
   const [pendingLoadVersion, setPendingLoadVersion] = useState<ScriptVersion>();
+  const [pendingKind, setPendingKind] = useState<ScriptVersionKind>();
   const writing = useRef(false);
   const consumedJobId = useRef("");
   const currentJobRef = useRef(currentJob);
@@ -90,6 +92,12 @@ export function useScriptWorkspace({
   useCommittedScriptWorkspaceRefs(currentRoute, currentJobRef, routeKey, currentJob, mounted);
 
   const baseUrl = `/api/series/${encodeURIComponent(seriesId)}/episodes/${episodeIndex}`;
+  const draftDirty = isScriptDraftDirty(initialDraftSignature, kind, parentVersionId, paragraphs);
+
+  useEffect(() => {
+    onDraftDirtyChange?.(draftDirty);
+    return () => onDraftDirtyChange?.(false);
+  }, [draftDirty, onDraftDirtyChange]);
 
   async function readWorkspace(expectedRoute: string): Promise<WorkspaceSnapshot | undefined> {
     const episodeResponse = await fetch(baseUrl);
@@ -162,7 +170,7 @@ export function useScriptWorkspace({
     });
   }, [seriesId, episodeIndex]);
 
-  function changeKind(nextKind: ScriptVersionKind) {
+  function applyKind(nextKind: ScriptVersionKind) {
     setKind(nextKind);
     const faithful = scripts.filter((item) => item.kind === "faithful");
     const latest = scripts.filter((item) => item.kind === nextKind).at(-1);
@@ -171,6 +179,18 @@ export function useScriptWorkspace({
     setParagraphs(nextParagraphs);
     setParentVersionId(nextParentVersionId);
     setInitialDraftSignature(scriptDraftSignature(nextKind, nextParentVersionId, nextParagraphs));
+  }
+
+  function changeKind(nextKind: ScriptVersionKind) {
+    if (nextKind === kind) return;
+    if (draftDirty) { setPendingKind(nextKind); return; }
+    applyKind(nextKind);
+  }
+
+  function confirmChangeKind() {
+    if (!pendingKind) return;
+    applyKind(pendingKind);
+    setPendingKind(undefined);
   }
 
   function applyVersion(version: ScriptVersion) {
@@ -325,11 +345,12 @@ export function useScriptWorkspace({
 
   return {
     episode, scripts, approval, kind, parentVersionId, paragraphs, selectedPackagedId,
-    pendingLoadVersion,
+    pendingLoadVersion, pendingKind,
     voice, rate, charactersPerSecond, narrationOccupancy, calibration,
     setVoice, setRate, setCharactersPerSecond, setNarrationOccupancy,
-    setParentVersionId: chooseParent, setSelectedPackagedId, changeKind, loadVersion, confirmLoadVersion, cancelLoadVersion,
-    draftDirty: isScriptDraftDirty(initialDraftSignature, kind, parentVersionId, paragraphs),
+    setParentVersionId: chooseParent, setSelectedPackagedId, changeKind, confirmChangeKind,
+    cancelChangeKind: () => setPendingKind(undefined), loadVersion, confirmLoadVersion, cancelLoadVersion,
+    draftDirty,
     updateParagraph,
     addParagraph: () => setParagraphs((current) => [...current, emptyScriptParagraph()]),
     removeParagraph: (key: string) => setParagraphs((current) => current.length === 1 ? current : current.filter((item) => item.key !== key)),

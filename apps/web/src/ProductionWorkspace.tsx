@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./components/ui/alert-dialog";
+
 import { chapterPagePath, responseJson } from "./client-logic";
 import {
   isTerminalJobStatus,
@@ -19,6 +30,8 @@ import { AudioStage } from "./production/audio/AudioStage";
 import { chapterAnalysisJobPayload, chapterEventsJobPayload, remainingChapterEventPageOffsets, type ChapterEventDraft } from "./production/chapter-event-editor";
 import { ChapterEventsStage } from "./production/ChapterEventsStage";
 import { EpisodeStage } from "./production/episode/EpisodeStage";
+import { EpisodeNavigation } from "./production/episode-navigation/EpisodeNavigation";
+import { readEpisodeNavigation } from "./production/episode-navigation/episode-navigation-client";
 import { ExportStage } from "./production/export/ExportStage";
 import { PipelineProgress } from "./production/pipeline/PipelineProgress";
 import { PipelineSetup } from "./production/pipeline/PipelineSetup";
@@ -48,6 +61,9 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, on
   const [jobId, setJobId] = useState(restored?.jobId);
   const [pipelineRunId, setPipelineRunId] = useState(restored?.pipelineRunId);
   const [exportEpisodeId, setExportEpisodeId] = useState<string>();
+  const [episodeNavigation, setEpisodeNavigation] = useState<{ state: "loading" | "ready" | "failed"; episodes: Episode[] }>({ state: "loading", episodes: [] });
+  const [scriptDraftDirty, setScriptDraftDirty] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{ description: string; commit: () => void }>();
   const currentStage = useRef(stage);
   currentStage.current = stage;
   const setWorkspaceStatus = useCallback((message: string) => {
@@ -78,6 +94,26 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, on
     onRunIdChange: changePipelineRun,
   });
   const chapterEventsReadOnly = pipelineChapterEventsReadOnly(pipeline.run);
+  useEffect(() => {
+    if (!scriptDraftDirty) return;
+    const handler = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [scriptDraftDirty]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setEpisodeNavigation({ state: "loading", episodes: [] });
+    void readEpisodeNavigation(series.id, controller.signal).then((episodes) => {
+      setEpisodeNavigation({ state: "ready", episodes });
+      if (episodes.length && !episodes.some((episode) => episode.index === episodeIndex)) commitEpisode(episodes[0]!.index);
+    }).catch((error) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setEpisodeNavigation({ state: "failed", episodes: [] });
+      setWorkspaceStatus(`分集列表加载失败：${(error as Error).message}`);
+    });
+    return () => controller.abort();
+  }, [series.id, pipeline.run?.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,25 +213,44 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, on
     finally { setBusy(false); }
   }
 
-  function selectStage(next: ProductionStageId) { setStage(next); replaceLocation({ stage: next }); setWorkspaceStatus(`已切换到「${PRODUCTION_STAGES.find((item) => item.id === next)!.label}」`); }
+  function requestNavigation(description: string, commit: () => void) {
+    if (scriptDraftDirty) { setPendingNavigation({ description, commit }); return; }
+    commit();
+  }
+  function commitStage(next: ProductionStageId) { setStage(next); replaceLocation({ stage: next }); setWorkspaceStatus(`已切换到「${PRODUCTION_STAGES.find((item) => item.id === next)!.label}」`); }
+  function selectStage(next: ProductionStageId) {
+    if (next === stage) return;
+    requestNavigation(`切换到「${PRODUCTION_STAGES.find((item) => item.id === next)!.label}」会丢弃当前未保存稿件。`, () => commitStage(next));
+  }
   function selectChapter(id: string) {
     if (id === selectedChapter) return;
     setBusy(true); setSelectedChapter(id); setChapterText(""); setEvents([]); setJobId(undefined); replaceLocation({ chapterId: id, jobId: undefined });
   }
   function selectAsset(id: string | undefined) { setSelectedAssetId(id); replaceLocation({ assetId: id }); }
-  function selectEpisode(index: number) { if (index === episodeIndex) return; setEpisodeIndex(index); setTimelineHash(undefined); setJobId(undefined); replaceLocation({ episodeIndex: index, timelineHash: undefined, jobId: undefined }); }
+  function commitEpisode(index: number) { setEpisodeIndex(index); setTimelineHash(undefined); setJobId(undefined); replaceLocation({ episodeIndex: index, timelineHash: undefined, jobId: undefined }); }
+  function selectEpisode(index: number) {
+    if (index === episodeIndex || !episodeNavigation.episodes.some((episode) => episode.index === index)) return;
+    requestNavigation(`切换到第 ${index} 集会丢弃当前未保存稿件。`, () => commitEpisode(index));
+  }
   function selectTimeline(hash: string | undefined) { setTimelineHash(hash); replaceLocation({ timelineHash: hash }); }
   function trackJob(id?: string) { setJobId(id); replaceLocation({ jobId: id }); }
 
   return <main className="min-h-screen bg-[var(--bg-canvas)] p-4 text-[var(--fg-primary)] max-md:p-0">
     <div className="mx-auto min-h-[calc(100vh-32px)] w-full max-w-[1640px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[var(--shadow)] max-md:min-h-screen max-md:border-0">
-      <ProductionHeader series={series} onLeave={onLeave} onOpenSettings={onOpenSettings} />
+      <ProductionHeader series={series} onLeave={() => requestNavigation("离开制作工作区会丢弃当前未保存稿件。", onLeave)} onOpenSettings={() => requestNavigation("打开设置会丢弃当前未保存稿件。", onOpenSettings)} />
       <ProductionStatus operation={statusLayers.operation} persistentError={statusLayers.persistentError} busy={busy} job={currentJob} onDismissError={dismissPersistentError} onCancel={() => void cancelJob()} />
       {pipeline.run ? <PipelineProgress run={pipeline.run} chapters={pipeline.chapters} busyAction={pipeline.busyAction} operation={pipeline.operation} error={pipeline.error} onControl={(action) => void pipeline.control(action)} onReset={pipeline.resetTerminal} />
         : <PipelineSetup chapters={pipeline.chapters} chapterTotal={pipeline.chapterTotal} policy={pipeline.policy} loading={pipeline.loading} submitting={pipeline.busyAction === "create"} operation={pipeline.operation} error={pipeline.error} onCreate={(input) => void pipeline.create(input)} />}
       <StageNavigation stage={stage} onChange={selectStage} />
-      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} readOnly={chapterEventsReadOnly} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage bookId={bookId} seriesId={series.id} episodeIndex={episodeIndex} chapters={chapters} startChapterId={selectedChapter} currentJob={currentJob} busy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onStartChapterChange={(id) => id ? selectChapter(id) : (setSelectedChapter(undefined), setJobId(undefined), replaceLocation({ chapterId: undefined, jobId: undefined }))} onJobCreated={trackJob} onOpenScripts={() => selectStage("scripts")} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onJobCreated={trackJob} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setWorkspaceStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : stage === "audio" ? <AudioStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} onJobCreated={trackJob} /> : stage === "visual" ? <VisualStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} externalBusy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} /> : <ProductionExportStage episodeId={exportEpisodeId} timelineHash={timelineHash} jobId={jobId} onJobIdChange={trackJob} />}
+      <EpisodeNavigation current={episodeIndex} episodes={episodeNavigation.episodes} state={episodeNavigation.state} disabled={busy} onChange={selectEpisode} />
+      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} readOnly={chapterEventsReadOnly} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage bookId={bookId} seriesId={series.id} episodeIndex={episodeIndex} chapters={chapters} startChapterId={selectedChapter} currentJob={currentJob} busy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onStartChapterChange={(id) => id ? selectChapter(id) : (setSelectedChapter(undefined), setJobId(undefined), replaceLocation({ chapterId: undefined, jobId: undefined }))} onJobCreated={trackJob} onOpenScripts={() => selectStage("scripts")} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onDraftDirtyChange={setScriptDraftDirty} onJobCreated={trackJob} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setWorkspaceStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : stage === "audio" ? <AudioStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onTimelineChange={selectTimeline} onJobCreated={trackJob} /> : stage === "visual" ? <VisualStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} externalBusy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onTimelineChange={selectTimeline} /> : <ProductionExportStage episodeId={exportEpisodeId} timelineHash={timelineHash} jobId={jobId} onJobIdChange={trackJob} />}
     </div>
+    <AlertDialog open={!!pendingNavigation} onOpenChange={(open) => { if (!open) setPendingNavigation(undefined); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>当前稿件尚未保存</AlertDialogTitle><AlertDialogDescription>{pendingNavigation?.description}取消会保留草稿，确认后继续。</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>取消，保留草稿</AlertDialogCancel><AlertDialogAction onClick={() => { const commit = pendingNavigation?.commit; setPendingNavigation(undefined); commit?.(); }}>确认丢弃并继续</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </main>;
 }
 export function ProductionExportStage({ episodeId, timelineHash, jobId, onJobIdChange }: {

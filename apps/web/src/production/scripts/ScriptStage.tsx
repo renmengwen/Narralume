@@ -13,7 +13,7 @@ import { allowedSourceIndexes, canStartEpisodeScriptGeneration } from "./script-
 import { useScriptWorkspace } from "./use-script-workspace";
 
 export function ScriptStage({
-  seriesId, episodeIndex, busy, jobActive, currentJob, setBusy, setStatus, onEpisodeChange, onJobCreated,
+  seriesId, episodeIndex, busy, jobActive, currentJob, setBusy, setStatus, onDraftDirtyChange, onJobCreated,
 }: {
   seriesId: string;
   episodeIndex: number;
@@ -22,11 +22,11 @@ export function ScriptStage({
   currentJob?: JobRecord;
   setBusy: (busy: boolean) => void;
   setStatus: (message: string) => void;
-  onEpisodeChange: (index: number) => void;
+  onDraftDirtyChange: (dirty: boolean) => void;
   onJobCreated: (id: string) => void;
 }) {
   const state = useScriptWorkspace({
-    seriesId, episodeIndex, currentJob, jobActive, setBusy, setStatus, onJobCreated,
+    seriesId, episodeIndex, currentJob, jobActive, setBusy, setStatus, onDraftDirtyChange, onJobCreated,
   });
   const faithful = state.scripts.filter((item) => item.kind === "faithful");
   const packaged = state.scripts.filter((item) => item.kind === "packaged");
@@ -38,7 +38,6 @@ export function ScriptStage({
   return <>
   <div className="grid grid-cols-[260px_minmax(0,1fr)_340px] border-t border-[var(--border-subtle)] max-xl:grid-cols-1">
     <aside className="border-r border-[var(--border-subtle)] p-5 max-xl:border-r-0 max-xl:border-b">
-      <label className="text-xs text-[var(--fg-secondary)]">分集序号<input type="number" min={1} disabled={busy} value={episodeIndex} onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value > 0) onEpisodeChange(value); }} className="mt-2 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
       <div className="mt-5 space-y-3 rounded border border-[var(--border-subtle)] p-3">
         <p className="text-xs font-semibold">跨章骨架与长稿</p>
         <label className="block text-xs text-[var(--fg-secondary)]">音色<input value={state.voice} disabled={busy || jobActive || !!state.calibration} onChange={(event) => state.setVoice(event.target.value)} className="mt-1 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
@@ -92,6 +91,20 @@ export function ScriptStage({
       <AlertDialogFooter>
         <AlertDialogCancel>取消，保留草稿</AlertDialogCancel>
         <AlertDialogAction onClick={state.confirmLoadVersion}>确认载入版本</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+  <AlertDialog open={!!state.pendingKind} onOpenChange={(open) => { if (!open) state.cancelChangeKind(); }}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>切换稿件类型会覆盖当前草稿</AlertDialogTitle>
+        <AlertDialogDescription>
+          当前稿件已有未保存修改。取消会保留当前草稿；确认后切换到{state.pendingKind === "faithful" ? "忠实稿" : "包装稿"}，本地未保存内容将被覆盖。
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel>取消，保留草稿</AlertDialogCancel>
+        <AlertDialogAction onClick={state.confirmChangeKind}>确认切换稿件类型</AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>

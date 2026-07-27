@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 export function AudioStage(props: {
   seriesId: string; episodeIndex: number; timelineHash?: string; busy: boolean; jobActive: boolean; currentJob?: JobRecord;
   setBusy: (busy: boolean) => void; setStatus: (message: string) => void;
-  onEpisodeChange: (index: number) => void; onTimelineChange: (hash: string | undefined) => void; onJobCreated: (id: string) => void;
+  onTimelineChange: (hash: string | undefined) => void; onJobCreated: (id: string) => void;
 }) {
   const state = useAudioWorkspace(props);
   const [page, setPage] = useState(0);
@@ -35,7 +35,6 @@ export function AudioStage(props: {
   };
   return <div className="grid grid-cols-[280px_minmax(0,1fr)] border-t border-[var(--border-subtle)] max-xl:grid-cols-1">
     <aside className="border-r border-[var(--border-subtle)] p-5 max-xl:border-r-0 max-xl:border-b">
-      <label className="text-xs text-[var(--fg-secondary)]">分集序号<input type="number" min={1} disabled={props.busy} value={props.episodeIndex} onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value > 0) props.onEpisodeChange(value); }} className="mt-2 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
       <p className="mt-5 text-xs leading-6 text-[var(--fg-tertiary)]">首版只提供逐段试听，不冒充整集混音。时间轴和字幕身份来自持久层回读。</p>
       <p className="mt-4 break-all font-mono text-[10px] text-[var(--fg-tertiary)]">批准稿：{state.approval?.scriptVersionId ?? "未批准"}</p>
       <div className="mt-5 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3 text-xs leading-6">

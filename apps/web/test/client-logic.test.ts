@@ -51,12 +51,14 @@ import {
   type EpisodeDraft,
 } from "../src/production/episode/episode-editor.ts";
 import { useCommittedEpisodeIdentity } from "../src/production/episode/use-episode-workspace.ts";
+import { EpisodeNavigation } from "../src/production/episode-navigation/EpisodeNavigation.tsx";
+import { episodeNavigationTarget } from "../src/production/episode-navigation/episode-navigation-client.ts";
 import {
   applyIfCurrentScriptRoute,
   useCommittedScriptWorkspaceRefs,
   useScriptWorkspace,
 } from "../src/production/scripts/use-script-workspace.ts";
-import type { EpisodeRecommendation } from "../src/production/types.ts";
+import type { Episode, EpisodeRecommendation } from "../src/production/types.ts";
 import {
   allowedSourceIndexes,
   approvalPutPayload,
@@ -149,6 +151,22 @@ test("生产工作台地址更新可显式清除旧任务且保留未修改字�
     pipelineRunId: "pipeline_1",
   });
   assert.equal(mergeProductionWorkspaceLocation(current, { pipelineRunId: undefined }).pipelineRunId, undefined);
+});
+
+test("分集导航只使用真实列表并在边界禁用上一集或下一集", () => {
+  const episode = (index: number, title: string): Episode => ({
+    id: `episode_${index}`, seriesProjectId: "series_1", index, title, storyArc: "故事弧",
+    targetDurationSeconds: 1200, recap: null, nextHook: null, createdAt: 1, updatedAt: 1, sources: [],
+  });
+  const episodes = [episode(1, "起点"), episode(2, "转折")];
+  assert.equal(episodeNavigationTarget(episodes, 1, -1), undefined);
+  assert.equal(episodeNavigationTarget(episodes, 1, 1), 2);
+  assert.equal(episodeNavigationTarget(episodes, 2, 1), undefined);
+  const html = renderToString(createElement(EpisodeNavigation, { current: 1, episodes, state: "ready", disabled: false, onChange() {} }));
+  assert.match(html, /起点/);
+  assert.match(html, /第 1 集，共 2 集/);
+  assert.match(html, /上一集<\/button>/);
+  assert.match(html, /min-h-11/);
 });
 
 test("审核与导出绑定真实 Episode、时间轴和普通 Job URL", () => {

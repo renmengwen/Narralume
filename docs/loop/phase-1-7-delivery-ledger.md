@@ -492,6 +492,7 @@ PC-02 当前 checkpoint：
 | 2026-07-28 章节短证据 identity v2 candidate 冻结 | Worker 仅改 analyzer/job 各实现与测试：每批模型只见 `e1..eN` 临时alias，prompt/纠错/strict parser仅接受alias，alias atom保留原byte range，长ID不出请求也不持久化；未知/重复/缺失仍严格拒绝。prompt contract升 `chapter-events-prompt-v2`，真实种入v1旧Job确认不复用；timeout固定180秒并保留Abort/cancel。聚焦11/11、server typecheck/diff PASS；candidate revision `78ec3495a547ceb0a97e6bf4395fda83a972fe4d`、tree `45c903e7578edac9570c1102da6263d6ac95734f`、base `f9f46a296b07b93be2445307d832b121984876fb`。一次最小综合Review后重建并原地retry。 |
 | 2026-07-28 章节短证据 v2 Review 单一 P1/修复租约 | Reviewer绑定 `3ffee03`/`78ec349`/tree `45c903e`，聚焦11/11 PASS但发现一个真实P1：输出JSON示例仍写 `evidence_...`，与唯一合法 `e1..eN` 自相矛盾，且纠错prompt再次附入旧示例，可能诱导正常响应失败。旧candidate失效；仅重新租给原Worker修改 analyzer实现/测试，把示例同步为短alias或无前缀，并直接断言首答/纠错请求体不含旧前缀且包含合法alias。其余已通过边界不重审；新candidate只复审这一finding。 |
 | 2026-07-28 章节短证据 v2 第二版 candidate 冻结 | Worker仅修唯一P1：JSON示例使用合法`e1`，首答与纠错prompt直接断言不含旧`evidence_`前缀且包含本批`e1/eN`；其余alias/v2/180秒实现不动。analyzer6/6、server typecheck、四文件diff PASS；candidate revision `6e461363c7663d389c830bc8e90cb7c849b4cca1`、tree `294cdec73b60d8fd3891ac437a2a772c711e2574`、base `fab96a322f17703d28daf38bf8b142439b2928d9`。仅复审旧示例finding。 |
+| 2026-07-28 章节短证据 v2 复审 PASS/提交 | Reviewer绑定 `9e5d3f7`/`6e46136`/tree `294cdec` 定向PASS，首答/纠错真实请求均不含旧长ID示例且包含合法`e1/eN`，聚焦6/6。业务以 `28f1792 fix(auto): 使用批内短证据身份并延长分析时限` 提交；下一步重建服务，同一真实run因prompt contract v2会创建新确定性Job而不复用旧v1失败Job。 |
 
 ## 决策与剩余风险
 

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream, lstatSync, renameSync, rmSync } from "node:fs";
 import { copyFile, lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -138,6 +139,170 @@ function exportIdentity(snapshot: ReturnType<typeof loadRenderPlanSnapshot>, row
       durationMs: row.duration_ms,
     })),
   } as const;
+}
+
+const HASH = /^[0-9a-f]{64}$/u;
+const ID = /^[A-Za-z0-9_-]+$/u;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
+
+export class FinalExportReadError extends Error {
+  constructor(message: string, readonly statusCode: 400 | 404 | 409) { super(message); }
+}
+
+async function openOrdinaryExclusiveFile(dataRoot: string, path: string) {
+  const root = resolve(dataRoot);
+  let before;
+  try {
+    const [rootReal, fileReal, info] = await Promise.all([realpath(root), realpath(path), lstat(path)]);
+    if (!isInside(rootReal, fileReal) || !info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+      throw new FinalExportReadError("导出产物必须是数据目录内的普通独占文件", 409);
+    }
+    before = info;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new FinalExportReadError("导出产物不存在", 404);
+    throw error;
+  }
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino) {
+      throw new FinalExportReadError("导出产物在打开期间已被替换", 409);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function readBounded(handle: FileHandle, maximum: number) {
+  const info = await handle.stat();
+  if (!Number.isSafeInteger(info.size) || info.size < 1 || info.size > maximum) {
+    throw new FinalExportReadError("导出清单大小无效", 409);
+  }
+  const content = Buffer.alloc(info.size);
+  let offset = 0;
+  while (offset < content.length) {
+    const { bytesRead } = await handle.read(content, offset, content.length - offset, offset);
+    if (!bytesRead) break;
+    offset += bytesRead;
+  }
+  if (offset !== content.length) throw new FinalExportReadError("导出清单读取不完整", 409);
+  return content;
+}
+
+function currentExportBase(database: DatabaseSync, episodeId: string, timelineHash: string) {
+  const snapshot = loadRenderPlanSnapshot(database, episodeId, timelineHash);
+  const rows = database.prepare(
+    `SELECT render_hash, chunk_index, script_version_id, approval_revision, start_ms, end_ms,
+            relative_path, file_hash, bytes, duration_ms
+     FROM render_chunks WHERE episode_id = ? AND timeline_hash = ? AND chunk_index < ? ORDER BY chunk_index`,
+  ).all(episodeId, timelineHash, snapshot.chunks.length) as unknown as ChunkRow[];
+  if (rows.length !== snapshot.chunks.length) throw new FinalExportReadError("当前完整分片尚未全部渲染", 409);
+  for (const [index, expected] of snapshot.chunks.entries()) {
+    const row = rows[index];
+    const canonical = `episodes/${episodeId}/renders/chunks/${expected.renderHash.slice(0, 2)}/${expected.renderHash}.mp4`;
+    if (!row || row.chunk_index !== index || row.start_ms !== expected.startMs || row.end_ms !== expected.endMs ||
+        row.render_hash !== expected.renderHash || row.relative_path !== canonical ||
+        row.script_version_id !== snapshot.scriptVersionId || row.approval_revision !== snapshot.approvalRevision ||
+        row.bytes < 1 || row.duration_ms < 1 || Math.abs(row.duration_ms - (row.end_ms - row.start_ms)) > MAX_DURATION_DRIFT_MS ||
+        !HASH.test(row.file_hash) || (index > 0 && row.start_ms !== rows[index - 1]!.end_ms)) {
+      throw new FinalExportReadError("分片记录不属于当前完整渲染身份", 409);
+    }
+  }
+  const identity = exportIdentity(snapshot, rows);
+  return { ...identity, chunks: rows.map((row) => ({
+    index: row.chunk_index, startMs: row.start_ms, endMs: row.end_ms, renderHash: row.render_hash,
+    relativePath: row.relative_path, fileHash: row.file_hash, bytes: row.bytes, durationMs: row.duration_ms,
+  })) };
+}
+
+function hashExportBase(base: ReturnType<typeof currentExportBase>) {
+  return sha256(JSON.stringify({
+    version: base.version,
+    contract: base.contract,
+    episodeId: base.episodeId,
+    scriptVersionId: base.scriptVersionId,
+    approvalRevision: base.approvalRevision,
+    timelineHash: base.timelineHash,
+    chunks: base.chunks.map(({ relativePath: _relativePath, ...chunk }) => chunk),
+  }));
+}
+
+export async function openVerifiedFinalExport(
+  database: DatabaseSync,
+  dataRoot: string,
+  input: { episodeId: string; exportHash: string },
+) {
+  if (!ID.test(input.episodeId) || !HASH.test(input.exportHash)) {
+    throw new FinalExportReadError("导出标识无效", 400);
+  }
+  const directory = `episodes/${input.episodeId}/exports/${input.exportHash.slice(0, 2)}/${input.exportHash}`;
+  const manifestPath = controlledPath(dataRoot, `${directory}/manifest.json`);
+  const manifestHandle = await openOrdinaryExclusiveFile(dataRoot, manifestPath);
+  let manifest: FinalVideoManifest;
+  try {
+    try { manifest = JSON.parse((await readBounded(manifestHandle, MAX_MANIFEST_BYTES)).toString("utf8")) as FinalVideoManifest; }
+    catch (error) {
+      if (error instanceof FinalExportReadError) throw error;
+      throw new FinalExportReadError("导出清单损坏", 409);
+    }
+  } finally {
+    await manifestHandle.close();
+  }
+  if (!manifest || manifest.version !== FINAL_VIDEO_MANIFEST_VERSION ||
+      JSON.stringify(manifest.contract) !== JSON.stringify(RENDER_CONTRACT) ||
+      manifest.episodeId !== input.episodeId || manifest.exportHash !== input.exportHash || !HASH.test(manifest.timelineHash ?? "")) {
+    throw new FinalExportReadError("导出清单身份无效", 409);
+  }
+  let base;
+  try { base = currentExportBase(database, input.episodeId, manifest.timelineHash); }
+  catch (error) {
+    if (error instanceof FinalExportReadError) throw error;
+    throw new FinalExportReadError(error instanceof Error ? error.message : "当前生产身份不可用", 409);
+  }
+  if (hashExportBase(base) !== input.exportHash) throw new FinalExportReadError("导出已过期", 409);
+  const expectedVideoPath = `${directory}/video.mp4`;
+  if (manifest.finalVideo?.relativePath !== expectedVideoPath || !HASH.test(manifest.finalVideo.fileHash ?? "") ||
+      !Number.isSafeInteger(manifest.finalVideo.bytes) || manifest.finalVideo.bytes < 1 ||
+      !Number.isSafeInteger(manifest.finalVideo.durationMs) || manifest.finalVideo.durationMs < 1 ||
+      Object.keys(manifest.finalVideo).sort().join(",") !== "bytes,durationMs,fileHash,relativePath,streams" ||
+      JSON.stringify(manifest.finalVideo.streams) !== JSON.stringify({ video: "h264:1080x1920:25:yuv420p", audio: "aac" }) ||
+      JSON.stringify({ ...manifest, finalVideo: undefined }) !==
+        JSON.stringify({ ...base, exportHash: input.exportHash, finalVideo: undefined })) {
+    throw new FinalExportReadError("导出清单与当前生产身份不一致", 409);
+  }
+  const videoHandle = await openOrdinaryExclusiveFile(dataRoot, controlledPath(dataRoot, expectedVideoPath));
+  try {
+    const before = await videoHandle.stat();
+    if (before.size !== manifest.finalVideo.bytes) throw new FinalExportReadError("导出视频大小不一致", 409);
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(256 * 1024);
+    let offset = 0;
+    while (offset < before.size) {
+      const { bytesRead } = await videoHandle.read(buffer, 0, Math.min(buffer.length, before.size - offset), offset);
+      if (!bytesRead) break;
+      digest.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+    const after = await videoHandle.stat();
+    if (offset !== before.size || digest.digest("hex") !== manifest.finalVideo.fileHash || after.size !== before.size ||
+        after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new FinalExportReadError("导出视频内容不一致", 409);
+    }
+    try {
+      if (hashExportBase(currentExportBase(database, input.episodeId, manifest.timelineHash)) !== input.exportHash) {
+        throw new FinalExportReadError("视频复核期间当前生产身份已变化", 409);
+      }
+    } catch (error) {
+      if (error instanceof FinalExportReadError) throw error;
+      throw new FinalExportReadError("视频复核期间当前生产身份已变化", 409);
+    }
+    return { manifest, videoHandle };
+  } catch (error) {
+    await videoHandle.close();
+    throw error;
+  }
 }
 
 async function exists(path: string, publishLstat: typeof lstat) {

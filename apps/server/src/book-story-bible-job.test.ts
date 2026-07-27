@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  BOOK_STORY_BIBLE_PROMPT_VERSION,
   BookStoryBibleJobContractError,
   buildStoryBibleFinalRequest,
   buildStoryBibleIntervalRequests,
@@ -42,12 +43,14 @@ test("切换 provider/model 不改变区间或最终复用 identity", () => {
   assert.equal(first.length, 2);
   assert.deepEqual(first.map(({ identityHash }) => identityHash), switched.map(({ identityHash }) => identityHash));
   assert.notDeepEqual(first.map(({ provenance }) => provenance), switched.map(({ provenance }) => provenance));
+  assert.equal(BOOK_STORY_BIBLE_PROMPT_VERSION, "book-story-bible-prompt-v2");
+  assert.equal(first[0]!.identity.promptVersion, BOOK_STORY_BIBLE_PROMPT_VERSION);
   const verifiedA = first.map((request) => parseStoryBibleIntervalResponse(request, content(request.sourceEventIds[0]!)));
   const verifiedB = switched.map((request) => parseStoryBibleIntervalResponse(request, content(request.sourceEventIds[0]!)));
-  assert.equal(
-    buildStoryBibleFinalRequest("book_a", verifiedA, { providerId: "p1", model: "m1" }, limits).identityHash,
-    buildStoryBibleFinalRequest("book_a", verifiedB, { providerId: "p2", model: "m2" }, limits).identityHash,
-  );
+  const finalA = buildStoryBibleFinalRequest("book_a", verifiedA, { providerId: "p1", model: "m1" }, limits);
+  const finalB = buildStoryBibleFinalRequest("book_a", verifiedB, { providerId: "p2", model: "m2" }, limits);
+  assert.equal(finalA.identity.promptVersion, BOOK_STORY_BIBLE_PROMPT_VERSION);
+  assert.equal(finalA.identityHash, finalB.identityHash);
 });
 
 test("事件变化只失效命中区间和最终层，模型变化不失效，force 创建新版本意图", () => {

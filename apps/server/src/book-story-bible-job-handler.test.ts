@@ -12,7 +12,7 @@ import {
   buildStoryBibleIntervalRequests,
   type StoryBibleBuildLimits,
 } from "./book-story-bible-job.js";
-import type { JobExecutionContext } from "./job-worker.js";
+import { JobCancelledError, type JobExecutionContext } from "./job-worker.js";
 
 const limits: StoryBibleBuildLimits = {
   maxChaptersPerInterval: 1, maxEventsPerInterval: 1, maxInputBytesPerInterval: 1_000,
@@ -31,8 +31,36 @@ function content(sourceEventId: string, chapterId: string) {
   };
 }
 
-function payload(): BookStoryBibleJobPayload {
-  const intervals = buildStoryBibleIntervalRequests("book_a", [0, 1].map((chapterIndex) => ({
+function contentWithChapterReference(
+  kind: "stateChanges" | "relationships" | "timeline" | "flashbacks" | "plotThreads",
+  chapterId: string,
+) {
+  return {
+    characters: kind === "stateChanges" ? [{
+      canonicalName: "人物", aliases: [], identities: [], motivations: [],
+      stateChanges: [{ state: "状态", chapterIds: [chapterId], sourceEventIds: ["event_0"] }],
+      sourceEventIds: ["event_0"],
+    }] : [],
+    relationships: kind === "relationships" ? [{
+      subject: "甲", object: "乙", relation: "认识", chapterIds: [chapterId], sourceEventIds: ["event_0"],
+    }] : [],
+    locations: [], organizations: [], items: [], concepts: [],
+    timeline: [{
+      summary: "已验证事件", chapterIds: [kind === "timeline" ? chapterId : "chapter_0"], sourceEventIds: ["event_0"],
+    }],
+    flashbacks: kind === "flashbacks" ? [{
+      summary: "回忆", startChapterId: chapterId, endChapterId: chapterId, sourceEventIds: ["event_0"],
+    }] : [],
+    plotThreads: kind === "plotThreads" ? [{
+      kind: "suspense", setup: "线索", revealCondition: null, resolution: null,
+      chapterIds: [chapterId], sourceEventIds: ["event_0"],
+    }] : [],
+    confusingFacts: [], spoilerRestrictions: [], properNouns: [],
+  };
+}
+
+function payload(chapterCount = 1): BookStoryBibleJobPayload {
+  const intervals = buildStoryBibleIntervalRequests("book_a", Array.from({ length: chapterCount }, (_, chapterIndex) => ({
     chapterId: `chapter_${chapterIndex}`, chapterIndex,
     sourceEvents: [{ id: `event_${chapterIndex}`, contentHash: `${chapterIndex + 1}`.repeat(64), inputBytes: 10 }],
   })), { providerId: config.providerId, model: config.model }, limits);
@@ -41,14 +69,31 @@ function payload(): BookStoryBibleJobPayload {
   return { ...base, providerId: config.providerId, model: config.model, requestHash: storyBibleJobRequestHash(base) };
 }
 
-function context(task: BookStoryBibleJobPayload) {
+function database() {
+  return { prepare: () => ({ all: (...ids: string[]) => ids.map((id) => ({
+    id, chapter_id: id.replace("event", "chapter"), event_index: 0, occurrence: 1,
+    event_type: "plot", payload_json: JSON.stringify({ summary: id }),
+  })) }) } as never;
+}
+
+function modelResponse(value: unknown) {
+  return new Response(JSON.stringify({ output_text: JSON.stringify(value) }), {
+    status: 200, headers: { "content-type": "application/json" },
+  });
+}
+
+function prompt(init?: RequestInit) {
+  return (JSON.parse(String(init?.body)) as { input: string }).input;
+}
+
+function context(task: BookStoryBibleJobPayload, isCancelled: () => boolean = () => false) {
   const checkpoints: string[] = [];
   const progress: number[] = [];
   const value = {
     job: { id: `job_bible_${task.requestHash}`, type: BOOK_STORY_BIBLE_JOB_TYPE, payload: task },
     reportProgress: (item: number) => { progress.push(item); },
-    isCancellationRequested: () => false,
-    throwIfCancellationRequested: () => undefined,
+    isCancellationRequested: isCancelled,
+    throwIfCancellationRequested: () => { if (isCancelled()) throw new JobCancelledError(); },
     getCheckpoint: () => undefined,
     commitCheckpoint: (stage: string, scopeKey: string) => {
       checkpoints.push(`${stage}:${scopeKey}`);
@@ -60,35 +105,125 @@ function context(task: BookStoryBibleJobPayload) {
 
 test("严格执行 interval 后独立 final，并将模型身份仅保存为溯源", async () => {
   const task = payload();
-  const calls: Array<{ kind: string }> = [];
+  const calls: string[] = [];
   const stored: Array<Record<string, unknown>> = [];
   let responseIndex = 0;
-  const responses = [content("event_0", "chapter_0"), content("event_1", "chapter_1"), content("event_0", "chapter_0")];
+  const responses = [content("event_0", "chapter_0"), content("event_0", "chapter_0")];
   const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
-    const request = JSON.parse(String(init?.body)) as { input: string };
-    const prompt = JSON.parse(request.input.slice(request.input.indexOf("\n") + 1)) as { kind: string };
-    calls.push(prompt);
-    return new Response(JSON.stringify({ output_text: JSON.stringify(responses[responseIndex++]) }), {
-      status: 200, headers: { "content-type": "application/json" },
-    });
+    calls.push(prompt(init));
+    return modelResponse(responses[responseIndex++]);
   };
-  const database = { prepare: () => ({ all: (...ids: string[]) => ids.map((id) => ({
-    id, chapter_id: id.replace("event", "chapter"), event_index: 0, occurrence: 1,
-    event_type: "plot", payload_json: JSON.stringify({ summary: id }),
-  })) }) } as never;
   const createBible = ((_database: never, input: Record<string, unknown>) => {
     stored.push(input);
     return { id: `bible_${stored.length}`, contentHash: `${stored.length}`.repeat(64) };
   }) as never;
   const execution = context(task);
-  const result = await createBookStoryBibleJobHandler(database, config, { fetchImpl: fetchImpl as typeof fetch, createBible })(execution.value);
-  assert.deepEqual(calls.map((call) => call.kind), ["interval", "interval", "final"]);
-  assert.equal(stored.length, 3);
-  assert.deepEqual(stored.at(-1)?.parentBibleIds, ["bible_1", "bible_2"]);
+  const result = await createBookStoryBibleJobHandler(database(), config, { fetchImpl: fetchImpl as typeof fetch, createBible })(execution.value);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0]!, /顶层必须恰好包含以下 12 个数组/);
+  for (const key of ["characters", "relationships", "locations", "organizations", "items", "concepts", "timeline",
+    "flashbacks", "plotThreads", "confusingFacts", "spoilerRestrictions", "properNouns"]) assert.match(calls[0]!, new RegExp(`${key}:`));
+  assert.match(calls[0]!, /revealCondition:string\|null/);
+  assert.match(calls[0]!, /"foreshadowing"\|"suspense"\|"revelation"/);
+  assert.match(calls[0]!, /允许的 sourceEventIds：\["event_0"\]/);
+  assert.match(calls[0]!, /允许的 chapterIds：\["chapter_0"\]/);
+  assert.match(calls[1]!, /interval 与 final 使用完全相同的输出 schema/);
+  assert.equal(stored.length, 2);
+  assert.deepEqual(stored.at(-1)?.parentBibleIds, ["bible_1"]);
   assert.equal(stored[0]?.providerId, config.providerId);
-  assert.deepEqual(execution.progress, [1 / 3, 2 / 3, 1]);
-  assert.equal(execution.checkpoints.length, 3);
-  assert.deepEqual(result, { storyBibleId: "bible_3", contentHash: "3".repeat(64), intervalBibleIds: ["bible_1", "bible_2"] });
+  assert.deepEqual(execution.progress, [1 / 2, 1]);
+  assert.equal(execution.checkpoints.length, 2);
+  assert.deepEqual(result, { storyBibleId: "bible_2", contentHash: "2".repeat(64), intervalBibleIds: ["bible_1"] });
+});
+
+test("未知字段仅受控纠错一次并保留原任务、精确 schema 与来源白名单", async () => {
+  const task = payload();
+  const calls: string[] = [];
+  const invalid = { ...content("event_0", "chapter_0"), unexpected: [] };
+  const responses = [invalid, content("event_0", "chapter_0"), content("event_0", "chapter_0")];
+  let responseIndex = 0;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async (_input, init) => {
+      calls.push(prompt(init));
+      return modelResponse(responses[responseIndex++]);
+    }) as typeof fetch,
+    createBible: ((_database: never, input: Record<string, unknown>) => ({
+      id: String(input.scope), contentHash: "1".repeat(64),
+    })) as never,
+  });
+  await handler(context(task).value);
+  assert.equal(calls.length, 3);
+  assert.match(calls[1]!, /上一次输出被严格合同拒绝/);
+  assert.match(calls[1]!, /错误：故事圣经包含未知字段：unexpected/);
+  assert.match(calls[1]!, /顶层必须恰好包含以下 12 个数组/);
+  assert.match(calls[1]!, /允许的 sourceEventIds：\["event_0"\]/);
+  assert.match(calls[1]!, /原任务：\{"kind":"interval"/);
+});
+
+test("第二答仍含未知字段时原样失败且不会第三次请求或持久化", async () => {
+  const task = payload();
+  let calls = 0;
+  let writes = 0;
+  const invalid = { ...content("event_0", "chapter_0"), unexpected: [] };
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => { calls += 1; return modelResponse(invalid); }) as typeof fetch,
+    createBible: (() => { writes += 1; return { id: "x", contentHash: "1".repeat(64) }; }) as never,
+  });
+  await assert.rejects(() => handler(context(task).value), /未知字段：unexpected/);
+  assert.equal(calls, 2);
+  assert.equal(writes, 0);
+});
+
+test("interval 五类章节引用越界时均可纠错为当前章节", async (t) => {
+  for (const kind of ["stateChanges", "relationships", "timeline", "flashbacks", "plotThreads"] as const) {
+    await t.test(kind, async () => {
+      const task = payload();
+      let calls = 0;
+      const responses = [
+        contentWithChapterReference(kind, "chapter_outside"),
+        content("event_0", "chapter_0"),
+        content("event_0", "chapter_0"),
+      ];
+      const handler = createBookStoryBibleJobHandler(database(), config, {
+        fetchImpl: (async () => modelResponse(responses[calls++])) as typeof fetch,
+        createBible: ((_database: never, input: Record<string, unknown>) => ({
+          id: String(input.scope), contentHash: "1".repeat(64),
+        })) as never,
+      });
+      await handler(context(task).value);
+      assert.equal(calls, 3);
+    });
+  }
+});
+
+test("final 纠错答仍引用越界章节时直接失败且不会第三次纠错", async () => {
+  const task = payload();
+  let calls = 0;
+  let writes = 0;
+  const responses = [
+    content("event_0", "chapter_0"),
+    content("event_0", "chapter_outside"),
+    content("event_0", "chapter_outside"),
+  ];
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => modelResponse(responses[calls++])) as typeof fetch,
+    createBible: (() => { writes += 1; return { id: "interval", contentHash: "1".repeat(64) }; }) as never,
+  });
+  await assert.rejects(() => handler(context(task).value), /未获准章节：chapter_outside/);
+  assert.equal(calls, 3);
+  assert.equal(writes, 1);
+});
+
+test("首答非法后若任务已取消，不会发出纠错请求", async () => {
+  const task = payload();
+  let calls = 0;
+  let cancelled = false;
+  const invalid = { ...content("event_0", "chapter_0"), unexpected: [] };
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => { calls += 1; cancelled = true; return modelResponse(invalid); }) as typeof fetch,
+  });
+  await assert.rejects(() => handler(context(task, () => cancelled).value), JobCancelledError);
+  assert.equal(calls, 1);
 });
 
 test("拒绝被篡改的冻结身份且不会调用模型", async () => {
@@ -102,19 +237,53 @@ test("拒绝被篡改的冻结身份且不会调用模型", async () => {
   assert.equal(called, false);
 });
 
+test("模型输出合法时，冻结请求自检错误不会触发纠错", async () => {
+  const task = payload();
+  task.intervals[0]!.identity.promptVersion = "book-story-bible-prompt-v1";
+  task.requestHash = storyBibleJobRequestHash(task);
+  let calls = 0;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => { calls += 1; return modelResponse(content("event_0", "chapter_0")); }) as typeof fetch,
+  });
+  await assert.rejects(() => handler(context(task).value), /区间请求身份无效/);
+  assert.equal(calls, 1);
+});
+
 test("模型伪造来源时在持久化前失败", async () => {
   const task = payload();
+  let calls = 0;
   let writes = 0;
-  const database = { prepare: () => ({ all: (...ids: string[]) => ids.map((id) => ({
-    id, chapter_id: id.replace("event", "chapter"), event_index: 0, occurrence: 1,
-    event_type: "plot", payload_json: "{}",
-  })) }) } as never;
-  const fetchImpl = (async () => new Response(JSON.stringify({
-    output_text: JSON.stringify(content("event_forged", "chapter_0")),
-  }), { status: 200 })) as typeof fetch;
-  const handler = createBookStoryBibleJobHandler(database, config, {
+  const fetchImpl = (async () => { calls += 1; return modelResponse(content("event_forged", "chapter_0")); }) as typeof fetch;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
     fetchImpl, createBible: (() => { writes += 1; return { id: "x", contentHash: "1".repeat(64) }; }) as never,
   });
   await assert.rejects(() => handler(context(task).value), /未获准事件/);
+  assert.equal(calls, 2);
   assert.equal(writes, 0);
+});
+
+test("HTTP、非 JSON 与 abort 错误均不触发纠错", async (t) => {
+  const cases: Array<[string, () => Promise<Response>, RegExp]> = [
+    ["HTTP", async () => new Response("failed", { status: 503 }), /HTTP 503/],
+    ["非 JSON", async () => new Response(JSON.stringify({ output_text: "not-json" }), { status: 200 }), /无效 JSON/],
+    ["abort", async () => { throw new DOMException("aborted", "AbortError"); }, /aborted/],
+  ];
+  for (const [name, response, expected] of cases) await t.test(name, async () => {
+    let calls = 0;
+    const handler = createBookStoryBibleJobHandler(database(), config, {
+      fetchImpl: (async () => { calls += 1; return response(); }) as typeof fetch,
+    });
+    await assert.rejects(() => handler(context(payload()).value), expected);
+    assert.equal(calls, 1);
+  });
+});
+
+test("存储错误不触发模型纠错", async () => {
+  let calls = 0;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => { calls += 1; return modelResponse(content("event_0", "chapter_0")); }) as typeof fetch,
+    createBible: (() => { throw new Error("store failed"); }) as never,
+  });
+  await assert.rejects(() => handler(context(payload()).value), /store failed/);
+  assert.equal(calls, 1);
 });

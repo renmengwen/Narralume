@@ -8,7 +8,7 @@ import {
 } from "./book-story-bible-contract.js";
 
 export const BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION = "book-story-bible-job-v1";
-export const BOOK_STORY_BIBLE_PROMPT_VERSION = "book-story-bible-prompt-v1";
+export const BOOK_STORY_BIBLE_PROMPT_VERSION = "book-story-bible-prompt-v2";
 export const BOOK_STORY_BIBLE_PARSER_VERSION = "book-story-bible-parser-v1";
 
 export class BookStoryBibleJobContractError extends Error {}

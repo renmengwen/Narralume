@@ -65,6 +65,7 @@ test("证据 ID 首答非法时只纠错一次并接受严格合法答复", asyn
     type: "location",
     payload: { name: "墓道" },
     sources: [{ byteStart: 100, byteEnd: 112 }],
+    occurrence: 0,
   }]);
   assert.equal(requests.length, 2);
   for (const request of requests) {
@@ -108,4 +109,35 @@ test("Abort 后不触发证据纠错请求", async () => {
 
   await assert.rejects(() => analyzer({ chapterId: "chapter", atoms, signal: controller.signal }), /未知证据 ID/);
   assert.equal(calls, 1);
+});
+
+test("分批合并后为重复事件身份稳定分配 occurrence", async () => {
+  const repeatedAtoms = Array.from({ length: 11 }, (_, index): ChapterEvidenceAtom => ({
+    id: `evidence_${index}`,
+    byteStart: index === 10 ? 100 : 100 + index * 20,
+    byteEnd: index === 10 ? 112 : 112 + index * 20,
+    text: `原子-${index}`,
+  }));
+  const replies = [
+    { events: [
+      { type: "location", payload: { name: "地点甲" }, evidenceIds: ["e1"] },
+      { type: "location", payload: { name: "地点乙" }, evidenceIds: ["e1"] },
+      { type: "character", payload: { name: "人物甲" }, evidenceIds: ["e1"] },
+      { type: "location", payload: { name: "地点丙" }, evidenceIds: ["e2"] },
+    ] },
+    { events: [{ type: "location", payload: { name: "地点丁" }, evidenceIds: ["e1"] }] },
+  ];
+  const run = async () => {
+    let call = 0;
+    const analyzer = createOpenAiResponsesChapterAnalyzer(
+      config,
+      (async () => modelResponse(replies[call++])) as typeof fetch,
+    );
+    return analyzer({ chapterId: "chapter", atoms: repeatedAtoms });
+  };
+
+  const first = await run();
+  const second = await run();
+  assert.deepEqual(first.map((event) => event.occurrence), [0, 1, 0, 0, 2]);
+  assert.deepEqual(second, first);
 });

@@ -230,6 +230,17 @@ function modelEvents(value: unknown, atoms: readonly ChapterEvidenceAtom[]): Cha
   });
 }
 
+function assignOccurrences(events: readonly ChapterEventInput[]) {
+  const next = new Map<string, number>();
+  return events.map((event): ChapterEventInput => {
+    const ranges = event.sources.map((source) => `${source.byteStart}:${source.byteEnd}`).join("|");
+    const key = `${event.type}\0${ranges}`;
+    const occurrence = next.get(key) ?? 0;
+    next.set(key, occurrence + 1);
+    return { ...event, occurrence } as ChapterEventInput;
+  });
+}
+
 export function createOpenAiResponsesChapterAnalyzer(
   config: ChapterTextModelConfig,
   fetchImpl: typeof fetch = fetch,
@@ -289,7 +300,7 @@ export function createOpenAiResponsesChapterAnalyzer(
       }
       if (events.length > 200) throw new Error("章节分析结果事件数量超过 200 条");
     }
-    return events;
+    return assignOccurrences(events);
   };
 }
 

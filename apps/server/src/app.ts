@@ -47,6 +47,7 @@ import {
   createSeriesProject,
   EpisodeStoreError,
   getEpisode,
+  listEpisodes,
   listSeriesProjects,
   replaceEpisode,
   type EpisodeInput,
@@ -653,6 +654,20 @@ export function buildApp(options: BuildAppOptions = {}) {
           Number(request.params.episodeIndex),
         );
         return { ok: true, episode };
+      } catch (error) {
+        if (error instanceof EpisodeStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get<{ Params: { seriesId: string } }>(
+    "/api/series/:seriesId/episodes",
+    async (request, reply) => {
+      try {
+        return { episodes: listEpisodes(connection.database, request.params.seriesId) };
       } catch (error) {
         if (error instanceof EpisodeStoreError) {
           return reply.code(error.statusCode).send({ ok: false, message: error.message });

@@ -1022,3 +1022,40 @@ test("候选图 API 覆盖原始上传、列表、追加审核和生图任务门
     await rm(dataRoot, { recursive: true, force: true });
   }
 });
+
+test("分集列表 API 返回现有 Episode 投影并区分空系列与不存在系列", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-episode-list-"));
+  const seeded = openDatabase(dataRoot);
+  seeded.database.prepare(
+    `INSERT INTO books (id, title, original_file_path, original_file_hash, encoding, import_status)
+     VALUES ('book_list', '列表书', 'books/list/source.txt', ?, 'UTF-8', 'ready')`,
+  ).run("1".repeat(64));
+  seeded.database.prepare(
+    `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
+     VALUES ('series_list', 'book_list', '列表系列', 1, 1), ('series_empty', 'book_list', '空系列', 2, 2)`,
+  ).run();
+  seeded.database.prepare(
+    `INSERT INTO episodes (
+       id, series_project_id, episode_index, title, story_arc, target_duration_seconds, created_at, updated_at
+     ) VALUES
+       ('episode_2', 'series_list', 2, '第二集', '后续', 240, 2, 2),
+       ('episode_1', 'series_list', 1, '第一集', '开端', 240, 1, 1)`,
+  ).run();
+  seeded.close();
+  const app = buildApp({ dataRoot, logger: false });
+  try {
+    const listed = await app.inject({ method: "GET", url: "/api/series/series_list/episodes" });
+    const empty = await app.inject({ method: "GET", url: "/api/series/series_empty/episodes" });
+    const missing = await app.inject({ method: "GET", url: "/api/series/series_missing/episodes" });
+    const invalid = await app.inject({ method: "GET", url: "/api/series/%20/episodes" });
+    assert.equal(listed.statusCode, 200);
+    assert.deepEqual(listed.json().episodes.map((episode: { index: number }) => episode.index), [1, 2]);
+    assert.deepEqual(empty.json(), { episodes: [] });
+    assert.equal(missing.statusCode, 404);
+    assert.equal(missing.json().message, "系列项目不存在");
+    assert.equal(invalid.statusCode, 400);
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});

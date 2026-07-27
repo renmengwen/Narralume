@@ -64,8 +64,9 @@ function inputHash(events: readonly PreparedChapterEvent[]) {
 }
 
 const CHAPTER_ANALYSIS_CONTRACT_VERSION = "chapter-events-analysis-v1";
-const CHAPTER_ANALYSIS_PROMPT_VERSION = "chapter-events-prompt-v1";
+const CHAPTER_ANALYSIS_PROMPT_VERSION = "chapter-events-prompt-v2";
 const CHAPTER_ANALYSIS_PARSER_VERSION = "chapter-events-parser-v1";
+export const CHAPTER_ANALYSIS_TIMEOUT_MS = 180_000;
 
 interface AnalyzeReuseIdentity {
   bookId: string;
@@ -238,7 +239,7 @@ export function createChapterEventsAnalysisJobHandler(
       inputs = await analyze({
         chapterId: task.chapterId,
         atoms: source.atoms,
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(CHAPTER_ANALYSIS_TIMEOUT_MS)]),
       });
     } catch (error) {
       if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();

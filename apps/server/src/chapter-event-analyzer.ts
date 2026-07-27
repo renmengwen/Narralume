@@ -133,7 +133,7 @@ function prompt(atoms: readonly ChapterEvidenceAtom[]) {
     "只能引用下面提供的 evidenceId；禁止返回字节偏移。没有可靠事件时返回空 events。",
     "事件类型仅限 character、location、prop、causality、revelation、suspense。",
     "character/location/prop 的 payload 为 {name,detail?}；causality 为 {cause,effect}；revelation 为 {fact}；suspense 为 {question}。",
-    "输出格式：{\"events\":[{\"type\":\"character\",\"payload\":{\"name\":\"...\"},\"evidenceIds\":[\"evidence_...\"]}]}。",
+    "输出格式：{\"events\":[{\"type\":\"character\",\"payload\":{\"name\":\"...\"},\"evidenceIds\":[\"e1\"]}]}。",
     "原文证据段：",
     ...atoms.map((atom) => JSON.stringify({ evidenceId: atom.id, text: atom.text })),
   ].join("\n");
@@ -242,6 +242,7 @@ export function createOpenAiResponsesChapterAnalyzer(
     throw new Error("章节分析模型配置无效");
   }
   async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal) {
+    const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
     async function requestEvents(input: string) {
       const request = textModelRequest(config, input);
       let response: Response;
@@ -261,18 +262,18 @@ export function createOpenAiResponsesChapterAnalyzer(
         await response.body?.cancel();
         throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
       }
-      return modelEvents(responseText(await limitedJson(response)), atoms);
+      return modelEvents(responseText(await limitedJson(response)), requestAtoms);
     }
     try {
-      return await requestEvents(prompt(atoms));
+      return await requestEvents(prompt(requestAtoms));
     } catch (error) {
       if (!(error instanceof ChapterEvidenceReferenceError) || signal?.aborted) throw error;
       return requestEvents([
         "上一答的 evidenceIds 非法。请重新输出本批次完整、严格 JSON，不要输出 Markdown 或解释。",
         "每个事件必须引用 1～20 个互不重复的 evidenceId，且只能逐字使用以下允许 ID：",
-        ...atoms.map((atom) => atom.id),
+        ...requestAtoms.map((atom) => atom.id),
         "原任务和全部结构约束如下：",
-        prompt(atoms),
+        prompt(requestAtoms),
       ].join("\n"));
     }
   }

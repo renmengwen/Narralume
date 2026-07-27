@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { buildApp } from "./app.js";
-import { CHAPTER_EVENTS_ANALYZE_JOB_TYPE, CHAPTER_EVENTS_JOB_TYPE } from "./chapter-events-job.js";
+import {
+  CHAPTER_ANALYSIS_TIMEOUT_MS,
+  CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+  CHAPTER_EVENTS_JOB_TYPE,
+} from "./chapter-events-job.js";
+import { openDatabase } from "./database.js";
+import { createJob } from "./job-store.js";
 
 const textProvider = {
   baseUrl: "https://unused.example/v1",
@@ -13,6 +20,10 @@ const textProvider = {
   model: "test-text",
   providerId: "test-provider",
 };
+
+test("章节分析使用真实 Gate 的三分钟整章超时", () => {
+  assert.equal(CHAPTER_ANALYSIS_TIMEOUT_MS, 180_000);
+});
 
 async function waitForJob(app: ReturnType<typeof buildApp>, jobId: string) {
   const deadline = Date.now() + 2_000;
@@ -184,17 +195,36 @@ test("自动分析复用身份不包含 provider 和 model 且保留首次执行
     const bookId = imported.json().book.id as string;
     const chapters = await firstApp.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
     const chapterId = chapters.json().items[0].id as string;
+    const seed = openDatabase(dataRoot);
+    const contentHash = (seed.database.prepare("SELECT content_hash FROM chapters WHERE id = ?").get(chapterId) as { content_hash: string }).content_hash;
+    const oldIdentity = {
+      bookId,
+      chapterId,
+      contentHash,
+      analysisContractVersion: "chapter-events-analysis-v1",
+      promptContractVersion: "chapter-events-prompt-v1",
+      parserContractVersion: "chapter-events-parser-v1",
+    };
+    const oldRequestHash = createHash("sha256").update(JSON.stringify(oldIdentity)).digest("hex");
+    const oldJob = createJob(seed.database, {
+      id: `job_chapter_analyze_${oldRequestHash}`,
+      type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+      payload: { ...oldIdentity, providerId: firstProvider.providerId, model: firstProvider.model, requestHash: oldRequestHash },
+      runAfter: Number.MAX_SAFE_INTEGER,
+    });
+    seed.close();
     const created = await firstApp.inject({
       method: "POST", url: "/api/jobs",
       payload: { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } },
     });
     assert.equal(created.statusCode, 201);
+    assert.notEqual(created.json().job.id, oldJob.id);
     const firstJob = await waitForJob(firstApp, created.json().job.id as string);
     assert.equal(firstJob.status, "succeeded");
     assert.equal(firstJob.payload.providerId, "provider-a");
     assert.equal(firstJob.payload.model, "model-a");
     assert.equal(firstJob.payload.analysisContractVersion, "chapter-events-analysis-v1");
-    assert.equal(firstJob.payload.promptContractVersion, "chapter-events-prompt-v1");
+    assert.equal(firstJob.payload.promptContractVersion, "chapter-events-prompt-v2");
     assert.equal(firstJob.payload.parserContractVersion, "chapter-events-parser-v1");
     await firstApp.close();
 

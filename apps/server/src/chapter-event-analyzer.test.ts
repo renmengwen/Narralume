@@ -50,9 +50,10 @@ function modelResponse(value: unknown) {
 }
 
 test("证据 ID 首答非法时只纠错一次并接受严格合法答复", async () => {
+  const modelAtoms = atoms.map((atom, index) => ({ ...atom, id: `evidence_${"a".repeat(64)}_${index}` }));
   const replies = [
-    { events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["evidence_missing"] }] },
-    { events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["evidence_a"] }] },
+    { events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e_missing"] }] },
+    { events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e1"] }] },
   ];
   const requests: string[] = [];
   const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async (_input, init) => {
@@ -60,21 +61,24 @@ test("证据 ID 首答非法时只纠错一次并接受严格合法答复", asyn
     return modelResponse(replies.shift());
   }) as typeof fetch);
 
-  assert.deepEqual(await analyzer({ chapterId: "chapter", atoms }), [{
+  assert.deepEqual(await analyzer({ chapterId: "chapter", atoms: modelAtoms }), [{
     type: "location",
     payload: { name: "墓道" },
     sources: [{ byteStart: 100, byteEnd: 112 }],
   }]);
   assert.equal(requests.length, 2);
-  assert.match(requests[1]!, /evidence_a/);
-  assert.match(requests[1]!, /evidence_b/);
+  for (const request of requests) {
+    assert.doesNotMatch(request, /evidence_/);
+    assert.match(request, /e1/);
+    assert.match(request, /e2/);
+  }
 });
 
 test("证据 ID 纠错答复仍非法时失败且不做第三次请求", async () => {
   let calls = 0;
   const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async () => {
     calls += 1;
-    return modelResponse({ events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["evidence_missing"] }] });
+    return modelResponse({ events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e_missing"] }] });
   }) as typeof fetch);
 
   await assert.rejects(() => analyzer({ chapterId: "chapter", atoms }), /未知证据 ID/);
@@ -99,7 +103,7 @@ test("Abort 后不触发证据纠错请求", async () => {
   const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async () => {
     calls += 1;
     controller.abort();
-    return modelResponse({ events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["evidence_missing"] }] });
+    return modelResponse({ events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e_missing"] }] });
   }) as typeof fetch);
 
   await assert.rejects(() => analyzer({ chapterId: "chapter", atoms, signal: controller.signal }), /未知证据 ID/);

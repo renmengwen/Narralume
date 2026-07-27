@@ -79,6 +79,27 @@ test("受控清单与 MP4 读取返回已复核产物及下载头", async () => 
   assert.equal(video.rawPayload.toString(), "final-video");
 }));
 
+test("生产就绪路由返回真实阻断并拒绝非法查询", async () => usingFixture(async ({ app, connection }) => {
+  connection.database.prepare(
+    "INSERT INTO script_approval_events (id,episode_id,revision,action,script_version_id,created_at) VALUES ('withdraw-readiness','episode',2,'withdraw','script',2)",
+  ).run();
+  const blocked = await app.inject({
+    method: "GET",
+    url: `/api/episodes/episode/export-readiness?timelineHash=${TIMELINE}`,
+  });
+  assert.equal(blocked.statusCode, 200, blocked.body);
+  assert.equal(blocked.json().productionReady, false);
+  assert.match(blocked.json().blockers[0].message, /未人工批准/);
+
+  const missing = await app.inject({ method: "GET", url: "/api/episodes/episode/export-readiness" });
+  const invalid = await app.inject({
+    method: "GET",
+    url: `/api/episodes/episode/export-readiness?timelineHash=INVALID&extra=1`,
+  });
+  assert.equal(missing.statusCode, 400);
+  assert.equal(invalid.statusCode, 400);
+}));
+
 test("假标识、错集、过期、损坏与非独占文件均被拒绝", async (context) => {
   await context.test("假 hash 与错 Episode", async () => usingFixture(async ({ app, exported }) => {
     assert.equal((await app.inject({ method: "GET", url: "/api/episodes/episode/exports/INVALID/manifest" })).statusCode, 400);

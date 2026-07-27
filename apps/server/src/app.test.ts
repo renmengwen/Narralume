@@ -41,6 +41,49 @@ test("健康检查返回服务状态", async () => {
   }
 });
 
+test("应用注册生产就绪复核路由并保留领域错误", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-export-readiness-"));
+  const seeded = openDatabase(dataRoot);
+  seeded.database.prepare(
+    "INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status) VALUES ('book','书','books/source.txt',?,'UTF-8','ready')",
+  ).run("1".repeat(64));
+  seeded.database.prepare(
+    "INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series','book','系列',1,1)",
+  ).run();
+  seeded.database.prepare(
+    "INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at) VALUES ('episode','series',1,'第一集','开端',180,1,1)",
+  ).run();
+  seeded.close();
+  const app = buildApp({ dataRoot, logger: false });
+  const timelineHash = "a".repeat(64);
+
+  try {
+    const blocked = await app.inject({
+      method: "GET",
+      url: `/api/episodes/episode/export-readiness?timelineHash=${timelineHash}`,
+    });
+    assert.equal(blocked.statusCode, 200, blocked.body);
+    assert.equal(blocked.json().productionReady, false);
+    assert.match(blocked.json().blockers[0].message, /未人工批准/);
+
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/api/episodes/episode/export-readiness?timelineHash=invalid",
+    });
+    const missing = await app.inject({
+      method: "GET",
+      url: `/api/episodes/missing/export-readiness?timelineHash=${timelineHash}`,
+    });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.json().message, "请求 JSON 或参数无效");
+    assert.equal(missing.statusCode, 404);
+    assert.equal(missing.json().message, "分集不存在");
+  } finally {
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("全本流水线 HTTP 创建、查询和控制保持幂等", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-pipeline-"));
   const app = buildApp({

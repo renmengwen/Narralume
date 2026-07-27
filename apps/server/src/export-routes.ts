@@ -1,13 +1,44 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { FastifyPluginAsync } from "fastify";
 
+import { deriveExportReadiness, ExportReadinessError } from "./export-readiness.js";
 import { FinalExportReadError, openVerifiedFinalExport } from "./final-video.js";
 
 interface Options { database: DatabaseSync; dataRoot: string }
 interface Params { episodeId: string; exportHash: string }
+interface ReadinessParams { episodeId: string }
+interface ReadinessQuery { timelineHash: string }
 
 export const registerExportRoutes: FastifyPluginAsync<Options> = async (app, options) => {
   const open = async (params: Params) => openVerifiedFinalExport(options.database, options.dataRoot, params);
+  app.get<{ Params: ReadinessParams; Querystring: ReadinessQuery }>(
+    "/api/episodes/:episodeId/export-readiness",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          required: ["timelineHash"],
+          properties: { timelineHash: { type: "string", pattern: "^[0-9a-f]{64}$" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return await deriveExportReadiness({
+          database: options.database,
+          dataRoot: options.dataRoot,
+          episodeId: request.params.episodeId,
+          timelineHash: request.query.timelineHash,
+        });
+      } catch (error) {
+        if (error instanceof ExportReadinessError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
   app.get<{ Params: Params }>("/api/episodes/:episodeId/exports/:exportHash/manifest", async (request, reply) => {
     try {
       const result = await open(request.params);

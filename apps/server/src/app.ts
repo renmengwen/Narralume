@@ -21,6 +21,7 @@ import { BookImportError, importBookText } from "./book-import.js";
 import { BookLibraryError, cleanupPendingBookDeletions, listBooks, listChapters, readChapterText } from "./book-library.js";
 import { registerBookRoutes } from "./book-routes.js";
 import { registerChapterRoutes } from "./chapter-routes.js";
+import { registerExportRoutes } from "./export-routes.js";
 import {
   ChapterEventError,
   listChapterEvents,
@@ -406,6 +407,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   void app.register(registerModelConfigRoutes, { dataRoot });
   void app.register(registerBookRoutes, { database: connection.database, dataRoot });
   void app.register(registerChapterRoutes, { database: connection.database });
+  void app.register(registerExportRoutes, { database: connection.database, dataRoot });
 
   app.get("/api/episode-policy", async () => ({ ok: true, duration: EPISODE_DURATION_POLICY }));
 

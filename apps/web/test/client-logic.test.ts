@@ -5,6 +5,17 @@ import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "../src/components/ui/accordion.tsx";
+import {
+  AUDIO_SEGMENTS_PER_PAGE,
+  audioPageCount,
+  audioSegmentUrl,
+  audioSegmentsForPage,
+  clampAudioPage,
   completedTtsCalibrationMode,
   ttsTimelinePayload,
 } from "../src/production/audio/audio-editor.ts";
@@ -27,6 +38,8 @@ import {
   productionWorkspaceFromSearch,
   productionWorkspacePath,
   resolveProductionStage,
+  stageDependencyLabel,
+  updateWorkspaceStatusLayer,
 } from "../src/production-logic.ts";
 import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
 import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "../src/production/assets/asset-candidate-editor.ts";
@@ -50,10 +63,14 @@ import {
   completedEpisodeScriptVersions,
   episodeScriptJobMatchesIdentity,
   episodeScriptCalibration,
+  isScriptDraftDirty,
   resolveEpisodeScriptWorkspaceStatus,
   scriptDraft,
+  scriptDraftSignature,
   scriptPostPayload,
 } from "../src/production/scripts/script-editor.ts";
+import { visualCandidateState } from "../src/production/visual/visual-editor.ts";
+import { AudioStage } from "../src/production/audio/AudioStage.tsx";
 
 test("保存的主题优先于系统偏好", () => {
   assert.equal(resolveTheme("light", true), "light");
@@ -127,6 +144,35 @@ test("生产工作台地址更新可显式清除旧任务且保留未修改字�
   });
 });
 
+test("阶段导航显示静态依赖而不是虚假等待状态", () => {
+  assert.equal(stageDependencyLabel("visual", false), "依赖：资产、音频");
+  assert.equal(stageDependencyLabel("events", false), "可开始");
+  assert.equal(stageDependencyLabel("audio", true), "当前阶段");
+});
+
+test("工作台状态分层保留持久错误且普通进度不覆盖它", () => {
+  const failed = updateWorkspaceStatusLayer({ operation: "就绪" }, "语音任务创建失败：网络错误");
+  assert.equal(failed.persistentError, "语音任务创建失败：网络错误");
+  const queued = updateWorkspaceStatusLayer(failed, "任务已排队");
+  assert.equal(queued.operation, "任务已排队");
+  assert.equal(queued.persistentError, "语音任务创建失败：网络错误");
+  const restored = updateWorkspaceStatusLayer(queued, "已加载 2 个结构化事件");
+  assert.equal(restored.persistentError, "语音任务创建失败：网络错误");
+  const nextAction = updateWorkspaceStatusLayer(restored, "正在创建语音时间轴任务…");
+  assert.equal(nextAction.persistentError, undefined);
+});
+
+test("Accordion 组件可导出并用于页面折叠结构", () => {
+  const html = renderToString(createElement(Accordion, { type: "single", collapsible: true, defaultValue: "item-1" },
+    createElement(AccordionItem, { value: "item-1" },
+      createElement(AccordionTrigger, null, "事件摘要"),
+      createElement(AccordionContent, null, "编辑字段"),
+    ),
+  ));
+  assert.match(html, /事件摘要/);
+  assert.match(html, /编辑字段/);
+});
+
 test("生图提示词按事实、资产、画幅和风格分段组装", () => {
   const prompt = assembleImagePrompt({
     evidence: "主角第一次进入墓道，墙面潮湿。",
@@ -142,6 +188,11 @@ test("生图提示词按事实、资产、画幅和风格分段组装", () => {
   assert.match(prompt, /主角（下墓装束）/);
   assert.match(prompt, /9:16 竖幅短视频构图/);
   assert.doesNotMatch(prompt, /undefined|null/);
+});
+
+test("VisualStage 候选选择状态提供非颜色文案", () => {
+  assert.deepEqual(visualCandidateState("candidate_1", "candidate_1"), { selected: true, label: "已选画面" });
+  assert.deepEqual(visualCandidateState("candidate_1", "candidate_2"), { selected: false, label: "选择画面" });
 });
 
 test("系列资产生产缺口只按候选与批准状态分类", () => {
@@ -437,6 +488,14 @@ test("服务端稿件版本恢复草稿时按来源序号去重", () => {
   assert.deepEqual(scriptDraft(version).map(({ text, sourceIndexes }) => ({ text, sourceIndexes })), [{ text: "正文", sourceIndexes: [0] }]);
 });
 
+test("稿件 dirty 判断覆盖取消或确认载入版本前的草稿保护", () => {
+  const draft = [{ key: "p1", text: "原稿", sourceIndexes: [2, 1] }];
+  const signature = scriptDraftSignature("faithful", "", draft);
+  assert.equal(isScriptDraftDirty(signature, "faithful", "", [{ key: "new", text: "原稿", sourceIndexes: [1, 2] }]), false);
+  assert.equal(isScriptDraftDirty(signature, "faithful", "", [{ key: "p1", text: "已修改", sourceIndexes: [1, 2] }]), true);
+  assert.equal(isScriptDraftDirty(signature, "packaged", "faithful_1", draft), true);
+});
+
 test("批准与撤回 payload 始终携带当前 revision", () => {
   const approval = { episodeId: "episode_1", status: "unapproved" as const, revision: 3, scriptVersionId: null, changedAt: null };
   assert.deepEqual(approvalPutPayload("approve", approval, "packaged_1"), { action: "approve", expectedRevision: 3, scriptVersionId: "packaged_1" });
@@ -516,6 +575,30 @@ test("已选实测短样同时驱动长稿预算与完整 TTS 默认配置", () 
   assert.deepEqual(ttsTimelinePayload("episode_1", " 临时音色 ", 0), {
     episodeId: "episode_1", voice: "临时音色", rate: 0,
   });
+});
+
+test("AudioStage 分页按固定大小切分真实规模分段", () => {
+  const segments = Array.from({ length: 262 }, (_, index) => ({ index }));
+  assert.equal(AUDIO_SEGMENTS_PER_PAGE, 24);
+  assert.equal(audioPageCount(segments.length), 11);
+  assert.equal(clampAudioPage(999, segments.length), 10);
+  assert.deepEqual(audioSegmentsForPage(segments, 10).map((segment) => segment.index), Array.from({ length: 22 }, (_, offset) => 240 + offset));
+  assert.equal(audioSegmentUrl({ episodeId: "episode/1", timelineHash: "a".repeat(64) }, 60), `/api/episodes/episode%2F1/tts-timelines/${"a".repeat(64)}/audio/60`);
+});
+
+test("AudioStage 服务端首屏只渲染一个共享 audio 元素", () => {
+  const html = renderToString(createElement(AudioStage, {
+    seriesId: "series_1",
+    episodeIndex: 1,
+    busy: false,
+    jobActive: false,
+    setBusy: () => undefined,
+    setStatus: () => undefined,
+    onEpisodeChange: () => undefined,
+    onTimelineChange: () => undefined,
+    onJobCreated: () => undefined,
+  }));
+  assert.equal((html.match(/<audio/g) ?? []).length, 1);
 });
 
 test("短样终态只归属当前 Episode，旧分集结果不得触发恢复", () => {

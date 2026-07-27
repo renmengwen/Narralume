@@ -10,7 +10,9 @@ import {
   completedEpisodeScriptVersions,
   emptyScriptParagraph,
   episodeScriptCalibration,
+  isScriptDraftDirty,
   scriptDraft,
+  scriptDraftSignature,
   scriptPostPayload,
   resolveEpisodeScriptWorkspaceStatus,
   type ScriptParagraphDraft,
@@ -77,6 +79,8 @@ export function useScriptWorkspace({
   const [charactersPerSecond, setCharactersPerSecond] = useState(4.5);
   const [narrationOccupancy, setNarrationOccupancy] = useState(0.8);
   const [calibration, setCalibration] = useState<TtsCalibrationSelection>();
+  const [initialDraftSignature, setInitialDraftSignature] = useState(() => scriptDraftSignature("faithful", "", [emptyScriptParagraph()]));
+  const [pendingLoadVersion, setPendingLoadVersion] = useState<ScriptVersion>();
   const writing = useRef(false);
   const consumedJobId = useRef("");
   const currentJobRef = useRef(currentJob);
@@ -116,16 +120,21 @@ export function useScriptWorkspace({
       setCharactersPerSecond(snapshot.calibration.charactersPerSecond);
     }
     if (!snapshot) {
-      setParagraphs([emptyScriptParagraph()]);
+      const empty = [emptyScriptParagraph()];
+      setParagraphs(empty);
       setParentVersionId("");
       setSelectedPackagedId("");
+      setInitialDraftSignature(scriptDraftSignature("faithful", "", empty));
       return;
     }
     const latestFaithful = snapshot.scripts.filter((item) => item.kind === "faithful").at(-1);
     const packaged = snapshot.scripts.filter((item) => item.kind === "packaged");
     const latest = draftKind === "faithful" ? latestFaithful : packaged.at(-1);
-    setParagraphs(scriptDraft(latest));
-    setParentVersionId(draftKind === "packaged" ? latest?.parentVersionId ?? latestFaithful?.id ?? "" : "");
+    const nextParagraphs = scriptDraft(latest);
+    const nextParentVersionId = draftKind === "packaged" ? latest?.parentVersionId ?? latestFaithful?.id ?? "" : "";
+    setParagraphs(nextParagraphs);
+    setParentVersionId(nextParentVersionId);
+    setInitialDraftSignature(scriptDraftSignature(draftKind, nextParentVersionId, nextParagraphs));
     setSelectedPackagedId((current) => packaged.some((item) => item.id === current)
       ? current
       : snapshot.approval.scriptVersionId ?? packaged.at(-1)?.id ?? "");
@@ -157,13 +166,37 @@ export function useScriptWorkspace({
     setKind(nextKind);
     const faithful = scripts.filter((item) => item.kind === "faithful");
     const latest = scripts.filter((item) => item.kind === nextKind).at(-1);
-    setParagraphs(scriptDraft(latest));
-    setParentVersionId(nextKind === "packaged" ? latest?.parentVersionId ?? faithful.at(-1)?.id ?? "" : "");
+    const nextParagraphs = scriptDraft(latest);
+    const nextParentVersionId = nextKind === "packaged" ? latest?.parentVersionId ?? faithful.at(-1)?.id ?? "" : "";
+    setParagraphs(nextParagraphs);
+    setParentVersionId(nextParentVersionId);
+    setInitialDraftSignature(scriptDraftSignature(nextKind, nextParentVersionId, nextParagraphs));
+  }
+
+  function applyVersion(version: ScriptVersion) {
+    const nextParagraphs = scriptDraft(version);
+    const nextParentVersionId = version.parentVersionId ?? "";
+    setKind(version.kind); setParagraphs(nextParagraphs);
+    setParentVersionId(nextParentVersionId);
+    setInitialDraftSignature(scriptDraftSignature(version.kind, nextParentVersionId, nextParagraphs));
   }
 
   function loadVersion(version: ScriptVersion) {
-    setKind(version.kind); setParagraphs(scriptDraft(version));
-    setParentVersionId(version.parentVersionId ?? "");
+    if (isScriptDraftDirty(initialDraftSignature, kind, parentVersionId, paragraphs)) {
+      setPendingLoadVersion(version);
+      return;
+    }
+    applyVersion(version);
+  }
+
+  function confirmLoadVersion() {
+    if (!pendingLoadVersion) return;
+    applyVersion(pendingLoadVersion);
+    setPendingLoadVersion(undefined);
+  }
+
+  function cancelLoadVersion() {
+    setPendingLoadVersion(undefined);
   }
 
   function chooseParent(id: string) {
@@ -292,9 +325,12 @@ export function useScriptWorkspace({
 
   return {
     episode, scripts, approval, kind, parentVersionId, paragraphs, selectedPackagedId,
+    pendingLoadVersion,
     voice, rate, charactersPerSecond, narrationOccupancy, calibration,
     setVoice, setRate, setCharactersPerSecond, setNarrationOccupancy,
-    setParentVersionId: chooseParent, setSelectedPackagedId, changeKind, loadVersion, updateParagraph,
+    setParentVersionId: chooseParent, setSelectedPackagedId, changeKind, loadVersion, confirmLoadVersion, cancelLoadVersion,
+    draftDirty: isScriptDraftDirty(initialDraftSignature, kind, parentVersionId, paragraphs),
+    updateParagraph,
     addParagraph: () => setParagraphs((current) => [...current, emptyScriptParagraph()]),
     removeParagraph: (key: string) => setParagraphs((current) => current.length === 1 ? current : current.filter((item) => item.key !== key)),
     saveVersion, changeApproval, generateScripts,

@@ -1,4 +1,6 @@
-import { formatTimelineTime } from "./visual-editor";
+import { useState } from "react";
+
+import { formatTimelineTime, visualCandidateState } from "./visual-editor";
 import type { VisualSegmentDraft } from "./types";
 import { useVisualWorkspace } from "./use-visual-workspace";
 
@@ -22,7 +24,28 @@ export function VisualStage(props: Parameters<typeof useVisualWorkspace>[0]) {
         <div className="grid grid-cols-2 gap-3"><label className="grid gap-1 text-xs">起始 cue<select className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.cueStartIndex} onChange={(event) => update({ cueStartIndex: Number(event.target.value), cueEndIndex: Math.max(state.draft!.cueEndIndex, Number(event.target.value)) })}>{state.timeline.cues.map((cue) => <option key={cue.index} value={cue.index}>{cue.index + 1} · {formatTimelineTime(cue.startMs)}</option>)}</select></label><label className="grid gap-1 text-xs">结束 cue<select className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.cueEndIndex} onChange={(event) => update({ cueEndIndex: Number(event.target.value) })}>{state.timeline.cues.filter((cue) => cue.index >= state.draft!.cueStartIndex).map((cue) => <option key={cue.index} value={cue.index}>{cue.index + 1} · {formatTimelineTime(cue.endMs)}</option>)}</select></label></div>
         <ol className="max-h-44 overflow-y-auto rounded border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-3 text-xs leading-6">{state.timeline.cues.slice(state.draft.cueStartIndex, state.draft.cueEndIndex + 1).map((cue) => <li key={cue.index}><span className="mr-2 font-mono text-[10px] text-[var(--fg-tertiary)]">{formatTimelineTime(cue.startMs)}–{formatTimelineTime(cue.endMs)}</span>{cue.text}</li>)}</ol>
         <fieldset className="grid gap-2"><legend className="mb-2 text-xs font-semibold">系列资产（至少一个）</legend>{state.assets.map((asset) => <label key={asset.id} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={state.draft!.assetIds.includes(asset.id)} onChange={(event) => { const assetIds = event.target.checked ? [...state.draft!.assetIds, asset.id] : state.draft!.assetIds.filter((id) => id !== asset.id); update({ assetIds, ...(!assetIds.includes(state.draft!.selectedAssetId) ? { selectedAssetId: "", selectedCandidateId: "" } : {}) }); }} />{asset.name}{asset.stateLabel ? `（${asset.stateLabel}）` : ""}</label>)}</fieldset>
-        <div className="grid grid-cols-2 gap-3"><label className="grid gap-1 text-xs">承载画面的资产<select className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.selectedAssetId} onChange={(event) => update({ selectedAssetId: event.target.value, selectedCandidateId: "" })}><option value="">请选择</option>{state.assets.filter((asset) => state.draft!.assetIds.includes(asset.id)).map((asset) => <option key={asset.id} value={asset.id}>{asset.name}{asset.stateLabel ? `（${asset.stateLabel}）` : ""}</option>)}</select></label><label className="grid gap-1 text-xs">已批准候选<select className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.selectedCandidateId} onChange={(event) => update({ selectedCandidateId: event.target.value })}><option value="">请选择</option>{approvedForSelected.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.id.slice(0, 16)} · {candidate.width}×{candidate.height}</option>)}</select></label></div>
+        <label className="grid gap-1 text-xs">承载画面的资产<select className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.selectedAssetId} onChange={(event) => update({ selectedAssetId: event.target.value, selectedCandidateId: "" })}><option value="">请选择</option>{state.assets.filter((asset) => state.draft!.assetIds.includes(asset.id)).map((asset) => <option key={asset.id} value={asset.id}>{asset.name}{asset.stateLabel ? `（${asset.stateLabel}）` : ""}</option>)}</select></label>
+        <fieldset className="grid gap-2">
+          <legend className="text-xs font-semibold">已批准候选画面</legend>
+          {approvedForSelected.length ? <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
+            {approvedForSelected.map((candidate) => {
+              const candidateState = visualCandidateState(state.draft!.selectedCandidateId, candidate.id);
+              return <button
+                key={candidate.id}
+                type="button"
+                aria-pressed={candidateState.selected}
+                onClick={() => update({ selectedCandidateId: candidate.id })}
+                className={`min-h-11 overflow-hidden rounded border text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] ${candidateState.selected ? "border-[var(--accent)] bg-[var(--bg-subtle)] ring-2 ring-[var(--accent)]" : "border-[var(--border-subtle)] bg-[var(--bg-canvas)] hover:bg-[var(--bg-subtle)]"}`}
+              >
+                <CandidateThumbnail id={candidate.id} label={`候选画面 ${candidate.width}×${candidate.height}`} />
+                <span className="grid gap-1 p-2">
+                  <span className="text-xs font-semibold">{candidateState.label}</span>
+                  <span className="font-mono text-[10px] text-[var(--fg-tertiary)]">{candidate.width}×{candidate.height} · {Math.ceil(candidate.bytes / 1024)} KiB</span>
+                </span>
+              </button>;
+            })}
+          </div> : <p className="rounded border border-dashed border-[var(--border-subtle)] p-4 text-xs text-[var(--fg-tertiary)]">当前资产没有已批准候选图。请先在资产阶段批准候选后再绑定画面。</p>}
+        </fieldset>
         <div className="grid grid-cols-3 gap-3"><label className="grid gap-1 text-xs">运镜<select className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.motionKind} onChange={(event) => update({ motionKind: event.target.value as VisualSegmentDraft["motionKind"], ...(event.target.value === "none" ? { motionAmountPpm: 0 } : {}) })}>{Object.entries(motionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="grid gap-1 text-xs">幅度 ppm<input type="number" min="0" max="1000000" disabled={state.draft.motionKind === "none"} className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.motionAmountPpm} onChange={(event) => update({ motionAmountPpm: Number(event.target.value) })} /></label><label className="grid gap-1 text-xs">淡变 ms<input type="number" min="0" max="10000" className="rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" value={state.draft.fadeMs} onChange={(event) => update({ fadeMs: Number(event.target.value) })} /></label></div>
         <button type="button" disabled={state.busy} onClick={() => void state.saveSegment()} className="min-h-10 rounded bg-[var(--accent)] px-4 text-sm font-semibold text-white disabled:opacity-40">保存并回读视觉段</button>
       </div> : <div className="grid min-h-72 place-items-center text-sm text-[var(--fg-tertiary)]">选择已有视觉段，或新增一个未覆盖段。</div>}
@@ -33,4 +56,11 @@ export function VisualStage(props: Parameters<typeof useVisualWorkspace>[0]) {
       {state.contactSheet ? <dl className="mt-4 grid gap-2 break-all rounded border border-[var(--border-subtle)] p-3 text-[10px]"><div><dt className="text-[var(--fg-tertiary)]">JSON</dt><dd>{state.contactSheet.jsonPath}</dd><dd className="font-mono">{state.contactSheet.jsonHash}</dd></div><div><dt className="text-[var(--fg-tertiary)]">HTML</dt><dd>{state.contactSheet.htmlPath}</dd><dd className="font-mono">{state.contactSheet.htmlHash}</dd></div></dl> : null}
     </aside>
   </section>;
+}
+
+function CandidateThumbnail({ id, label }: { id: string; label: string }) {
+  const [failed, setFailed] = useState(false);
+  return failed
+    ? <div className="grid aspect-[9/16] place-items-center bg-[var(--bg-canvas)] p-2 text-center text-xs text-[var(--danger)]">图片加载失败</div>
+    : <img src={`/api/candidates/${encodeURIComponent(id)}/image`} alt={label} className="aspect-[9/16] w-full bg-[var(--bg-canvas)] object-cover" onError={() => setFailed(true)} />;
 }

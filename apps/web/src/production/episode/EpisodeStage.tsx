@@ -73,7 +73,16 @@ export function EpisodeStage({
           <button type="button" disabled={busy} onClick={onOpenScripts} className="mt-3 rounded bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">进入稿件阶段生成长稿</button>
         </> : <p className="mt-2 text-sm leading-7 text-[var(--fg-tertiary)]">先推荐多章范围、确认来源并保存 Episode；保存后可进入稿件阶段触发 episode_scripts_generate。</p>}
       </div>
-      {state.episode?.sources.map((source) => <article key={source.sourceIndex} className="border-b border-[var(--border-subtle)] pb-4"><p className="font-mono text-[10px] text-[var(--fg-tertiary)]">{source.chapterId} · {source.byteStart}–{source.byteEnd}</p><p className="my-2 text-sm leading-6">{source.sourceText}</p><p className="break-all font-mono text-[9px] text-[var(--fg-tertiary)]">SHA-256 {source.sourceHash}</p></article>)}
+      {state.episode?.sources.map((source) => <article key={source.sourceIndex} className="border-b border-[var(--border-subtle)] pb-4">
+        <p className="font-mono text-[10px] text-[var(--fg-tertiary)]">{source.chapterId} · {source.byteStart}–{source.byteEnd}</p>
+        <details className="mt-2 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)]">
+          <summary className="min-h-11 cursor-pointer px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]">展开来源快照全文与 SHA-256</summary>
+          <div className="border-t border-[var(--border-subtle)] p-3">
+            <p className="text-sm leading-6">{source.sourceText}</p>
+            <p className="mt-2 break-all font-mono text-[9px] text-[var(--fg-tertiary)]">SHA-256 {source.sourceHash}</p>
+          </div>
+        </details>
+      </article>)}
     </div></section>
   </div>;
 }

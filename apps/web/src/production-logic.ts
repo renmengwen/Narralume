@@ -8,6 +8,16 @@ export const PRODUCTION_STAGES = [
   { id: "export", label: "审核与导出", dependsOn: ["visual"], jobTypes: ["final_video"] },
 ] as const;
 
+const STAGE_DEPENDENCY_LABELS: Partial<Record<ProductionStageId, string>> = {
+  events: "可开始",
+  episode: "依赖：章节事件",
+  scripts: "依赖：故事弧",
+  assets: "依赖：稿件",
+  audio: "依赖：稿件",
+  visual: "依赖：资产、音频",
+  export: "依赖：视觉段",
+};
+
 export type ProductionStageId = typeof PRODUCTION_STAGES[number]["id"];
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -26,6 +36,10 @@ const STAGE_IDS = new Set<string>(PRODUCTION_STAGES.map((stage) => stage.id));
 
 export function resolveProductionStage(value: string | null | undefined): ProductionStageId {
   return value && STAGE_IDS.has(value) ? value as ProductionStageId : "events";
+}
+
+export function stageDependencyLabel(stage: ProductionStageId, current: boolean) {
+  return current ? "当前阶段" : STAGE_DEPENDENCY_LABELS[stage] ?? "依赖：上游阶段";
 }
 
 export function mergeProductionWorkspaceLocation(
@@ -113,6 +127,20 @@ export function jobStatusText(status: JobStatus) {
   if (status === "succeeded") return "任务已完成";
   if (status === "failed") return "任务失败";
   return "任务已取消";
+}
+
+export interface WorkspaceStatusLayers {
+  operation: string;
+  persistentError?: string;
+}
+
+export function updateWorkspaceStatusLayer(current: WorkspaceStatusLayers, message: string): WorkspaceStatusLayers {
+  const isError = /失败|错误|冲突/.test(message);
+  const clearsError = /^正在/.test(message) || /^已切换/.test(message);
+  return {
+    operation: message,
+    persistentError: isError ? message : clearsError ? undefined : current.persistentError,
+  };
 }
 
 export interface ImagePromptParts {

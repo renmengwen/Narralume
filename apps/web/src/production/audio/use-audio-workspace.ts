@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { responseJson } from "../../client-logic";
+import { activeModelLabel, loadModelConfig, type ModelConfig } from "../../settings/model-settings";
 import type {
   Episode, JobRecord, ScriptApproval, TtsCalibrationWorkspace, TtsTimeline, TtsTimelineSummary,
 } from "../types";
@@ -17,6 +18,8 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
   const [calibration, setCalibration] = useState<TtsCalibrationWorkspace>();
   const [voice, setVoice] = useState("Microsoft Huihui Desktop");
   const [rate, setRate] = useState(0);
+  const [modelConfig, setModelConfig] = useState<ModelConfig>();
+  const [modelConfigError, setModelConfigError] = useState("");
   const mounted = useRef(true);
   const writing = useRef(false);
   const routeKey = `${seriesId}:${episodeIndex}`;
@@ -42,6 +45,23 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
       `/api/episodes/${encodeURIComponent(episodeId)}/tts-calibration`,
     ))).calibration;
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    loadModelConfig()
+      .then((config) => {
+        if (cancelled) return;
+        setModelConfig(config);
+        setModelConfigError("");
+        const [providerId] = (config.active.tts ?? "").split("/");
+        const model = providerId ? config.providers[providerId]?.models.tts : undefined;
+        if (model?.voiceId) setVoice(model.voiceId);
+      })
+      .catch((error: Error) => {
+        if (!cancelled) setModelConfigError(error.message);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const expectedRoute = routeKey;
@@ -174,6 +194,8 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
 
   return {
     episode, approval, timeline, calibration, voice, rate, setVoice, setRate,
+    runtimeLabel: modelConfig ? activeModelLabel(modelConfig, "tts") : "正在读取设置中心 TTS…",
+    runtimeError: modelConfigError,
     createTimeline, createCalibration, selectCalibration,
   };
 }

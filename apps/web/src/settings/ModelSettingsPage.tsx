@@ -218,15 +218,6 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
                   <ProviderEditor provider={selectedProvider} onChange={patchProvider} onModelChange={patchModel} onDelete={deleteProvider} />
                 ) : null}
 
-                <section className="mt-5 border border-[var(--border-subtle)]">
-                  <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3">
-                    <h2 className="m-0 text-lg font-semibold">保存状态</h2>
-                    <p className="mt-1 text-sm text-[var(--fg-secondary)]">提交时禁用重复保存；失败不会丢失页面草稿。</p>
-                  </div>
-                  <div className="grid grid-cols-4 gap-3 p-4 text-sm max-lg:grid-cols-2 max-sm:grid-cols-1">
-                    {["正在保存模型配置，请稍候…", "模型配置已保存。", "模型配置保存失败：请检查配置。", "保存已中断，页面草稿仍保留。"].map((text) => <div className="min-h-12 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-3 py-2" key={text}>{text}</div>)}
-                  </div>
-                </section>
               </>
             ) : (
               <div className="border border-[var(--border-subtle)] p-8 text-sm text-[var(--fg-secondary)]">{loading ? "正在读取模型配置…" : "模型配置暂不可用。"}</div>

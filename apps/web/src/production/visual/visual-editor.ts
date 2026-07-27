@@ -85,6 +85,14 @@ export function visualSegmentPayload(timelineHash: string, draft: VisualSegmentD
   };
 }
 
+export function visualCandidateState(selectedCandidateId: string, candidateId: string) {
+  const selected = selectedCandidateId === candidateId;
+  return {
+    selected,
+    label: selected ? "已选画面" : "选择画面",
+  };
+}
+
 export function visualPlanStatus(timeline: TtsTimeline | undefined, segments: VisualSegment[]) {
   const ordered = [...segments].sort((left, right) => left.cueStartIndex - right.cueStartIndex);
   const cueCount = timeline?.cues.length ?? 0;

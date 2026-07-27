@@ -1,3 +1,13 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
 import type { EpisodeSourceSnapshot, JobRecord, ScriptVersion } from "../types";
 import { allowedSourceIndexes, canStartEpisodeScriptGeneration } from "./script-editor";
 import { useScriptWorkspace } from "./use-script-workspace";
@@ -25,7 +35,8 @@ export function ScriptStage({
   const sources = (state.episode?.sources ?? []).filter((source) => allowed.has(source.sourceIndex));
   const canGenerate = canStartEpisodeScriptGeneration(busy, jobActive, state.episode?.id);
 
-  return <div className="grid grid-cols-[260px_minmax(0,1fr)_340px] border-t border-[var(--border-subtle)] max-xl:grid-cols-1">
+  return <>
+  <div className="grid grid-cols-[260px_minmax(0,1fr)_340px] border-t border-[var(--border-subtle)] max-xl:grid-cols-1">
     <aside className="border-r border-[var(--border-subtle)] p-5 max-xl:border-r-0 max-xl:border-b">
       <label className="text-xs text-[var(--fg-secondary)]">分集序号<input type="number" min={1} disabled={busy} value={episodeIndex} onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value > 0) onEpisodeChange(value); }} className="mt-2 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-2" /></label>
       <div className="mt-5 space-y-3 rounded border border-[var(--border-subtle)] p-3">
@@ -39,7 +50,7 @@ export function ScriptStage({
           ? `当前使用已选短样 ${state.calibration.sampleId} 的 measured 预算；服务端会复核。`
           : "当前为短样校准前的 provisional 暂定语速；生成后不会自动批准。"}</p>
       </div>
-      <p className="mt-5 text-xs leading-6 text-[var(--fg-tertiary)]">也可继续人工整理；每次保存都会创建不可变新版本。</p>
+      <p className="mt-5 text-xs leading-6 text-[var(--fg-tertiary)]">也可继续人工整理；每次保存都会创建不可变新版本。{state.draftDirty ? " 当前草稿有未保存修改。" : ""}</p>
       <VersionList title="忠实稿版本" items={faithful} onLoad={state.loadVersion} />
       <VersionList title="包装稿版本" items={packaged} onLoad={state.loadVersion} />
     </aside>
@@ -69,7 +80,22 @@ export function ScriptStage({
       <div className="mt-4 grid gap-2"><button type="button" disabled={busy || !state.approval || !state.selectedPackagedId} onClick={() => void state.changeApproval("approve")} className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">批准所选包装稿</button><button type="button" disabled={busy || state.approval?.status !== "approved"} onClick={() => void state.changeApproval("withdraw")} className="rounded border border-[var(--border-subtle)] px-4 py-2 text-sm disabled:opacity-50">撤回当前批准</button></div>
       <p className="mt-4 text-xs leading-6 text-[var(--fg-tertiary)]">批准与撤回使用页面当前 revision。若服务端返回冲突，页面只刷新状态，不会自动重放人工决定。</p>
     </aside>
-  </div>;
+  </div>
+  <AlertDialog open={!!state.pendingLoadVersion} onOpenChange={(open) => { if (!open) state.cancelLoadVersion(); }}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>载入版本会覆盖当前草稿</AlertDialogTitle>
+        <AlertDialogDescription>
+          当前稿件已有未保存修改。取消会保留当前草稿；确认后载入所选版本 v{state.pendingLoadVersion?.versionNumber}，本地未保存内容将被覆盖。
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel>取消，保留草稿</AlertDialogCancel>
+        <AlertDialogAction onClick={state.confirmLoadVersion}>确认载入版本</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+  </>;
 }
 
 function VersionList({ title, items, onLoad }: { title: string; items: ScriptVersion[]; onLoad: (version: ScriptVersion) => void }) {

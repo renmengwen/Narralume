@@ -15,6 +15,30 @@ export function scriptDraft(version?: ScriptVersion): ScriptParagraphDraft[] {
   }));
 }
 
+export function scriptDraftSignature(
+  kind: ScriptVersionKind,
+  parentVersionId: string,
+  paragraphs: ScriptParagraphDraft[],
+) {
+  return JSON.stringify({
+    kind,
+    parentVersionId,
+    paragraphs: paragraphs.map((paragraph) => ({
+      text: paragraph.text,
+      sourceIndexes: [...paragraph.sourceIndexes].sort((left, right) => left - right),
+    })),
+  });
+}
+
+export function isScriptDraftDirty(
+  initialSignature: string,
+  kind: ScriptVersionKind,
+  parentVersionId: string,
+  paragraphs: ScriptParagraphDraft[],
+) {
+  return scriptDraftSignature(kind, parentVersionId, paragraphs) !== initialSignature;
+}
+
 export function allowedSourceIndexes(kind: ScriptVersionKind, episodeSourceIndexes: number[], parent?: ScriptVersion) {
   return kind === "faithful"
     ? [...new Set(episodeSourceIndexes)]

@@ -8,13 +8,19 @@ import test from "node:test";
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { createChapterEventsAnalysisJobHandler, CHAPTER_EVENTS_ANALYZE_JOB_TYPE } from "./chapter-events-job.js";
 import { openDatabase } from "./database.js";
-import { createJob } from "./job-store.js";
+import {
+  createEpisodeScriptGenerationJobHandler,
+  EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+  type GenerateEpisodeScript,
+} from "./episode-script-generation-job.js";
+import { createJob, getJob } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
 import { SeriesPipelineService } from "./series-pipeline-service.js";
 import {
   assertSeriesPipelineAllowsChapterEventMutation,
   createSeriesPipelineRun,
   getMappedChapterJobs,
+  getMappedScriptJobs,
   getSeriesPipelineRun,
   mapSeriesPipelineJob,
   pauseSeriesPipelineRun,
@@ -22,6 +28,7 @@ import {
   cancelSeriesPipelineRun,
   retrySeriesPipelineRun,
   SeriesPipelineError,
+  setSeriesPipelineStatus,
 } from "./series-pipeline-store.js";
 
 const provider: ChapterTextModelConfig = {
@@ -418,5 +425,102 @@ test("pause 和 cancel 任一 mapped Job 控制失败时完整回滚 run 与先�
       };
       assert.deepEqual({ ...job }, { status: "queued", cancel_requested: 0 });
     }
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("脚本阶段严格串行消费上一集交接，失败局部重试且暂停重启不越序", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-scripts-"));
+  let connection = await seed(dataRoot);
+  let failSecond = true;
+  try {
+    let database = connection.database;
+    database.prepare(`INSERT INTO chapter_events
+      (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+      VALUES ('event_script','chapter_a_1',0,0,'revelation','{"fact":"入口"}',1)`).run();
+    for (const index of [1, 2]) {
+      database.prepare(`INSERT INTO episodes
+        (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,recap,next_hook,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,1,1)`).run(
+        `episode_${index}`, "series_a", index, `第${index}集`, `故事弧${index}`, 1200,
+        index === 1 ? null : "承接上集", `钩子${index}`,
+      );
+      const chapter = database.prepare(
+        "SELECT byte_start,byte_end,content_hash FROM chapters WHERE id='chapter_a_1'",
+      ).get() as { byte_start: number; byte_end: number; content_hash: string };
+      database.prepare(`INSERT INTO episode_sources
+        (episode_id,source_index,chapter_id,source_event_id,source_byte_start,source_byte_end,source_hash)
+        VALUES (?,0,'chapter_a_1','event_script',?,?,?)`).run(
+        `episode_${index}`, chapter.byte_start, chapter.byte_end, chapter.content_hash,
+      );
+    }
+    const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 2 });
+    setSeriesPipelineStatus(database, run.id, "configured", "generating_scripts");
+    let service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const seenHandoffs: unknown[] = [];
+    let generatingSecond = false;
+    const generate: GenerateEpisodeScript = async (stage) => {
+      if (stage.stage === "skeleton") {
+        seenHandoffs.push(stage.previousScriptHandoff);
+        generatingSecond = stage.previousScriptHandoff != null;
+        return { beats: [{ intent: stage.episode.storyArc, sourceIndexes: [0] }] };
+      }
+      if (stage.stage === "faithful") return { text: stage.sources[0]!.sourceText };
+      if (failSecond && generatingSecond) throw new Error("第二集暂时失败");
+      return { paragraphs: stage.paragraphs };
+    };
+    let worker = new JobWorker(database, {
+      [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
+        database, dataRoot, provider, generate,
+      ),
+    }, { workerId: "pipeline-scripts", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
+
+    await service.reconcile();
+    assert.deepEqual(getMappedScriptJobs(database, run.id).map((item) => item.subject_id), ["episode_1"]);
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    assert.deepEqual(getMappedScriptJobs(database, run.id).map((item) => item.subject_id), ["episode_1", "episode_2"]);
+    const secondJobId = getMappedScriptJobs(database, run.id)[1]!.job_id;
+    const secondPayload = getJob(database, secondJobId)!.payload as { previousScriptHandoff?: unknown };
+    assert.deepEqual(secondPayload.previousScriptHandoff, {
+      summary: "故事弧1", continuityNotes: ["钩子1", "故事弧1"],
+    });
+    service.pause(run.id);
+    assert.equal(await worker.runOne(), false);
+    assert.equal(getMappedScriptJobs(database, run.id).length, 2);
+    service.resume(run.id);
+    const mappedBeforeCancel = getMappedScriptJobs(database, run.id);
+    assert.equal(service.cancel(run.id).status, "cancelled");
+    assert.equal(service.retry(run.id).status, "generating_scripts");
+    assert.deepEqual(getMappedScriptJobs(database, run.id), mappedBeforeCancel);
+
+    connection.close();
+    connection = openDatabase(dataRoot);
+    database = connection.database;
+    service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    await service.reconcile();
+    assert.deepEqual(getMappedScriptJobs(database, run.id), mappedBeforeCancel);
+    worker = new JobWorker(database, {
+      [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
+        database, dataRoot, provider, generate,
+      ),
+    }, { workerId: "pipeline-scripts-restarted", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
+    await worker.runOne(); await worker.runOne(); await worker.runOne();
+    await service.reconcile();
+    assert.equal(service.get(run.id)!.progress.scripts.completed, 2);
+    assert.equal(service.get(run.id)!.failures[0]!.subjectId, "episode_2");
+    service.retry(run.id);
+    failSecond = false;
+    assert.equal(await worker.runOne(), true);
+
+    connection.close();
+    connection = openDatabase(dataRoot);
+    database = connection.database;
+    service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    await service.reconcile();
+    assert.equal(service.get(run.id)!.status, "checking_coverage");
+    assert.equal(service.get(run.id)!.progress.scripts.completed, 4);
+    assert.equal(seenHandoffs[0], null);
+    assert.deepEqual(seenHandoffs.at(-1), secondPayload.previousScriptHandoff);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });

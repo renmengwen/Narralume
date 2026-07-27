@@ -2,6 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { enqueueChapterEventsAnalysisJob } from "./chapter-events-job.js";
+import {
+  enqueueEpisodeScriptGenerationJob,
+  type EpisodeScriptGenerationRequest,
+  type ScriptHandoff,
+} from "./episode-script-generation-job.js";
 import { getJob } from "./job-store.js";
 import {
   cancelSeriesPipelineRun,
@@ -10,10 +15,12 @@ import {
   failEmptyChapterAnalysisJobs,
   getCurrentSeriesPipelineRun,
   getMappedChapterJobs,
+  getMappedScriptJobs,
   getSeriesPipelineRun,
   listPipelineChapters,
   listRunnableSeriesPipelineRuns,
   mapSeriesPipelineJob,
+  mapSeriesPipelineScriptJob,
   pauseSeriesPipelineRun,
   resumeSeriesPipelineRun,
   retrySeriesPipelineRun,
@@ -27,6 +34,8 @@ export interface SeriesPipelineServiceOptions {
   database: DatabaseSync;
   dataRoot: string;
   resolveChapterTextProvider(): Promise<ChapterTextModelConfig | null>;
+  scriptGenerationDefaults?: Pick<EpisodeScriptGenerationRequest,
+    "voice" | "rate" | "charactersPerSecond" | "narrationOccupancy" | "calibration">;
 }
 
 export class SeriesPipelineService {
@@ -64,6 +73,10 @@ export class SeriesPipelineService {
         let run = candidate;
         if (run.status === "configured") {
           run = setSeriesPipelineStatus(this.options.database, run.id, "configured", "analyzing_chapters") ?? run;
+        }
+        if (run.status === "generating_scripts") {
+          await this.reconcileScripts(run);
+          continue;
         }
         if (run.status !== "analyzing_chapters") continue;
 
@@ -120,6 +133,67 @@ export class SeriesPipelineService {
         );
       }
     }
+  }
+
+  private async reconcileScripts(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
+    const episodes = this.options.database.prepare(
+      "SELECT id, episode_index FROM episodes WHERE series_project_id = ? ORDER BY episode_index",
+    ).all(run.seriesProjectId) as unknown as Array<{ id: string; episode_index: number }>;
+    if (episodes.length !== run.episodeCount || episodes.some((episode, index) => episode.episode_index !== index + 1)) {
+      throw new Error("冻结分集与全书计划不一致");
+    }
+    const mappings = getMappedScriptJobs(this.options.database, run.id);
+    const byEpisode = new Map(mappings.map((mapping) => [mapping.subject_id, getJob(this.options.database, mapping.job_id)]));
+    let previousHandoff: ScriptHandoff | null = null;
+    for (const episode of episodes) {
+      const job = byEpisode.get(episode.id);
+      if (job?.status === "failed" || job?.status === "cancelled") {
+        setSeriesPipelineFailure(this.options.database, run.id,
+          job.status === "cancelled" ? "job_cancelled" : job.errorCode ?? "script_generation_failed",
+          `第 ${episode.episode_index} 集稿件生成失败，请从本集重试`);
+        return;
+      }
+      if (job?.status === "queued" || job?.status === "running") return;
+      if (job?.status === "succeeded") {
+        previousHandoff = this.scriptHandoff(job);
+        continue;
+      }
+      const provider = await this.options.resolveChapterTextProvider();
+      if (!provider) {
+        setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
+        return;
+      }
+      const defaults = this.options.scriptGenerationDefaults ?? {
+        voice: "Microsoft Huihui Desktop", rate: 0, charactersPerSecond: 4.5,
+        narrationOccupancy: 0.8, calibration: { identity: "provisional" as const },
+      };
+      const queued = await enqueueEpisodeScriptGenerationJob(this.options.database, this.options.dataRoot, provider, {
+        payload: {
+          seriesId: run.seriesProjectId,
+          episodeIndex: episode.episode_index,
+          ...defaults,
+          previousScriptHandoff: previousHandoff,
+        },
+        maxAttempts: 3,
+      }, () => getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts");
+      if (getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts") {
+        mapSeriesPipelineScriptJob(this.options.database, run.id, episode.id, queued.job.id);
+      }
+      return;
+    }
+    setSeriesPipelineStatus(this.options.database, run.id, "generating_scripts", "checking_coverage");
+  }
+
+  private scriptHandoff(job: NonNullable<ReturnType<typeof getJob>>): ScriptHandoff {
+    const handoff = (job.result as { scriptHandoff?: unknown } | null)?.scriptHandoff;
+    if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) throw new Error("上一集稿件缺少连续性交接");
+    const value = handoff as ScriptHandoff;
+    if (typeof value.summary !== "string" || !value.summary || value.summary.length > 800 ||
+        !Array.isArray(value.continuityNotes) || value.continuityNotes.length > 12 ||
+        value.continuityNotes.some((note) => typeof note !== "string" || !note || note.length > 240)) {
+      throw new Error("上一集稿件连续性交接无效");
+    }
+    return { summary: value.summary, continuityNotes: [...value.continuityNotes] };
   }
 
   private bookId(seriesProjectId: string) {

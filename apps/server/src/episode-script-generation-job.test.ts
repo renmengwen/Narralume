@@ -207,7 +207,15 @@ test("长稿 Job 骨架不接收原文，faithful 按 beat 隔离原文并写入
     assert.equal(payload.targetDurationSeconds, 120);
     assert.equal(payload.voice, request.voice);
     assert.deepEqual(payload.calibration, request.calibration);
-    assert.equal((result.job.result as { characterBudget: number }).characterBudget, 432);
+    const jobResult = result.job.result as {
+      characterBudget: number;
+      scriptHandoff: { summary: string; continuityNotes: string[] };
+    };
+    assert.equal(jobResult.characterBudget, 432);
+    assert.deepEqual(jobResult.scriptHandoff, {
+      summary: "进入墓道",
+      continuityNotes: ["发现机关", "进入", "揭示"],
+    });
   } finally {
     context.connection.close();
     await rm(context.dataRoot, { recursive: true, force: true });

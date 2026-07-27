@@ -18,6 +18,12 @@ export interface EpisodeScriptGenerationRequest {
   charactersPerSecond: number;
   narrationOccupancy: number;
   calibration: { identity: "provisional" | "measured"; sampleId?: string };
+  previousScriptHandoff?: ScriptHandoff | null;
+}
+
+export interface ScriptHandoff {
+  summary: string;
+  continuityNotes: string[];
 }
 
 interface FrozenSource {
@@ -60,6 +66,7 @@ interface SkeletonInput {
   };
   characterBudget: number;
   calibration: FrozenPayload["calibration"];
+  previousScriptHandoff?: ScriptHandoff | null;
   sources: Array<{
     sourceIndex: number;
     chapterId: string;
@@ -127,6 +134,37 @@ function validateRequest(input: EpisodeScriptGenerationRequest) {
       identity: input.calibration.identity,
       ...(input.calibration.sampleId?.trim() ? { sampleId: input.calibration.sampleId.trim() } : {}),
     },
+    previousScriptHandoff: input.previousScriptHandoff == null
+      ? null
+      : validateScriptHandoff(input.previousScriptHandoff),
+  };
+}
+
+function validateScriptHandoff(value: unknown): ScriptHandoff {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("上一集交接信息无效");
+  const handoff = value as Partial<ScriptHandoff>;
+  if (!Array.isArray(handoff.continuityNotes) || handoff.continuityNotes.length > 12) {
+    throw new Error("上一集连续性信息无效");
+  }
+  return {
+    summary: text(handoff.summary, "上一集摘要", 800),
+    continuityNotes: handoff.continuityNotes.map((note) => text(note, "上一集连续性信息", 240)),
+  };
+}
+
+function clipped(value: string | null, maximum: number) {
+  if (!value) return undefined;
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  return normalized.length <= maximum ? normalized : `${normalized.slice(0, maximum - 1)}…`;
+}
+
+function createScriptHandoff(task: FrozenPayload, beats: ScriptBeat[]): ScriptHandoff {
+  return {
+    summary: clipped(task.storyArc, 800)!,
+    continuityNotes: [
+      clipped(task.nextHook, 240),
+      ...beats.slice(-8).map((beat) => clipped(beat.intent, 240)),
+    ].filter((note): note is string => Boolean(note)),
   };
 }
 
@@ -385,6 +423,7 @@ export async function enqueueEpisodeScriptGenerationJob(
   dataRoot: string,
   config: ChapterTextModelConfig,
   input: Omit<CreateJobInput, "id" | "type">,
+  isStillAllowed: () => boolean = () => true,
 ): Promise<{ job: JobRecord; created: boolean }> {
   const request = validateRequest(input.payload as EpisodeScriptGenerationRequest);
   const episode = await getEpisode(database, dataRoot, request.seriesId, request.episodeIndex);
@@ -399,6 +438,7 @@ export async function enqueueEpisodeScriptGenerationJob(
   const hash = requestHash(payloadWithoutHash);
   const payload: FrozenPayload = { ...payloadWithoutHash, requestHash: hash };
   const id = `job_episode_scripts_${hash}`;
+  if (!isStillAllowed()) throw new Error("全本流水线已暂停或结束，未派发稿件任务");
   const existing = getJob(database, id);
   if (existing) {
     if (existing.type !== EPISODE_SCRIPT_GENERATION_JOB_TYPE || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
@@ -445,6 +485,7 @@ export function createEpisodeScriptGenerationJobHandler(
       },
       characterBudget,
       calibration: task.calibration,
+      previousScriptHandoff: task.previousScriptHandoff ?? null,
       sources: task.sources.map((source) => ({
         sourceIndex: source.sourceIndex,
         chapterId: source.chapterId,
@@ -507,6 +548,7 @@ export function createEpisodeScriptGenerationJobHandler(
       packagedVersionId: versions.packaged.id,
       actualCharacterCount,
       compressionSuggested: actualCharacterCount > characterBudget,
+      scriptHandoff: createScriptHandoff(task, beats),
     };
   };
 }

@@ -152,7 +152,7 @@ export function listPipelineChapters(database: DatabaseSync, run: SeriesPipeline
 
 export function listRunnableSeriesPipelineRuns(database: DatabaseSync) {
   return (database.prepare(
-    "SELECT * FROM series_pipeline_runs WHERE status IN ('configured', 'analyzing_chapters') ORDER BY created_at, id",
+    "SELECT * FROM series_pipeline_runs WHERE status IN ('configured', 'analyzing_chapters', 'generating_scripts') ORDER BY created_at, id",
   ).all() as unknown as RunRow[]).map(runRecord);
 }
 
@@ -201,6 +201,29 @@ export function getMappedChapterJobs(database: DatabaseSync, runId: string) {
     `SELECT mapping.subject_id, mapping.job_id FROM series_pipeline_jobs mapping
      WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis' ORDER BY mapping.created_at, mapping.subject_id`,
   ).all(runId) as unknown as Array<{ subject_id: string; job_id: string }>;
+}
+
+export function getMappedScriptJobs(database: DatabaseSync, runId: string) {
+  return database.prepare(
+    `SELECT mapping.subject_id, mapping.job_id FROM series_pipeline_jobs mapping
+     JOIN episodes episode ON episode.id = mapping.subject_id
+     WHERE mapping.run_id = ? AND mapping.stage = 'script_generation'
+     ORDER BY episode.episode_index`,
+  ).all(runId) as unknown as Array<{ subject_id: string; job_id: string }>;
+}
+
+export function mapSeriesPipelineScriptJob(
+  database: DatabaseSync,
+  runId: string,
+  episodeId: string,
+  jobId: string,
+  now = Date.now(),
+) {
+  database.prepare(
+    `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
+     VALUES (?, 'script_generation', 'episode', ?, ?, ?)
+     ON CONFLICT(run_id, stage, subject_type, subject_id) DO NOTHING`,
+  ).run(runId, episodeId, jobId, now);
 }
 
 export function failEmptyChapterAnalysisJobs(database: DatabaseSync, runId: string, now = Date.now()) {
@@ -263,7 +286,7 @@ function mappedJobs(database: DatabaseSync, runId: string) {
   return database.prepare(
     `SELECT DISTINCT job.id, job.status, job.run_after FROM jobs job
      JOIN series_pipeline_jobs mapping ON mapping.job_id = job.id
-     WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis' ORDER BY job.id`,
+     WHERE mapping.run_id = ? ORDER BY job.id`,
   ).all(runId) as unknown as Array<{ id: string; status: JobRecord["status"]; run_after: number }>;
 }
 
@@ -307,7 +330,7 @@ export function resumeSeriesPipelineRun(database: DatabaseSync, id: string, now 
   database.prepare(
     `UPDATE jobs SET run_after = ?, updated_at = ?
      WHERE status = 'queued' AND run_after = ? AND id IN (
-       SELECT job_id FROM series_pipeline_jobs WHERE run_id = ? AND stage = 'chapter_analysis'
+       SELECT job_id FROM series_pipeline_jobs WHERE run_id = ?
      )`,
   ).run(now, now, PAUSED_JOB_RUN_AFTER, id);
   return getSeriesPipelineRun(database, id)!;
@@ -336,6 +359,12 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
     const run = getSeriesPipelineRun(database, id);
     if (!run) throw new SeriesPipelineError(404, "全本流水线不存在");
     if (run.status === "completed") return run;
+    const cancelledScriptGeneration = run.status === "cancelled" && Boolean(database.prepare(
+      `SELECT 1 FROM series_pipeline_jobs mapping
+       JOIN jobs job ON job.id = mapping.job_id
+       WHERE mapping.run_id = ? AND mapping.stage = 'script_generation'
+         AND job.status IN ('failed', 'cancelled') LIMIT 1`,
+    ).get(id));
     for (const job of mappedJobs(database, id)) {
       if (job.status !== "failed" && job.status !== "cancelled") continue;
       const runAfter = run.status === "paused" && !hasOtherActiveOwner(database, job.id, id)
@@ -349,10 +378,10 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
       ).run(runAfter, now, job.id);
     }
     database.prepare(
-      `UPDATE series_pipeline_runs SET status = CASE WHEN status = 'cancelled' THEN 'analyzing_chapters' ELSE status END,
+      `UPDATE series_pipeline_runs SET status = CASE WHEN status = 'cancelled' THEN ? ELSE status END,
          resume_status = CASE WHEN status = 'cancelled' THEN NULL ELSE resume_status END,
          failure_code = NULL, failure_message = NULL, updated_at = ? WHERE id = ?`,
-    ).run(now, id);
+    ).run(cancelledScriptGeneration ? "generating_scripts" : "analyzing_chapters", now, id);
     return getSeriesPipelineRun(database, id)!;
   });
 }
@@ -373,7 +402,18 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     message: item.job.status === "cancelled" ? "章节分析已中断，请重试该章节" : "章节分析失败，请重试该章节",
     canRetry: true,
   }));
+  const scriptJobs = getMappedScriptJobs(database, run.id).map((mapping) => ({
+    episodeId: mapping.subject_id, job: getJob(database, mapping.job_id),
+  })).filter((item): item is { episodeId: string; job: JobRecord } => Boolean(item.job));
+  const scriptFailures = scriptJobs.filter((item) => item.job.status === "failed" || item.job.status === "cancelled").map((item) => ({
+    stage: "script_generation", subjectType: "episode", subjectId: item.episodeId,
+    jobId: item.job.id,
+    code: item.job.status === "cancelled" ? "job_cancelled" : item.job.errorCode,
+    message: item.job.status === "cancelled" ? "本集稿件生成已中断，请从本集重试" : "本集稿件生成失败，请从本集重试",
+    canRetry: true,
+  }));
   const current = relevantJobs.find((item) => item.job.status === "running" || item.job.status === "queued");
+  const currentScript = scriptJobs.find((item) => item.job.status === "running" || item.job.status === "queued");
   return {
     ...run,
     progress: {
@@ -386,15 +426,17 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
       },
       storyBible: { completed: 0, total: 1 },
       episodePlan: { completed: 0, total: run.episodeCount },
-      scripts: { completed: 0, total: run.episodeCount * 2 },
+      scripts: { completed: scriptJobs.filter((item) => item.job.status === "succeeded").length * 2, total: run.episodeCount * 2 },
     },
-    current: current ? { stage: "chapter_analysis", subjectType: "chapter", subjectId: current.chapterId, jobId: current.job.id } : null,
-    failures,
+    current: current ? { stage: "chapter_analysis", subjectType: "chapter", subjectId: current.chapterId, jobId: current.job.id }
+      : currentScript ? { stage: "script_generation", subjectType: "episode", subjectId: currentScript.episodeId, jobId: currentScript.job.id }
+      : null,
+    failures: [...failures, ...scriptFailures],
     actions: {
       canPause: !["paused", "cancelled", "completed"].includes(run.status),
       canResume: run.status === "paused",
       canCancel: !["cancelled", "completed"].includes(run.status),
-      canRetry: failures.length > 0,
+      canRetry: failures.length + scriptFailures.length > 0,
     },
   };
 }

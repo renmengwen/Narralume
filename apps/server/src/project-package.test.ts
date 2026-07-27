@@ -8,13 +8,22 @@ import test from "node:test";
 
 import { openDatabase } from "./database.js";
 import { FINAL_VIDEO_MANIFEST_VERSION, type FinalVideoManifest } from "./final-video.js";
-import { createProjectPackage, restoreProjectPackage, type ProjectPackageManifest } from "./project-package.js";
+import {
+  createProjectPackage,
+  RESTORABLE_PROJECT_SCHEMA_VERSIONS,
+  restoreProjectPackage,
+  type ProjectPackageManifest,
+} from "./project-package.js";
 import { loadRenderPlanSnapshot, RENDER_CONTRACT } from "./render-chunk-job.js";
 import { changeScriptApproval } from "./script-approval-store.js";
 import { createScriptVersion } from "./script-version-store.js";
 
 const TIMELINE = "a".repeat(64);
 const hash = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
+
+test("项目包恢复兼容版本是显式持久合同", () => {
+  assert.deepEqual(RESTORABLE_PROJECT_SCHEMA_VERSIONS, [13, 14, 15]);
+});
 
 async function put(root: string, relativePath: string, content: string | Buffer) {
   const path = join(root, ...relativePath.split("/"));
@@ -104,11 +113,19 @@ async function mutateManifest(packagePath: string, mutate: (manifest: any) => vo
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+function downgradeDatabaseToV14(database: DatabaseSync) {
+  database.exec(`
+    DROP TABLE book_story_bibles;
+    DELETE FROM schema_migrations WHERE version=15;
+  `);
+}
+
 function downgradeDatabaseToV13(database: DatabaseSync) {
   database.exec(`
+    DROP TABLE book_story_bibles;
     DROP TABLE series_pipeline_jobs;
     DROP TABLE series_pipeline_runs;
-    DELETE FROM schema_migrations WHERE version=14;
+    DELETE FROM schema_migrations WHERE version>=14;
   `);
 }
 
@@ -120,6 +137,21 @@ async function refreshPackagedDatabaseIdentity(packagePath: string) {
     databaseFile.bytes = databaseContent.length;
     databaseFile.sha256 = hash(databaseContent);
   });
+}
+
+async function createHistoricalV14Package(
+  current: Awaited<ReturnType<typeof fixture>>,
+  packagePath: string,
+  mutate?: (database: DatabaseSync) => void,
+) {
+  await createProjectPackage(current.connection.database, current.dataRoot,
+    { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
+  const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
+  try {
+    downgradeDatabaseToV14(database);
+    mutate?.(database);
+  } finally { database.close(); }
+  await refreshPackagedDatabaseIdentity(packagePath);
 }
 
 async function createHistoricalV13Package(
@@ -166,25 +198,25 @@ test("创建 WAL 一致项目包并恢复到不存在的数据根", async () => 
   } finally { await cleanup(current); }
 });
 
-test("合法 v13 项目包在私有 staging 升级为 v14 并保留完整产品数据", async () => {
+test("合法 v14 项目包在私有 staging 升级为 v15 并保留完整产品数据", async () => {
   const current = await fixture();
   try {
-    const packagePath = join(current.root, "project-package-v13");
-    await createHistoricalV13Package(current, packagePath);
+    const packagePath = join(current.root, "project-package-v14");
+    await createHistoricalV14Package(current, packagePath);
     const originalPackagedDatabaseHash = hash(await readFile(join(packagePath, "payload", "narralume.sqlite3")));
 
-    const restored = join(current.root, "restored-v14");
+    const restored = join(current.root, "restored-v15");
     await restoreProjectPackage(packagePath, restored);
     assert.equal(hash(await readFile(join(packagePath, "payload", "narralume.sqlite3"))), originalPackagedDatabaseHash,
       "恢复不得迁移或改写原项目包 payload");
     const originalDatabase = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"), { readOnly: true });
-    try { assert.equal(originalDatabase.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 13); }
+    try { assert.equal(originalDatabase.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 14); }
     finally { originalDatabase.close(); }
     const restoredDatabase = new DatabaseSync(join(restored, "narralume.sqlite3"), { readOnly: true });
     try {
       assert.deepEqual(
         (restoredDatabase.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map((row) => row.version),
-        Array.from({ length: 14 }, (_, index) => index + 1),
+        Array.from({ length: 15 }, (_, index) => index + 1),
       );
       for (const [table, count] of Object.entries({
         episodes: 1, episode_sources: 1, script_versions: 2, script_version_sources: 2,
@@ -197,6 +229,9 @@ test("合法 v13 项目包在私有 staging 升级为 v14 并保留完整产品�
       assert.equal(restoredDatabase.prepare("PRAGMA foreign_key_check").all().length, 0);
       assert.equal(restoredDatabase.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
       assert.equal(restoredDatabase.prepare("SELECT target_duration_seconds FROM episodes WHERE id='episode'").get()?.target_duration_seconds, 180);
+      assert.equal(restoredDatabase.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='book_story_bibles'",
+      ).get()?.name, "book_story_bibles");
     } finally { restoredDatabase.close(); }
     const manifest = JSON.parse(await readFile(join(packagePath, "manifest.json"), "utf8")) as ProjectPackageManifest;
     assert.equal(await readFile(join(restored, manifest.project.finalManifestPath), "utf8"),
@@ -206,7 +241,22 @@ test("合法 v13 项目包在私有 staging 升级为 v14 并保留完整产品�
   } finally { await cleanup(current); }
 });
 
-test("历史 v13 封存模式拒绝批准或持久分片身份漂移，v14 仍要求当前渲染算法", async (t) => {
+test("合法 v13 封存项目包恢复时升级到 v15", async () => {
+  const current = await fixture();
+  try {
+    const packagePath = join(current.root, "project-package-v13");
+    await createHistoricalV13Package(current, packagePath);
+    const restored = join(current.root, "restored-v13-to-v15");
+    await restoreProjectPackage(packagePath, restored);
+    const database = new DatabaseSync(join(restored, "narralume.sqlite3"), { readOnly: true });
+    try {
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 15);
+      assert.equal(database.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+    } finally { database.close(); }
+  } finally { await cleanup(current); }
+});
+
+test("历史 v13 封存模式拒绝批准或持久分片身份漂移，v14/v15 要求当前渲染算法", async (t) => {
   for (const kind of ["approval", "chunk"] as const) await t.test(`v13 ${kind}`, async () => {
     const current = await fixture();
     try {
@@ -229,6 +279,20 @@ test("历史 v13 封存模式拒绝批准或持久分片身份漂移，v14 仍�
     const current = await fixture();
     try {
       const packagePath = join(current.root, "package-v14-drift");
+      await createHistoricalV14Package(current, packagePath, (database) => {
+        database.prepare("UPDATE visual_segments SET motion_kind = 'zoom-in', motion_amount_ppm = 1").run();
+      });
+      await assert.rejects(
+        restoreProjectPackage(packagePath, join(current.root, "restored-v14-drift")),
+        /最终清单不是当前批准稿与渲染计划/,
+      );
+    } finally { await cleanup(current); }
+  });
+
+  await t.test("v15 render plan drift", async () => {
+    const current = await fixture();
+    try {
+      const packagePath = join(current.root, "package-v15-drift");
       await createProjectPackage(current.connection.database, current.dataRoot,
         { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
       const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
@@ -236,7 +300,7 @@ test("历史 v13 封存模式拒绝批准或持久分片身份漂移，v14 仍�
       finally { database.close(); }
       await refreshPackagedDatabaseIdentity(packagePath);
       await assert.rejects(
-        restoreProjectPackage(packagePath, join(current.root, "restored-v14-drift")),
+        restoreProjectPackage(packagePath, join(current.root, "restored-v15-drift")),
         /最终清单不是当前批准稿与渲染计划/,
       );
     } finally { await cleanup(current); }
@@ -269,13 +333,13 @@ test("历史 v13 sealed restore 拒绝稿件、批准和分片时长的同步伪
   });
 });
 
-test("项目包创建仍严格要求 v14，恢复拒绝未来或有缺口的迁移历史", async (t) => {
-  await t.test("创建拒绝 v13", async () => {
+test("项目包创建仍严格要求 v15，恢复拒绝未来或有缺口的迁移历史", async (t) => {
+  await t.test("创建拒绝 v14", async () => {
     const current = await fixture();
     try {
-      downgradeDatabaseToV13(current.connection.database);
+      downgradeDatabaseToV14(current.connection.database);
       await assert.rejects(createProjectPackage(current.connection.database, current.dataRoot,
-        { packagePath: join(current.root, "package-v13-create"), finalManifestRelativePath: current.finalManifestRelativePath }),
+        { packagePath: join(current.root, "package-v14-create"), finalManifestRelativePath: current.finalManifestRelativePath }),
       /迁移版本不兼容/);
     } finally { await cleanup(current); }
   });
@@ -287,7 +351,7 @@ test("项目包创建仍严格要求 v14，恢复拒绝未来或有缺口的迁�
         { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
       const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
       try {
-        if (kind === "future") database.prepare("INSERT INTO schema_migrations (version) VALUES (15)").run();
+        if (kind === "future") database.prepare("INSERT INTO schema_migrations (version) VALUES (16)").run();
         else database.prepare("DELETE FROM schema_migrations WHERE version=13").run();
       } finally { database.close(); }
       await refreshPackagedDatabaseIdentity(packagePath);

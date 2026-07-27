@@ -11,7 +11,8 @@ import { scriptApprovalEventId } from "./script-approval-store.js";
 import { validateStoredScriptVersion } from "./script-version-store.js";
 
 export const PROJECT_PACKAGE_VERSION = "narralume-project-package-v1" as const;
-const CURRENT_SCHEMA_VERSION = 14;
+export const RESTORABLE_PROJECT_SCHEMA_VERSIONS = [13, 14, 15] as const;
+const CURRENT_SCHEMA_VERSION = 15;
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 10_000;
 const MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024;
@@ -666,11 +667,11 @@ export async function restoreProjectPackage(
       staging,
       structure.manifest,
       {
-        allowedSchemaVersions: [CURRENT_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION],
-        sealedRenderPlanSchemaVersion: CURRENT_SCHEMA_VERSION - 1,
+        allowedSchemaVersions: [...RESTORABLE_PROJECT_SCHEMA_VERSIONS],
+        sealedRenderPlanSchemaVersion: 13,
       },
     );
-    if (schemaVersion === CURRENT_SCHEMA_VERSION - 1) {
+    if (schemaVersion !== CURRENT_SCHEMA_VERSION) {
       const migrated = openDatabase(staging);
       migrated.close();
       const databaseHandle = await open(resolve(staging, "narralume.sqlite3"), "r+");
@@ -678,7 +679,7 @@ export async function restoreProjectPackage(
       await validateStagedPackage(staging, structure.manifest, {
         allowedSchemaVersions: [CURRENT_SCHEMA_VERSION],
         requireOriginalDatabaseBytes: false,
-        sealedRenderPlanSchemaVersion: CURRENT_SCHEMA_VERSION,
+        sealedRenderPlanSchemaVersion: schemaVersion === 13 ? CURRENT_SCHEMA_VERSION : undefined,
       });
     }
     await ops.syncDirectory(staging);

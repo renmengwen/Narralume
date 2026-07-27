@@ -596,6 +596,88 @@ const MIGRATION_14 = `
     ON series_pipeline_jobs(job_id);
 `;
 
+const MIGRATION_15 = `
+  CREATE TABLE book_story_bibles (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL CHECK (scope IN ('interval', 'final')),
+    source_start_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    source_end_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    source_event_ids_json TEXT NOT NULL CHECK (
+      length(source_event_ids_json) BETWEEN 3 AND 1048576
+    ),
+    source_events_hash TEXT NOT NULL CHECK (
+      length(source_events_hash) = 64 AND source_events_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    parent_bible_ids_json TEXT NOT NULL CHECK (
+      length(parent_bible_ids_json) BETWEEN 2 AND 1048576
+    ),
+    input_hash TEXT NOT NULL CHECK (
+      length(input_hash) = 64 AND input_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    contract_version TEXT NOT NULL CHECK (length(contract_version) BETWEEN 1 AND 100),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 200),
+    model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 200),
+    job_id TEXT REFERENCES jobs(id),
+    content_json TEXT NOT NULL CHECK (length(content_json) BETWEEN 2 AND 8388608),
+    content_hash TEXT NOT NULL CHECK (
+      length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    invalidated_at INTEGER CHECK (invalidated_at IS NULL OR invalidated_at >= created_at),
+    UNIQUE (
+      book_id, scope, source_start_chapter_id, source_end_chapter_id,
+      source_events_hash, input_hash, contract_version, revision
+    )
+  ) STRICT;
+
+  CREATE INDEX book_story_bibles_reuse
+    ON book_story_bibles (
+      book_id, scope, source_start_chapter_id, source_end_chapter_id,
+      source_events_hash, input_hash, contract_version, invalidated_at, revision DESC
+    );
+
+  CREATE TRIGGER book_story_bibles_range_guard
+  BEFORE INSERT ON book_story_bibles
+  BEGIN
+    SELECT RAISE(ABORT, 'book story bible range must belong to book and be ordered')
+    WHERE NOT EXISTS (
+      SELECT 1 FROM chapters start
+      JOIN chapters finish ON finish.book_id = start.book_id
+      WHERE start.id = NEW.source_start_chapter_id
+        AND finish.id = NEW.source_end_chapter_id
+        AND start.book_id = NEW.book_id
+        AND start.chapter_index <= finish.chapter_index
+    );
+  END;
+
+  CREATE TRIGGER book_story_bibles_immutable
+  BEFORE UPDATE ON book_story_bibles
+  WHEN NEW.id IS NOT OLD.id
+    OR NEW.book_id IS NOT OLD.book_id
+    OR NEW.scope IS NOT OLD.scope
+    OR NEW.source_start_chapter_id IS NOT OLD.source_start_chapter_id
+    OR NEW.source_end_chapter_id IS NOT OLD.source_end_chapter_id
+    OR NEW.source_event_ids_json IS NOT OLD.source_event_ids_json
+    OR NEW.source_events_hash IS NOT OLD.source_events_hash
+    OR NEW.parent_bible_ids_json IS NOT OLD.parent_bible_ids_json
+    OR NEW.input_hash IS NOT OLD.input_hash
+    OR NEW.contract_version IS NOT OLD.contract_version
+    OR NEW.revision IS NOT OLD.revision
+    OR NEW.provider_id IS NOT OLD.provider_id
+    OR NEW.model IS NOT OLD.model
+    OR NEW.job_id IS NOT OLD.job_id
+    OR NEW.content_json IS NOT OLD.content_json
+    OR NEW.content_hash IS NOT OLD.content_hash
+    OR NEW.created_at IS NOT OLD.created_at
+    OR OLD.invalidated_at IS NOT NULL
+    OR NEW.invalidated_at IS NULL
+  BEGIN
+    SELECT RAISE(ABORT, 'book story bible versions are immutable');
+  END;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -604,6 +686,7 @@ const MIGRATIONS = [
   MIGRATION_12,
   MIGRATION_13,
   MIGRATION_14,
+  MIGRATION_15,
 ];
 
 export interface NarralumeDatabase {

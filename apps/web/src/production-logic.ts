@@ -28,6 +28,7 @@ export interface ProductionWorkspaceLocation {
   assetId?: string;
   timelineHash?: string;
   jobId?: string;
+  pipelineRunId?: string;
 }
 
 export type ProductionWorkspaceLocationUpdate = Partial<ProductionWorkspaceLocation>;
@@ -63,6 +64,9 @@ export function mergeProductionWorkspaceLocation(
     jobId: Object.prototype.hasOwnProperty.call(next, "jobId")
       ? next.jobId
       : current.jobId,
+    pipelineRunId: Object.prototype.hasOwnProperty.call(next, "pipelineRunId")
+      ? next.pipelineRunId
+      : current.pipelineRunId,
   };
 }
 
@@ -75,6 +79,7 @@ export function productionWorkspacePath(input: {
   assetId?: string;
   timelineHash?: string;
   jobId?: string;
+  pipelineRunId?: string;
 }) {
   const parameters = new URLSearchParams({ book: input.bookId, series: input.seriesId });
   if (input.stage && input.stage !== "events") parameters.set("stage", input.stage);
@@ -85,6 +90,7 @@ export function productionWorkspacePath(input: {
   if (input.assetId) parameters.set("asset", input.assetId);
   if (input.timelineHash && /^[0-9a-f]{64}$/.test(input.timelineHash)) parameters.set("timeline", input.timelineHash);
   if (input.jobId) parameters.set("job", input.jobId);
+  if (input.pipelineRunId) parameters.set("pipeline", input.pipelineRunId);
   return `?${parameters.toString()}`;
 }
 
@@ -103,6 +109,7 @@ export function productionWorkspaceFromSearch(search: string) {
     ...(parameters.get("asset")?.trim() ? { assetId: parameters.get("asset")!.trim() } : {}),
     ...(/^[0-9a-f]{64}$/.test(parameters.get("timeline") ?? "") ? { timelineHash: parameters.get("timeline")! } : {}),
     ...(parameters.get("job")?.trim() ? { jobId: parameters.get("job")!.trim() } : {}),
+    ...(parameters.get("pipeline")?.trim() ? { pipelineRunId: parameters.get("pipeline")!.trim() } : {}),
   };
 }
 

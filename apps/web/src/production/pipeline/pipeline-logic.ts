@@ -1,0 +1,99 @@
+import type { EpisodeDurationPolicy } from "../episode/episode-editor";
+import type { Chapter } from "../types";
+
+export type SeriesPipelineStatus =
+  | "configured" | "analyzing_chapters" | "building_story_bible" | "planning_episodes"
+  | "validating_plan" | "freezing_plan" | "generating_scripts" | "checking_coverage"
+  | "awaiting_review" | "paused" | "failed" | "cancelled" | "completed";
+
+export interface SeriesPipelineRun {
+  id: string;
+  seriesProjectId: string;
+  status: SeriesPipelineStatus;
+  resumeStatus: SeriesPipelineStatus | null;
+  episodeCount: number;
+  targetDurationSeconds: number;
+  sourceStartChapterId: string;
+  sourceEndChapterId: string;
+  failureCode: string | null;
+  failureMessage: string | null;
+  progress: {
+    chapterAnalysis: { completed: number; total: number; reused: number; queued: number; running: number; failed: number };
+    storyBible: { completed: number; total: number };
+    episodePlan: { completed: number; total: number };
+    scripts: { completed: number; total: number };
+  };
+  current: { stage: string; subjectType: string; subjectId: string; jobId: string } | null;
+  failures: Array<{
+    stage: string; subjectType: string; subjectId: string; jobId: string;
+    code: string | null; message: string;
+  }>;
+  actions: { canPause: boolean; canResume: boolean; canCancel: boolean; canRetry: boolean };
+}
+
+export interface PipelineCreateInput {
+  episodeCount: number;
+  targetDurationSeconds: number;
+  sourceStartChapterId: string;
+  sourceEndChapterId: string;
+}
+
+export function pipelineCreateInput(
+  input: PipelineCreateInput,
+  chapters: Chapter[],
+  policy: EpisodeDurationPolicy,
+): PipelineCreateInput {
+  const startIndex = chapters.findIndex((chapter) => chapter.id === input.sourceStartChapterId);
+  const endIndex = chapters.findIndex((chapter) => chapter.id === input.sourceEndChapterId);
+  if (startIndex < 0 || endIndex < 0 || startIndex > endIndex) throw new Error("请选择连续且顺序正确的改写章节范围");
+  if (!Number.isSafeInteger(input.episodeCount) || input.episodeCount < 1 || input.episodeCount > 1000) {
+    throw new Error("总集数必须是 1～1000 之间的整数");
+  }
+  if (!Number.isSafeInteger(input.targetDurationSeconds) ||
+      input.targetDurationSeconds < policy.minimumSeconds || input.targetDurationSeconds > policy.maximumSeconds ||
+      (input.targetDurationSeconds - policy.minimumSeconds) % policy.stepSeconds !== 0) {
+    throw new Error(`单集时长必须是 ${policy.minimumSeconds}～${policy.maximumSeconds} 秒，并按 ${policy.stepSeconds} 秒递增`);
+  }
+  return input;
+}
+
+export function pipelineRangeCount(chapters: Chapter[], startId: string, endId: string) {
+  const startIndex = chapters.findIndex((chapter) => chapter.id === startId);
+  const endIndex = chapters.findIndex((chapter) => chapter.id === endId);
+  return startIndex >= 0 && endIndex >= startIndex ? endIndex - startIndex + 1 : 0;
+}
+
+export function formatPipelineDuration(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "待填写";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (!hours) return `${minutes} 分钟`;
+  return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+}
+
+export function pipelineStatusText(run: SeriesPipelineRun) {
+  if (run.status === "paused") return "任务已暂停。已完成结果已保留。";
+  if (run.status === "cancelled") return "任务已取消。已完成章节事件已保留。";
+  if (run.status === "completed") return `全本稿件已生成，共 ${run.episodeCount} 集。请逐集审核。`;
+  if (run.failureMessage || run.failures.length) return run.failureMessage ?? `有 ${run.failures.length} 个失败章节，可局部重试。`;
+  if (run.current?.stage === "chapter_analysis") {
+    return `正在分析章节 ${run.current.subjectId}，共 ${run.progress.chapterAnalysis.total} 章。`;
+  }
+  if (run.status === "configured") return "全本改写任务已配置，等待开始章节分析。";
+  if (run.status === "analyzing_chapters") return "正在准备下一章分析任务。";
+  if (run.status === "building_story_bible") return "章节分析已完成，等待故事圣经阶段。";
+  if (run.status === "planning_episodes" || run.status === "validating_plan" || run.status === "freezing_plan") {
+    return "正在生成并校验全书分集方案。";
+  }
+  if (run.status === "generating_scripts" || run.status === "checking_coverage") return "正在生成并检查全本稿件。";
+  if (run.status === "awaiting_review") return "全本稿件已生成，等待逐集审核。";
+  return "全本改写任务执行失败，可检查失败项后重试。";
+}
+
+export function pipelineChapterEventsReadOnly(run: SeriesPipelineRun | undefined) {
+  return Boolean(run && !["paused", "cancelled", "completed"].includes(run.status));
+}
+
+export function pipelineIsTerminal(run: SeriesPipelineRun) {
+  return run.status === "cancelled" || run.status === "completed";
+}

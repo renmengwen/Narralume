@@ -18,6 +18,10 @@ import { AudioStage } from "./production/audio/AudioStage";
 import { chapterAnalysisJobPayload, chapterEventsJobPayload, remainingChapterEventPageOffsets, type ChapterEventDraft } from "./production/chapter-event-editor";
 import { ChapterEventsStage } from "./production/ChapterEventsStage";
 import { EpisodeStage } from "./production/episode/EpisodeStage";
+import { PipelineProgress } from "./production/pipeline/PipelineProgress";
+import { PipelineSetup } from "./production/pipeline/PipelineSetup";
+import { pipelineChapterEventsReadOnly } from "./production/pipeline/pipeline-logic";
+import { useSeriesPipeline } from "./production/pipeline/use-series-pipeline";
 import { ProductionHeader } from "./production/ProductionHeader";
 import { ProductionStatus } from "./production/ProductionStatus";
 import { ScriptStage } from "./production/scripts/ScriptStage";
@@ -40,6 +44,7 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, on
   const [statusLayers, setStatusLayers] = useState<WorkspaceStatusLayers>({ operation: initialStatus });
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState(restored?.jobId);
+  const [pipelineRunId, setPipelineRunId] = useState(restored?.pipelineRunId);
   const currentStage = useRef(stage);
   currentStage.current = stage;
   const setWorkspaceStatus = useCallback((message: string) => {
@@ -54,10 +59,22 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, on
   const jobActive = !!jobId && (!currentJob || !isTerminalJobStatus(currentJob.status));
   const selectedChapterRecord = chapters.find((chapter) => chapter.id === selectedChapter);
 
-  const replaceLocation = useCallback((next: { stage?: ProductionStageId; chapterId?: string; episodeIndex?: number; assetId?: string; timelineHash?: string; jobId?: string }) => {
-    const location = mergeProductionWorkspaceLocation({ stage, chapterId: selectedChapter, episodeIndex, assetId: selectedAssetId, timelineHash, jobId }, next);
+  const replaceLocation = useCallback((next: { stage?: ProductionStageId; chapterId?: string; episodeIndex?: number; assetId?: string; timelineHash?: string; jobId?: string; pipelineRunId?: string }) => {
+    const location = mergeProductionWorkspaceLocation({ stage, chapterId: selectedChapter, episodeIndex, assetId: selectedAssetId, timelineHash, jobId, pipelineRunId }, next);
     window.history.replaceState(null, "", productionWorkspacePath({ bookId, seriesId: series.id, ...location }));
-  }, [bookId, episodeIndex, jobId, selectedAssetId, selectedChapter, series.id, stage, timelineHash]);
+  }, [bookId, episodeIndex, jobId, pipelineRunId, selectedAssetId, selectedChapter, series.id, stage, timelineHash]);
+
+  const changePipelineRun = useCallback((id?: string) => {
+    setPipelineRunId(id);
+    replaceLocation({ pipelineRunId: id });
+  }, [replaceLocation]);
+  const pipeline = useSeriesPipeline({
+    bookId,
+    seriesId: series.id,
+    initialRunId: pipelineRunId,
+    onRunIdChange: changePipelineRun,
+  });
+  const chapterEventsReadOnly = pipelineChapterEventsReadOnly(pipeline.run);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,9 +164,11 @@ export function ProductionWorkspace({ bookId, series, initialStatus, onLeave, on
   return <main className="min-h-screen bg-[var(--bg-canvas)] p-4 text-[var(--fg-primary)] max-md:p-0">
     <div className="mx-auto min-h-[calc(100vh-32px)] w-full max-w-[1640px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[var(--shadow)] max-md:min-h-screen max-md:border-0">
       <ProductionHeader series={series} onLeave={onLeave} onOpenSettings={onOpenSettings} />
-      <StageNavigation stage={stage} onChange={selectStage} />
       <ProductionStatus operation={statusLayers.operation} persistentError={statusLayers.persistentError} busy={busy} job={currentJob} onDismissError={dismissPersistentError} onCancel={() => void cancelJob()} />
-      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage bookId={bookId} seriesId={series.id} episodeIndex={episodeIndex} chapters={chapters} startChapterId={selectedChapter} currentJob={currentJob} busy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onStartChapterChange={(id) => id ? selectChapter(id) : (setSelectedChapter(undefined), setJobId(undefined), replaceLocation({ chapterId: undefined, jobId: undefined }))} onJobCreated={trackJob} onOpenScripts={() => selectStage("scripts")} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onJobCreated={trackJob} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setWorkspaceStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : stage === "audio" ? <AudioStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} onJobCreated={trackJob} /> : stage === "visual" ? <VisualStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} externalBusy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} /> : <StagePlaceholder stage={stage} />}
+      {pipeline.run ? <PipelineProgress run={pipeline.run} chapters={pipeline.chapters} busyAction={pipeline.busyAction} operation={pipeline.operation} error={pipeline.error} onControl={(action) => void pipeline.control(action)} onReset={pipeline.resetTerminal} />
+        : <PipelineSetup chapters={pipeline.chapters} chapterTotal={pipeline.chapterTotal} policy={pipeline.policy} loading={pipeline.loading} submitting={pipeline.busyAction === "create"} operation={pipeline.operation} error={pipeline.error} onCreate={(input) => void pipeline.create(input)} />}
+      <StageNavigation stage={stage} onChange={selectStage} />
+      {stage === "events" ? <ChapterEventsStage chapters={chapters} total={chapterTotal} selected={selectedChapterRecord} text={chapterText} events={events} locked={busy || jobActive} readOnly={chapterEventsReadOnly} onSelect={selectChapter} onSave={(drafts) => void saveChapterEvents(drafts)} onAnalyze={() => void analyzeChapterEvents()} /> : stage === "episode" ? <EpisodeStage bookId={bookId} seriesId={series.id} episodeIndex={episodeIndex} chapters={chapters} startChapterId={selectedChapter} currentJob={currentJob} busy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onStartChapterChange={(id) => id ? selectChapter(id) : (setSelectedChapter(undefined), setJobId(undefined), replaceLocation({ chapterId: undefined, jobId: undefined }))} onJobCreated={trackJob} onOpenScripts={() => selectStage("scripts")} /> : stage === "scripts" ? <ScriptStage seriesId={series.id} episodeIndex={episodeIndex} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onJobCreated={trackJob} /> : stage === "assets" ? <AssetStage seriesId={series.id} episodeIndex={episodeIndex} initialAssetId={selectedAssetId} busy={busy} currentJob={currentJob} setStatus={setWorkspaceStatus} onAssetChange={selectAsset} onJobCreated={trackJob} /> : stage === "audio" ? <AudioStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} busy={busy} jobActive={jobActive} currentJob={currentJob} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} onJobCreated={trackJob} /> : stage === "visual" ? <VisualStage seriesId={series.id} episodeIndex={episodeIndex} timelineHash={timelineHash} externalBusy={busy} setBusy={setBusy} setStatus={setWorkspaceStatus} onEpisodeChange={selectEpisode} onTimelineChange={selectTimeline} /> : <StagePlaceholder stage={stage} />}
     </div>
   </main>;
 }

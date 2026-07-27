@@ -1,0 +1,104 @@
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "../../components/ui/alert-dialog";
+import type { Chapter } from "../types";
+import { pipelineIsTerminal, pipelineStatusText, type SeriesPipelineRun } from "./pipeline-logic";
+
+type ControlAction = "pause" | "resume" | "retry" | "cancel";
+
+export function PipelineProgress({ run, chapters, busyAction, operation, error, onControl, onReset }: {
+  run: SeriesPipelineRun;
+  chapters: Chapter[];
+  busyAction?: string;
+  operation: string;
+  error?: string;
+  onControl: (action: ControlAction) => void;
+  onReset: () => void;
+}) {
+  const chapterName = (id: string) => {
+    const chapter = chapters.find((item) => item.id === id);
+    return chapter ? `第 ${chapter.chapter_index + 1} 章 · ${chapter.title}` : id;
+  };
+  const chapter = run.progress.chapterAnalysis;
+  const primaryAction = run.actions.canResume ? "resume" : run.actions.canRetry ? "retry" : undefined;
+  const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败章节";
+  const stateMessage = run.current
+    ? `当前对象：${chapterName(run.current.subjectId)}；任务 ${run.current.jobId}`
+    : pipelineStatusText(run);
+
+  return <section className="border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] p-[clamp(20px,4vw,44px)]" aria-labelledby="pipeline-progress-heading">
+    <div className="mx-auto grid max-w-6xl gap-5">
+      <div className="flex items-start justify-between gap-4 max-md:flex-col">
+        <div>
+          <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.14em] text-[var(--accent)]">全本改写 / 真实进度</p>
+          <h2 id="pipeline-progress-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">固定流水线正在处理全书</h2>
+          <p className="mt-2 font-mono text-xs text-[var(--fg-tertiary)]">RUN {run.id}</p>
+        </div>
+        <span className="min-h-11 border border-[var(--border-strong)] bg-[var(--bg-subtle)] px-4 py-3 text-sm font-semibold">状态：{pipelineStatusLabel(run.status)}</span>
+      </div>
+
+      <div className="min-h-11 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-secondary)]" role="status" aria-live="polite">
+        <span className="font-semibold text-[var(--fg-primary)]">当前进展：</span>{stateMessage}
+        <span className="mt-1 block text-xs text-[var(--fg-tertiary)]">{operation}</span>
+      </div>
+      {error ? <div className="border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]" role="alert">{error}</div> : null}
+
+      <div className="grid border border-[var(--border-subtle)]" aria-label="全本改写阶段进度">
+        <ProgressRow label="章节事件分析" count={`${chapter.completed}/${chapter.total}`} detail={`复用 ${chapter.reused} · 排队 ${chapter.queued} · 执行中 ${chapter.running} · 失败 ${chapter.failed}`} />
+        <ProgressRow label="故事圣经构建" count={`${run.progress.storyBible.completed}/${run.progress.storyBible.total}`} detail={stageDetail(run, "storyBible")} />
+        <ProgressRow label="全书分集规划" count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
+        <ProgressRow label="忠实稿与包装稿" count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
+      </div>
+
+      {run.failures.length ? <section className="border border-[var(--danger)] bg-[var(--danger-soft)]" aria-labelledby="pipeline-failures-heading">
+        <h3 id="pipeline-failures-heading" className="m-0 border-b border-[var(--danger)] px-4 py-3 text-sm font-semibold text-[var(--danger)]">失败章节 {run.failures.length} 项</h3>
+        <ul className="m-0 list-none p-0">
+          {run.failures.map((failure) => <li className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[color-mix(in_srgb,var(--danger)_35%,transparent)] px-4 py-3 last:border-b-0 max-md:grid-cols-1" key={`${failure.subjectId}:${failure.jobId}`}>
+            <span><strong className="block text-sm">{chapterName(failure.subjectId)}</strong><span className="mt-1 block text-xs text-[var(--danger)]">{failure.message}</span></span>
+            <span className="font-mono text-[11px] text-[var(--fg-tertiary)]">{failure.jobId}</span>
+          </li>)}
+        </ul>
+      </section> : null}
+
+      <div className="flex flex-wrap justify-end gap-2">
+        {pipelineIsTerminal(run) ? <button type="button" className="min-h-11 rounded border border-[var(--accent)] bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] disabled:opacity-50" disabled={!!busyAction} onClick={onReset}>返回全本改写设置</button> : null}
+        {run.actions.canPause ? <button type="button" className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl("pause")}>{busyAction === "pause" ? "正在暂停后续任务…" : "暂停后续任务"}</button> : null}
+        {primaryAction ? <button type="button" className="min-h-11 rounded border border-transparent bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-strong)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl(primaryAction)}>{busyAction === primaryAction ? operation : primaryLabel}</button> : null}
+        {run.actions.canCancel ? <AlertDialog>
+          <AlertDialogTrigger asChild><button type="button" className="min-h-11 rounded border border-[var(--danger)] px-4 text-sm font-semibold text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-50" disabled={!!busyAction}>取消全本改写</button></AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader><AlertDialogTitle>取消这次全本改写？</AlertDialogTitle><AlertDialogDescription>取消后不再派发新任务；已完成的章节事件和其他持久结果会保留。需要重新开始时可返回设置创建新任务。</AlertDialogDescription></AlertDialogHeader>
+            <AlertDialogFooter><AlertDialogCancel>继续执行</AlertDialogCancel><AlertDialogAction disabled={!!busyAction} onClick={() => onControl("cancel")}>确认取消</AlertDialogAction></AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog> : null}
+      </div>
+    </div>
+  </section>;
+}
+
+function ProgressRow({ label, count, detail }: { label: string; count: string; detail: string }) {
+  return <div className="grid min-h-14 grid-cols-[minmax(180px,.7fr)_auto_minmax(220px,1fr)] items-center gap-4 border-b border-[var(--border-subtle)] px-4 py-3 last:border-b-0 max-md:grid-cols-1 max-md:gap-1">
+    <strong className="text-sm">{label}</strong><span className="font-mono text-sm font-semibold">{count}</span><span className="text-xs text-[var(--fg-secondary)]">{detail}</span>
+  </div>;
+}
+
+function pipelineStatusLabel(status: SeriesPipelineRun["status"]) {
+  const labels: Record<SeriesPipelineRun["status"], string> = {
+    configured: "已配置", analyzing_chapters: "分析章节", building_story_bible: "构建故事圣经",
+    planning_episodes: "规划分集", validating_plan: "校验计划", freezing_plan: "冻结计划",
+    generating_scripts: "生成稿件", checking_coverage: "检查覆盖", awaiting_review: "等待审核",
+    paused: "已暂停", failed: "执行失败", cancelled: "已取消", completed: "已完成",
+  };
+  return labels[status];
+}
+
+function stageDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan" | "scripts") {
+  if (run.status === "paused") return "已暂停；已完成结果保留";
+  if (run.status === "cancelled") return "已取消；不再派发任务";
+  if (run.status === "failed" || run.failureMessage) return "存在失败项，请检查后重试";
+  const active = stage === "storyBible" ? run.status === "building_story_bible"
+    : stage === "episodePlan" ? ["planning_episodes", "validating_plan", "freezing_plan"].includes(run.status)
+    : ["generating_scripts", "checking_coverage"].includes(run.status);
+  return active ? "当前阶段；单次模型请求不显示虚构百分比" : "等待上游阶段完成";
+}

@@ -113,6 +113,7 @@ test("生产工作台恢复阶段、章节和任务且拒绝坏阶段", () => {
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: "job_1",
+    pipelineRunId: "pipeline_1",
   });
   assert.deepEqual(productionWorkspaceFromSearch(path), {
     bookId: "book/北派",
@@ -122,18 +123,20 @@ test("生产工作台恢复阶段、章节和任务且拒绝坏阶段", () => {
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: "job_1",
+    pipelineRunId: "pipeline_1",
   });
   assert.equal(resolveProductionStage("unknown"), "events");
 });
 
 test("生产工作台地址更新可显式清除旧任务且保留未修改字段", () => {
-  const current = { stage: "assets" as const, chapterId: "chapter_1", episodeIndex: 1, assetId: "asset_1", jobId: "job_1" };
+  const current = { stage: "assets" as const, chapterId: "chapter_1", episodeIndex: 1, assetId: "asset_1", jobId: "job_1", pipelineRunId: "pipeline_1" };
   assert.deepEqual(mergeProductionWorkspaceLocation(current, { jobId: undefined }), {
     stage: "assets",
     chapterId: "chapter_1",
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: undefined,
+    pipelineRunId: "pipeline_1",
   });
   assert.deepEqual(mergeProductionWorkspaceLocation(current, { stage: "audio" }), {
     stage: "audio",
@@ -141,7 +144,9 @@ test("生产工作台地址更新可显式清除旧任务且保留未修改字�
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: "job_1",
+    pipelineRunId: "pipeline_1",
   });
+  assert.equal(mergeProductionWorkspaceLocation(current, { pipelineRunId: undefined }).pipelineRunId, undefined);
 });
 
 test("阶段导航显示静态依赖而不是虚假等待状态", () => {

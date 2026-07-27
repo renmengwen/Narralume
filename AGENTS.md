@@ -5,8 +5,6 @@
 - 前端使用 React、TypeScript、Vite、Tailwind CSS，并优先使用官方 `shadcn/ui` 组件。
 - 涉及前端 UI 调整时，必须调用 OpenDesign 技能参与；优先加载 `opendesign/design-systems/narralume-product`，并让实现、文案和验收遵循现有产品设计系统。
 - 后端使用 Fastify 和 TypeScript。
-- 本项目是独立产品，不运行时依赖 MuseDock、DramaClaw、Toonflow 或其他参考项目。
-- 后续真实验收若需要生图、多模态或配音模型，可只读 `D:\code3\MuseDock` 中已经可用的本机配置与调用合同直接执行，不因普通模型测试配置暂停向用户提问；不得把 MuseDock 变成 Narralume 的运行时依赖，不得复制其业务限定，也不得把 API Key、账号或其他敏感配置写入代码、提交、Delivery Ledger 或输出。
 - 用户离线、休息或暂时不回复时，不把等待确认作为停止条件；在既定产品方向和安全边界内自主决策并持续执行到 Phase 1-7 根目标真实完成。只有缺少必须由用户提供的外部授权、需要显著改变产品方向、涉及不可逆或高风险外部操作、必须由用户作主观审美选择，或同一真实阻塞经充分排查仍无法解除时，才暂停并提问。
 - 从参考项目抽取代码前，先记录来源仓库、提交、源文件和修改说明。
 - “先参考成熟实现、再决定是否新写”是第一原则，适用于前端、后端、资产管理、生图提示词、任务恢复、候选审核和媒体生产。进入具体能力前，按 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 的冻结优先级搜索并记录来源，明确采用 `copy`、`port` 或 `reference-only`；只有确认参考项目没有适合 Narralume 现有合同的最小闭包时，才允许新写最小实现。通用前端组件优先官方 `shadcn/ui`，不得因为 MuseDock 更容易读取就提升其前端参考优先级。
@@ -16,8 +14,6 @@
 - Git 提交信息默认使用中文。
 - 代码 review 结果和修复说明默认使用中文。
 - 修改前确认分支与 `git status --short`，先读取现有文件；不得清理、覆盖或混入无关未提交改动。
-- 每个业务 Task 至少运行相关最小测试，并在提交前串行通过 `npm run typecheck`、`npm test`、`npm run build`；涉及真实文件、浏览器、`ffmpeg` 或恢复链路时，还必须完成对应真实工作流验收。
-- Review 按“新增风险”而非业务名称分级：只有新增数据库迁移、文件耐久写入、编码核心、恢复原语、TTS/FFmpeg 或备份恢复核心时，才在同一冻结 candidate 上执行独立 Spec Review 和 Code Quality Review；复用已充分验证核心、仅做编排/接线/真实门禁的 Task 执行一次独立综合 Review；普通 API/UI 可综合 Review，纯文案、样式和明显一行修复可由 Coordinator 自审。发现问题后解除冻结、修复、重验并生成新 candidate，旧 Review 自动失效。每个 Phase 结束保留独立阶段门禁 Review；若 Phase 最后一个 Task 的综合 Review 已覆盖全阶段真实工作流，可同时作为阶段门禁，不重复审查。
 - [`docs/loop/phase-1-7-delivery-ledger.md`](docs/loop/phase-1-7-delivery-ledger.md) 是 Phase 1-7 唯一动态状态源。只有 Coordinator 可以分配写租约、冻结 candidate、登记 Review/验证/提交证据、更新状态和恢复入口。
 - Worker 不修改 Delivery Ledger；业务提交与总账控制提交分离，且都使用中文提交信息。`current-status.md` 若存在，只能从 Ledger 派生，不得维护第二套状态。
 - 计划完成、单个 Task/Phase 完成、Review、提交、推送和上下文切换都只是内部 checkpoint；总目标完成或出现用户定义的真实阻塞前，Coordinator 自动进入下一个 ready Task。

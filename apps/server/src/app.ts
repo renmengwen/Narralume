@@ -98,6 +98,13 @@ import {
   TTS_CALIBRATION_JOB_TYPE,
 } from "./tts-calibration-job.js";
 import {
+  createTtsListeningReviewJobHandler,
+  enqueueTtsListeningReview,
+  getTtsListeningReviewWorkspace,
+  TtsListeningReviewError,
+  TTS_LISTENING_REVIEW_JOB_TYPE,
+} from "./tts-listening-review.js";
+import {
   getTtsTimeline,
   listTtsTimelines,
   readVerifiedTtsSegment,
@@ -162,6 +169,13 @@ interface CreateJobBody {
 
 interface ReplaceChapterEventsBody {
   events?: unknown;
+}
+
+interface TtsListeningReviewBody {
+  action?: unknown;
+  checkedSegmentIndexes?: unknown;
+  checkedProperNouns?: unknown;
+  notes?: unknown;
 }
 
 interface CreateSeriesBody { title?: unknown }
@@ -361,6 +375,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
+    [TTS_LISTENING_REVIEW_JOB_TYPE]: createTtsListeningReviewJobHandler(connection.database),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
     [FINAL_VIDEO_JOB_TYPE]: createFinalVideoJobHandler(connection.database, dataRoot),
@@ -887,6 +902,54 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
   );
 
+  app.get<{ Params: { episodeId: string; timelineHash: string } }>(
+    "/api/episodes/:episodeId/tts-timelines/:timelineHash/listening-review",
+    async (request, reply) => {
+      try {
+        const workspace = getTtsListeningReviewWorkspace(
+          connection.database, request.params.episodeId, request.params.timelineHash,
+        );
+        return { ok: true, workspace };
+      } catch (error) {
+        if (error instanceof TtsListeningReviewError || error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{
+    Params: { episodeId: string; timelineHash: string };
+    Body: TtsListeningReviewBody;
+  }>(
+    "/api/episodes/:episodeId/tts-timelines/:timelineHash/listening-review",
+    async (request, reply) => {
+      const body = request.body;
+      if (!body || typeof body !== "object" || Array.isArray(body) ||
+          Object.keys(body).some((key) => !["action", "checkedSegmentIndexes", "checkedProperNouns", "notes"].includes(key)) ||
+          (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string")) {
+        return reply.code(400).send({ ok: false, message: "听审请求只能包含操作、核对片段、核对专名和备注" });
+      }
+      try {
+        const job = enqueueTtsListeningReview(connection.database, {
+          episodeId: request.params.episodeId,
+          timelineHash: request.params.timelineHash,
+          action: body.action as "approve" | "reject",
+          checkedSegmentIndexes: body.checkedSegmentIndexes as number[],
+          checkedProperNouns: body.checkedProperNouns as string[],
+          notes: body.notes as string | null | undefined,
+        });
+        return reply.code(201).send({ ok: true, message: "听审任务已创建并持久化", job });
+      } catch (error) {
+        if (error instanceof TtsListeningReviewError || error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
   app.get<{ Params: { episodeId: string; timelineHash: string; segmentIndex: string } }>(
     "/api/episodes/:episodeId/tts-timelines/:timelineHash/audio/:segmentIndex",
     async (request, reply) => {
@@ -941,6 +1004,9 @@ export function buildApp(options: BuildAppOptions = {}) {
     const type = body.type.trim();
     if (!supportedJobTypes.has(type)) {
       return reply.code(400).send({ ok: false, message: `不支持的任务类型：${type || "（空）"}` });
+    }
+    if (type === TTS_LISTENING_REVIEW_JOB_TYPE) {
+      return reply.code(400).send({ ok: false, message: "人工听审任务只能通过当前语音时间轴的听审入口创建" });
     }
     let requestImageProvider: OpenAiImageConfig | null = null;
     let requestTextProvider: ChapterTextModelConfig | null = null;

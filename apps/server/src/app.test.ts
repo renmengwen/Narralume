@@ -12,6 +12,7 @@ import { getJob } from "./job-store.js";
 import { IMAGE_CANDIDATE_JOB_TYPE } from "./image-candidate-job.js";
 import { writeModelConfig } from "./model-config.js";
 import { changeScriptApproval } from "./script-approval-store.js";
+import { TTS_LISTENING_REVIEW_JOB_TYPE } from "./tts-listening-review.js";
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -37,6 +38,186 @@ test("健康检查返回服务状态", async () => {
     });
   } finally {
     await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("听审工作区只允许显式核对并由已注册处理器执行冻结任务", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-listening-"));
+  const timelineHash = "a".repeat(64);
+  const scriptContent = JSON.stringify({ paragraphs: [{ text: "张起灵进入墓道", sourceIndexes: [0] }] });
+  const bibleContent = JSON.stringify({ properNouns: [
+    { term: "张起灵", pronunciation: "zhāng qǐ líng", aliases: ["小哥"] },
+  ] });
+  const seed = openDatabase(dataRoot);
+  try {
+    seed.database.prepare(
+      "INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status) VALUES ('book','书','book.txt',?,'utf-8','ready')",
+    ).run("1".repeat(64));
+    seed.database.prepare(
+      "INSERT INTO chapters (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash) VALUES ('chapter','book',0,'章',0,1,1,?)",
+    ).run("2".repeat(64));
+    seed.database.prepare(
+      "INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series','book','系列',1,1)",
+    ).run();
+    seed.database.prepare(
+      `INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at)
+       VALUES ('episode','series',1,'一','弧',240,1,1), ('foreign_episode','series',2,'二','弧',240,1,1)`,
+    ).run();
+    const insertScript = seed.database.prepare(
+      `INSERT INTO script_versions (id,episode_id,kind,version,parent_version_id,content_json,content_hash,created_at)
+       VALUES (?,?,'packaged',1,NULL,?,?,1)`,
+    );
+    insertScript.run("script", "episode", scriptContent, createHash("sha256").update(scriptContent).digest("hex"));
+    insertScript.run("foreign_script", "foreign_episode", scriptContent, createHash("sha256").update(scriptContent).digest("hex"));
+    changeScriptApproval(seed.database, "episode", { action: "approve", expectedRevision: 0, scriptVersionId: "script" });
+    changeScriptApproval(seed.database, "foreign_episode", {
+      action: "approve", expectedRevision: 0, scriptVersionId: "foreign_script",
+    });
+    seed.database.prepare(
+      `INSERT INTO book_story_bibles
+       (id,book_id,scope,source_start_chapter_id,source_end_chapter_id,source_event_ids_json,source_events_hash,
+        parent_bible_ids_json,input_hash,contract_version,revision,provider_id,model,content_json,content_hash,created_at)
+       VALUES ('bible','book','final','chapter','chapter','["event"]',?,'[]',?,'book-story-bible-v1',1,
+        'provider','model',?,?,1)`,
+    ).run(
+      "3".repeat(64), "4".repeat(64), bibleContent, createHash("sha256").update(bibleContent).digest("hex"),
+    );
+    seed.database.prepare(
+      `INSERT INTO series_pipeline_runs
+       (id,series_project_id,status,episode_count,target_duration_seconds,source_start_chapter_id,source_end_chapter_id,
+        config_hash,story_bible_id,created_at,updated_at)
+       VALUES ('run','series','completed',2,240,'chapter','chapter',?,'bible',1,1)`,
+    ).run("5".repeat(64));
+    const insertAudio = seed.database.prepare(
+      `INSERT INTO audio_segments
+       (timeline_hash,segment_index,episode_id,script_version_id,text,provider_id,voice,rate,input_hash,
+        relative_path,file_hash,bytes,duration_ms,created_at)
+       VALUES (?,?, 'episode','script',?,'edge','voice',1,?,?,?,10,1000,1)`,
+    );
+    insertAudio.run(timelineHash, 0, "开头", "6".repeat(64), "0.wav", "7".repeat(64));
+    insertAudio.run(timelineHash, 1, "张起灵进入墓道", "8".repeat(64), "1.wav", "9".repeat(64));
+  } finally {
+    seed.close();
+  }
+
+  const first = buildApp({ dataRoot, logger: false, jobPollMs: 10_000 });
+  let approveJobId: string;
+  try {
+    const workspaceResponse = await first.inject({
+      method: "GET", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+    });
+    assert.equal(workspaceResponse.statusCode, 200, workspaceResponse.body);
+    const workspace = workspaceResponse.json().workspace as {
+      requiredSegmentIndexes: number[]; requiredProperNouns: Array<{ term: string }>;
+    };
+    assert.deepEqual(workspace.requiredSegmentIndexes, [0, 1]);
+    assert.deepEqual(workspace.requiredProperNouns.map((item) => item.term), ["张起灵"]);
+
+    const foreign = await first.inject({
+      method: "GET", url: `/api/episodes/foreign_episode/tts-timelines/${timelineHash}/listening-review`,
+    });
+    assert.equal(foreign.statusCode, 409);
+    const incomplete = await first.inject({
+      method: "POST", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+      payload: { action: "approve", checkedSegmentIndexes: [0], checkedProperNouns: [] },
+    });
+    assert.equal(incomplete.statusCode, 409);
+    const unknown = await first.inject({
+      method: "POST", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+      payload: {
+        action: "reject", checkedSegmentIndexes: [], checkedProperNouns: [], providerId: "forged",
+      },
+    });
+    assert.equal(unknown.statusCode, 400);
+    const invalidNotes = await first.inject({
+      method: "POST", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+      payload: { action: "reject", checkedSegmentIndexes: [], checkedProperNouns: [], notes: 1 },
+    });
+    assert.equal(invalidNotes.statusCode, 400);
+    const rawJob = await first.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: TTS_LISTENING_REVIEW_JOB_TYPE, payload: { identity: { providerId: "forged" } } },
+    });
+    assert.equal(rawJob.statusCode, 400);
+
+    const approved = await first.inject({
+      method: "POST", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+      payload: {
+        action: "approve",
+        checkedSegmentIndexes: workspace.requiredSegmentIndexes,
+        checkedProperNouns: workspace.requiredProperNouns.map((item) => item.term),
+        notes: "人工听审通过",
+      },
+    });
+    assert.equal(approved.statusCode, 201, approved.body);
+    approveJobId = approved.json().job.id as string;
+  } finally {
+    await first.close();
+  }
+
+  const second = buildApp({ dataRoot, logger: false, jobPollMs: 5 });
+  try {
+    await second.ready();
+    const probe = openDatabase(dataRoot);
+    try {
+      await waitUntil(() => getJob(probe.database, approveJobId)?.status === "succeeded");
+    } finally {
+      probe.close();
+    }
+    const reviewed = await second.inject({
+      method: "GET", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+    });
+    assert.equal(reviewed.json().workspace.latestReview.action, "approve");
+
+    const rejected = await second.inject({
+      method: "POST", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+      payload: { action: "reject", checkedSegmentIndexes: [], checkedProperNouns: [], notes: "有爆音" },
+    });
+    assert.equal(rejected.statusCode, 201, rejected.body);
+    const rejectJobId = rejected.json().job.id as string;
+    const rejectProbe = openDatabase(dataRoot);
+    try {
+      await waitUntil(() => getJob(rejectProbe.database, rejectJobId)?.status === "succeeded");
+    } finally {
+      rejectProbe.close();
+    }
+  } finally {
+    await second.close();
+  }
+
+  const parked = buildApp({ dataRoot, logger: false, jobPollMs: 10_000 });
+  let staleJobId: string;
+  try {
+    await parked.ready();
+    const stale = await parked.inject({
+      method: "POST", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+      payload: { action: "reject", checkedSegmentIndexes: [], checkedProperNouns: [] },
+    });
+    assert.equal(stale.statusCode, 201, stale.body);
+    staleJobId = stale.json().job.id as string;
+  } finally {
+    await parked.close();
+  }
+  const changed = openDatabase(dataRoot);
+  changed.database.prepare("UPDATE audio_segments SET voice='new-voice' WHERE timeline_hash=?").run(timelineHash);
+  changed.close();
+
+  const resumed = buildApp({ dataRoot, logger: false, jobPollMs: 5 });
+  try {
+    await resumed.ready();
+    const probe = openDatabase(dataRoot);
+    try {
+      await waitUntil(() => getJob(probe.database, staleJobId)?.status === "failed");
+    } finally {
+      probe.close();
+    }
+    const current = await resumed.inject({
+      method: "GET", url: `/api/episodes/episode/tts-timelines/${timelineHash}/listening-review`,
+    });
+    assert.equal(current.json().workspace.latestReview, null);
+  } finally {
+    await resumed.close();
     await rm(dataRoot, { recursive: true, force: true });
   }
 });

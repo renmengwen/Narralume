@@ -1,0 +1,110 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import test from "node:test";
+
+import { openDatabase } from "./database.js";
+import { deriveExportReadiness, ExportReadinessError } from "./export-readiness.js";
+import { exportFinalVideo } from "./final-video.js";
+import { loadRenderPlanSnapshot } from "./render-chunk-job.js";
+
+const TIMELINE = "a".repeat(64);
+const hash = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
+
+async function fixture() {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-export-readiness-"));
+  const connection = openDatabase(dataRoot);
+  const db = connection.database;
+  db.prepare("INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status) VALUES ('book','书','books/source.txt',?,'UTF-8','ready')").run("1".repeat(64));
+  db.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series','book','系列',1,1)").run();
+  db.prepare("INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at) VALUES ('episode','series',1,'集','弧',180,1,1)").run();
+  return { dataRoot, connection };
+}
+
+function seedReady(db: ReturnType<typeof openDatabase>["database"]) {
+  db.prepare("INSERT INTO script_versions (id,episode_id,kind,version,content_json,content_hash,created_at) VALUES ('script','episode','packaged',1,'{}',?,1)").run("2".repeat(64));
+  db.prepare("INSERT INTO script_approval_events (id,episode_id,revision,action,script_version_id,created_at) VALUES ('approval','episode',1,'approve','script',1)").run();
+  db.prepare("INSERT INTO assets (id,series_project_id,asset_type,asset_role,canonical_name,normalized_name,created_at) VALUES ('asset','series','scene','master','场景','场景',1)").run();
+  db.prepare(`INSERT INTO asset_candidates (id,asset_id,source_kind,source_identity_hash,source_json,file_hash,mime,width,height,bytes,relative_path,created_at)
+    VALUES ('candidate','asset','upload',?,'{}',?,'image/png',1080,1920,1,'assets/candidates/x.png',1)`).run("3".repeat(64), "4".repeat(64));
+  db.prepare("INSERT INTO asset_candidate_review_events (candidate_id,revision,action,created_at) VALUES ('candidate',1,'approve',1)").run();
+  db.prepare(`INSERT INTO audio_segments (timeline_hash,segment_index,episode_id,script_version_id,text,provider_id,voice,rate,input_hash,relative_path,file_hash,bytes,duration_ms,created_at)
+    VALUES (?,0,'episode','script','旁白','test','voice',0,?,'episodes/episode/audio/segments/audio.wav',?,1,60000,1)`).run(TIMELINE, "5".repeat(64), "6".repeat(64));
+  db.prepare("INSERT INTO subtitle_cues (timeline_hash,cue_index,segment_index,episode_id,script_version_id,start_ms,end_ms,text) VALUES (?,0,0,'episode','script',0,60000,'旁白')").run(TIMELINE);
+  db.prepare(`INSERT INTO visual_segments (id,episode_id,segment_index,script_version_id,approval_revision,timeline_hash,cue_start_index,cue_end_index,start_ms,end_ms,motion_kind,motion_amount_ppm,fade_ms,revision,created_at,updated_at)
+    VALUES ('visual','episode',0,'script',1,?,0,0,0,60000,'none',0,0,1,1,1)`).run(TIMELINE);
+  db.prepare("INSERT INTO visual_segment_assets (visual_segment_id,asset_index,asset_id,selected_candidate_id,candidate_review_revision) VALUES ('visual',0,'asset','candidate',1)").run();
+}
+
+test("只读复核从当前生产身份派生门禁、分片、任务和已验证最终视频", async () => {
+  const current = await fixture();
+  try {
+    const missing = await deriveExportReadiness({ database: current.connection.database, dataRoot: current.dataRoot,
+      episodeId: "episode", timelineHash: TIMELINE });
+    assert.equal(missing.productionReady, false);
+    assert.match(missing.blockers[0]!.message, /未人工批准/u);
+
+    const db = current.connection.database;
+    seedReady(db);
+    const snapshot = loadRenderPlanSnapshot(db, "episode", TIMELINE);
+    db.prepare(`INSERT INTO jobs (id,type,payload_json,status,priority,progress,attempts,max_attempts,run_after,cancel_requested,result_json,created_at,updated_at,finished_at)
+      VALUES ('old-render','render_chunks',?,'succeeded',0,1,1,1,0,0,?,1,1,1)`).run(
+      JSON.stringify({ episodeId: "episode", timelineHash: TIMELINE }),
+      JSON.stringify({ episodeId: "episode", timelineHash: TIMELINE, scriptVersionId: "old-script", approvalRevision: 1, chunks: [] }),
+    );
+    db.prepare(`INSERT INTO jobs (id,type,payload_json,status,priority,progress,attempts,max_attempts,run_after,cancel_requested,created_at,updated_at)
+      VALUES ('current-render','render_chunks',?,'queued',0,0,0,1,0,0,2,2)`).run(JSON.stringify({ episodeId: "episode", timelineHash: TIMELINE }));
+    db.prepare(`INSERT INTO jobs (id,type,payload_json,status,priority,progress,attempts,max_attempts,run_after,cancel_requested,created_at,updated_at)
+      VALUES ('stale-active','render_chunks',?,'queued',0,0,0,1,0,0,0,4)`).run(JSON.stringify({ episodeId: "episode", timelineHash: TIMELINE }));
+    const before = await deriveExportReadiness({ database: db, dataRoot: current.dataRoot, episodeId: "episode", timelineHash: TIMELINE });
+    assert.equal(before.productionReady, true);
+    assert.equal(before.identity?.contactSheetReady, true);
+    assert.deepEqual(before.renderChunks, { ready: false, completed: 0, total: 1 });
+    assert.equal(before.jobs.renderChunks?.id, "current-render", "旧终态 Job 不能冒充当前身份");
+
+    const expected = snapshot.chunks[0]!;
+    const chunk = Buffer.from("registered-chunk");
+    const relativePath = `episodes/episode/renders/chunks/${expected.renderHash.slice(0, 2)}/${expected.renderHash}.mp4`;
+    await mkdir(dirname(join(current.dataRoot, relativePath)), { recursive: true });
+    await writeFile(join(current.dataRoot, relativePath), chunk);
+    db.prepare(`INSERT INTO render_chunks (render_hash,episode_id,timeline_hash,chunk_index,script_version_id,approval_revision,start_ms,end_ms,relative_path,file_hash,bytes,duration_ms,created_at)
+      VALUES (?,'episode',?,0,'script',1,0,60000,?,?,?,60000,1)`).run(expected.renderHash, TIMELINE, relativePath, hash(chunk), chunk.length);
+    const exported = await exportFinalVideo(db, current.dataRoot, { episodeId: "episode", timelineHash: TIMELINE }, {
+      probe: async (path) => ({ bytes: (await stat(path)).size, durationMs: 60_000 }),
+      run: async (_command, _args, options) => { await writeFile(join(options!.cwd!, "final.tmp.mp4"), "final-video"); return ""; },
+    });
+    const result = { episodeId: "episode", timelineHash: TIMELINE, scriptVersionId: "script", approvalRevision: 1,
+      finalHash: exported.manifest.exportHash, video: exported.manifest.finalVideo };
+    db.prepare(`INSERT INTO jobs (id,type,payload_json,status,priority,progress,attempts,max_attempts,run_after,cancel_requested,result_json,created_at,updated_at,finished_at)
+      VALUES ('final','final_video',?,'succeeded',0,1,1,1,0,0,?,3,3,3)`).run(
+      JSON.stringify({ episodeId: "episode", timelineHash: TIMELINE }), JSON.stringify(result),
+    );
+    const ready = await deriveExportReadiness({ database: db, dataRoot: current.dataRoot, episodeId: "episode", timelineHash: TIMELINE });
+    assert.deepEqual(ready.renderChunks, { ready: true, completed: 1, total: 1 });
+    assert.equal(ready.jobs.finalVideo?.id, "final");
+    assert.equal(ready.finalExport?.verified, true);
+    assert.equal(ready.finalExport?.exportHash, exported.manifest.exportHash);
+
+    await writeFile(exported.finalPath, "tampered");
+    assert.equal((await deriveExportReadiness({ database: db, dataRoot: current.dataRoot,
+      episodeId: "episode", timelineHash: TIMELINE })).finalExport?.verified, false);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("拒绝非法标识并区分不存在分集", async () => {
+  const current = await fixture();
+  try {
+    await assert.rejects(deriveExportReadiness({ database: current.connection.database, dataRoot: current.dataRoot,
+      episodeId: "../episode", timelineHash: TIMELINE }), (error) => error instanceof ExportReadinessError && error.statusCode === 400);
+    await assert.rejects(deriveExportReadiness({ database: current.connection.database, dataRoot: current.dataRoot,
+      episodeId: "missing", timelineHash: TIMELINE }), (error) => error instanceof ExportReadinessError && error.statusCode === 404);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});

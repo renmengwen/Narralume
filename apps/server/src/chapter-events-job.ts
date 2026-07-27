@@ -68,7 +68,7 @@ const CHAPTER_ANALYSIS_PROMPT_VERSION = "chapter-events-prompt-v2";
 const CHAPTER_ANALYSIS_PARSER_VERSION = "chapter-events-parser-v1";
 export const CHAPTER_ANALYSIS_TIMEOUT_MS = 180_000;
 
-interface AnalyzeReuseIdentity {
+export interface ChapterEventsAnalysisIdentity {
   bookId: string;
   chapterId: string;
   contentHash: string;
@@ -77,7 +77,7 @@ interface AnalyzeReuseIdentity {
   parserContractVersion: string;
 }
 
-interface AnalyzeJobPayload extends AnalyzeReuseIdentity {
+interface AnalyzeJobPayload extends ChapterEventsAnalysisIdentity {
   providerId: string;
   model: string;
   requestHash: string;
@@ -100,11 +100,11 @@ function analyzePayload(value: unknown): AnalyzeJobPayload {
   return result;
 }
 
-function analysisRequestHash(input: AnalyzeReuseIdentity) {
+function analysisRequestHash(input: ChapterEventsAnalysisIdentity) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
-function reuseIdentity(input: AnalyzeJobPayload): AnalyzeReuseIdentity {
+function reuseIdentity(input: AnalyzeJobPayload): ChapterEventsAnalysisIdentity {
   return {
     bookId: input.bookId,
     chapterId: input.chapterId,
@@ -115,7 +115,7 @@ function reuseIdentity(input: AnalyzeJobPayload): AnalyzeReuseIdentity {
   };
 }
 
-function hasSameReuseIdentity(job: JobRecord, expected: AnalyzeReuseIdentity) {
+function hasSameReuseIdentity(job: JobRecord, expected: ChapterEventsAnalysisIdentity) {
   if (job.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE) return false;
   try {
     const existing = analyzePayload(job.payload);
@@ -124,6 +124,23 @@ function hasSameReuseIdentity(job: JobRecord, expected: AnalyzeReuseIdentity) {
   } catch {
     return false;
   }
+}
+
+export function chapterEventsAnalysisJobIdentity(
+  bookId: string,
+  chapterId: string,
+  contentHash: string,
+) {
+  const identity: ChapterEventsAnalysisIdentity = {
+    bookId,
+    chapterId,
+    contentHash,
+    analysisContractVersion: CHAPTER_ANALYSIS_CONTRACT_VERSION,
+    promptContractVersion: CHAPTER_ANALYSIS_PROMPT_VERSION,
+    parserContractVersion: CHAPTER_ANALYSIS_PARSER_VERSION,
+  };
+  const requestHash = analysisRequestHash(identity);
+  return { identity, requestHash, jobId: `job_chapter_analyze_${requestHash}` };
 }
 
 export async function enqueueChapterEventsAnalysisJob(
@@ -143,20 +160,13 @@ export async function enqueueChapterEventsAnalysisJob(
   const { contentHash } = await buildChapterEvidenceAtoms(
     database, dataRoot, request.bookId.trim(), request.chapterId.trim(),
   );
-  const identity = {
-    bookId: request.bookId.trim(),
-    chapterId: request.chapterId.trim(),
-    contentHash,
-    analysisContractVersion: CHAPTER_ANALYSIS_CONTRACT_VERSION,
-    promptContractVersion: CHAPTER_ANALYSIS_PROMPT_VERSION,
-    parserContractVersion: CHAPTER_ANALYSIS_PARSER_VERSION,
-  };
+  const { identity, requestHash, jobId: id } = chapterEventsAnalysisJobIdentity(
+    request.bookId.trim(), request.chapterId.trim(), contentHash,
+  );
   const providerId = config.providerId.trim();
   const model = config.model.trim();
   if (!providerId || !model) throw new Error("章节分析模型配置无效");
-  const requestHash = analysisRequestHash(identity);
   const payload: AnalyzeJobPayload = { ...identity, providerId, model, requestHash };
-  const id = `job_chapter_analyze_${requestHash}`;
   if (!canCreate()) throw new Error("章节分析派发已停止");
   const existing = getJob(database, id);
   if (existing) {

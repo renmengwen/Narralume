@@ -8,7 +8,11 @@ import test from "node:test";
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { BOOK_STORY_BIBLE_JOB_TYPE, createBookStoryBibleJobHandler } from "./book-story-bible-job-handler.js";
 import { createBookStoryBible } from "./book-story-bible-store.js";
-import { createChapterEventsAnalysisJobHandler, CHAPTER_EVENTS_ANALYZE_JOB_TYPE } from "./chapter-events-job.js";
+import {
+  chapterEventsAnalysisJobIdentity,
+  createChapterEventsAnalysisJobHandler,
+  CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+} from "./chapter-events-job.js";
 import { openDatabase } from "./database.js";
 import {
   createEpisodeScriptGenerationJobHandler,
@@ -158,6 +162,7 @@ test("章节分析复用成功章、暂停不派发、失败局部重试并在�
     assert.equal(await worker.runOne(), false);
     assert.equal(paused.progress.chapterAnalysis.queued, 1);
     service.resume(created.id);
+    await service.reconcile();
     assert.notEqual(database.prepare("SELECT run_after FROM jobs WHERE id=?").get(queuedJobId)?.run_after, Number.MAX_SAFE_INTEGER);
     await worker.runOne(); await worker.runOne(); await worker.runOne();
     await service.reconcile();
@@ -187,6 +192,131 @@ test("章节分析复用成功章、暂停不派发、失败局部重试并在�
     assert.equal(restartedDatabase.prepare("SELECT status FROM jobs WHERE id=?").get(queuedJobId)?.status, "succeeded");
     await restarted.reconcile();
     assert.equal(getMappedChapterJobs(restartedDatabase, created.id).length, 1);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("章节协调按当前 v2 identity 原子替换旧 failed、succeeded、running 映射", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-stale-chapter-"));
+  const connection = await seed(dataRoot, "a");
+  try {
+    await seed(dataRoot, "b", connection);
+    await seed(dataRoot, "c", connection);
+    const database = connection.database;
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const cases = [
+      { suffix: "a", status: "failed" },
+      { suffix: "b", status: "succeeded" },
+      { suffix: "c", status: "running" },
+    ] as const;
+    const oldJobs = new Map<string, string>();
+    const statusByRun = new Map<string, typeof cases[number]["status"]>();
+    for (const item of cases) {
+      const run = await service.create({ ...input(item.suffix), sourceEndChapterId: `chapter_${item.suffix}_1` });
+      setSeriesPipelineStatus(database, run.id, "configured", "analyzing_chapters");
+      const chapter = database.prepare(
+        "SELECT content_hash FROM chapters WHERE id = ?",
+      ).get(`chapter_${item.suffix}_1`) as { content_hash: string };
+      const oldIdentity = {
+        bookId: `book_${item.suffix}`, chapterId: `chapter_${item.suffix}_1`, contentHash: chapter.content_hash,
+        analysisContractVersion: "chapter-events-analysis-v1",
+        promptContractVersion: "chapter-events-prompt-v1",
+        parserContractVersion: "chapter-events-parser-v1",
+      };
+      const oldHash = createHash("sha256").update(JSON.stringify(oldIdentity)).digest("hex");
+      const oldJobId = `job_chapter_analyze_${oldHash}`;
+      createJob(database, {
+        id: oldJobId, type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+        payload: { ...oldIdentity, providerId: "old-provider", model: "old-model", requestHash: oldHash },
+      });
+      mapSeriesPipelineJob(database, run.id, `chapter_${item.suffix}_1`, oldJobId);
+      if (item.status === "running") {
+        database.prepare(
+          "UPDATE jobs SET status='running',lease_owner='old-worker',lease_expires_at=? WHERE id=?",
+        ).run(Date.now() + 60_000, oldJobId);
+      } else {
+        database.prepare(
+          `UPDATE jobs SET status=?,error_code=?,error_message=?,finished_at=? WHERE id=?`,
+        ).run(item.status, item.status === "failed" ? "old_failed" : null,
+          item.status === "failed" ? "旧合同失败" : null, Date.now(), oldJobId);
+      }
+      if (item.status === "succeeded") {
+        database.prepare(`INSERT INTO chapter_events
+          (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+          VALUES (?,?,0,0,'revelation','{"fact":"旧合同事件"}',1)`
+        ).run(`event_old_${item.suffix}`, `chapter_${item.suffix}_1`);
+      }
+      oldJobs.set(run.id, oldJobId);
+      statusByRun.set(run.id, item.status);
+    }
+
+    const failedRun = getSeriesPipelineRun(database, [...oldJobs.keys()][0]!)!;
+    retrySeriesPipelineRun(database, failedRun.id);
+    assert.equal(getJob(database, oldJobs.get(failedRun.id)!)!.status, "failed");
+
+    await service.reconcile();
+    for (const [runId, oldJobId] of oldJobs) {
+      const mapping = getMappedChapterJobs(database, runId);
+      assert.equal(mapping.length, 1);
+      if (statusByRun.get(runId) === "running") {
+        assert.equal(mapping[0]!.job_id, oldJobId);
+        assert.equal(getJob(database, oldJobId)!.cancelRequested, true);
+        const chapter = database.prepare(
+          "SELECT content_hash FROM chapters WHERE id='chapter_c_1'",
+        ).get() as { content_hash: string };
+        const current = chapterEventsAnalysisJobIdentity("book_c", "chapter_c_1", chapter.content_hash);
+        assert.equal(getJob(database, current.jobId)!.runAfter, Number.MAX_SAFE_INTEGER);
+        database.prepare(
+          `UPDATE jobs SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?`,
+        ).run(Date.now(), oldJobId);
+        continue;
+      }
+      assert.notEqual(mapping[0]!.job_id, oldJobId);
+      assert.equal(getJob(database, mapping[0]!.job_id)!.status, "queued");
+      assert.notEqual(getJob(database, mapping[0]!.job_id)!.runAfter, Number.MAX_SAFE_INTEGER);
+    }
+    await service.reconcile();
+    const runningRunId = [...statusByRun].find(([, status]) => status === "running")![0];
+    assert.notEqual(getMappedChapterJobs(database, runningRunId)[0]!.job_id, oldJobs.get(runningRunId));
+    assert.equal(getJob(database, oldJobs.get([...oldJobs.keys()][0]!)!)!.status, "failed");
+    assert.equal(getJob(database, oldJobs.get([...oldJobs.keys()][1]!)!)!.status, "succeeded");
+    assert.equal(getJob(database, oldJobs.get([...oldJobs.keys()][2]!)!)!.status, "cancelled");
+    assert.equal(service.get([...oldJobs.keys()][1]!)!.progress.chapterAnalysis.completed, 0);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("章节 parked Job 在 pause 或 cancel 先完成时不替换映射也不可 claim", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-chapter-map-race-"));
+  const connection = await seed(dataRoot);
+  try {
+    const database = connection.database;
+    for (const action of ["pause", "cancel"] as const) {
+      const suffix = action === "pause" ? "pause" : "cancel";
+      database.prepare(
+        "INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES (?,?,?,?,?)",
+      ).run(`series_${suffix}`, "book_a", suffix, Date.now(), Date.now());
+      const run = createSeriesPipelineRun(database, {
+        ...input(), seriesProjectId: `series_${suffix}`, sourceEndChapterId: "chapter_a_1",
+      });
+      setSeriesPipelineStatus(database, run.id, "configured", "analyzing_chapters");
+      const chapter = database.prepare(
+        "SELECT content_hash FROM chapters WHERE id='chapter_a_1'",
+      ).get() as { content_hash: string };
+      const current = chapterEventsAnalysisJobIdentity("book_a", "chapter_a_1", chapter.content_hash);
+      if (!getJob(database, current.jobId)) {
+        createJob(database, {
+          id: current.jobId, type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+          payload: { ...current.identity, providerId: provider.providerId, model: provider.model, requestHash: current.requestHash },
+          runAfter: Number.MAX_SAFE_INTEGER,
+        });
+      } else {
+        database.prepare("UPDATE jobs SET run_after=? WHERE id=? AND status='queued'")
+          .run(Number.MAX_SAFE_INTEGER, current.jobId);
+      }
+      action === "pause" ? pauseSeriesPipelineRun(database, run.id) : cancelSeriesPipelineRun(database, run.id);
+      assert.equal(mapSeriesPipelineJob(database, run.id, "chapter_a_1", current.jobId), false);
+      assert.deepEqual(getMappedChapterJobs(database, run.id), []);
+      assert.equal(getJob(database, current.jobId)!.runAfter, Number.MAX_SAFE_INTEGER);
+    }
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });
 

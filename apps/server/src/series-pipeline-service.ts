@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
-import { enqueueChapterEventsAnalysisJob } from "./chapter-events-job.js";
+import { chapterEventsAnalysisJobIdentity, enqueueChapterEventsAnalysisJob } from "./chapter-events-job.js";
 import {
   enqueueEpisodeScriptGenerationJob,
   type EpisodeScriptGenerationRequest,
@@ -121,10 +121,33 @@ export class SeriesPipelineService {
         if (run.status !== "analyzing_chapters") continue;
 
         const chapters = listPipelineChapters(this.options.database, run);
-        failEmptyChapterAnalysisJobs(this.options.database, run.id);
-        const mappings = getMappedChapterJobs(this.options.database, run.id);
+        const bookId = this.bookId(run.seriesProjectId);
+        const currentJobId = new Map(chapters.map((chapter) => [
+          chapter.id,
+          chapterEventsAnalysisJobIdentity(bookId, chapter.id, chapter.contentHash).jobId,
+        ]));
+        const allMappings = getMappedChapterJobs(this.options.database, run.id);
+        const mappings = allMappings.filter(
+          (mapping) => currentJobId.get(mapping.subject_id) === mapping.job_id,
+        );
+        const staleChapterIds = new Set(allMappings.filter(
+          (mapping) => currentJobId.get(mapping.subject_id) !== mapping.job_id,
+        ).map((mapping) => mapping.subject_id));
+        failEmptyChapterAnalysisJobs(this.options.database, run.id, mappings.map((mapping) => mapping.job_id));
         const mappedJobs = mappings.map((mapping) => ({ mapping, job: getJob(this.options.database, mapping.job_id) }));
-        const completedChapterIds = new Set(chapters.filter((chapter) => chapter.hasEvents).map((chapter) => chapter.id));
+        const parked = mappedJobs.find((item) =>
+          item.job?.status === "queued" && item.job.runAfter === Number.MAX_SAFE_INTEGER,
+        );
+        if (parked) {
+          mapSeriesPipelineJob(
+            this.options.database, run.id, parked.mapping.subject_id, parked.mapping.job_id,
+          );
+        }
+        const completedChapterIds = new Set(chapters.filter((chapter) => {
+          if (!chapter.hasEvents || staleChapterIds.has(chapter.id)) return false;
+          const mapped = mappedJobs.find((item) => item.mapping.subject_id === chapter.id);
+          return !mapped || mapped.job?.status === "succeeded";
+        }).map((chapter) => chapter.id));
         const relevantJobs = mappedJobs.filter((item) => !completedChapterIds.has(item.mapping.subject_id));
         const failed = relevantJobs.find((item) => item.job?.status === "failed" || item.job?.status === "cancelled");
         if (failed) {
@@ -138,10 +161,10 @@ export class SeriesPipelineService {
         if (relevantJobs.some((item) => item.job?.status === "queued" || item.job?.status === "running")) continue;
 
         const mappedSubjects = new Set(mappings.map((mapping) => mapping.subject_id));
-        const next = chapters.find((chapter) => !chapter.hasEvents && !mappedSubjects.has(chapter.id));
+        const next = chapters.find((chapter) => !completedChapterIds.has(chapter.id) && !mappedSubjects.has(chapter.id));
         if (!next) {
           const incomplete = relevantJobs.some((item) => item.job?.status !== "succeeded");
-          if (!incomplete && chapters.every((chapter) => chapter.hasEvents)) {
+          if (!incomplete && chapters.every((chapter) => completedChapterIds.has(chapter.id))) {
             finishChapterAnalysis(this.options.database, run);
           }
           continue;
@@ -156,13 +179,13 @@ export class SeriesPipelineService {
           this.options.database,
           this.options.dataRoot,
           provider,
-          { payload: { bookId: this.bookId(run.seriesProjectId), chapterId: next.id }, maxAttempts: 3 },
+          {
+            payload: { bookId, chapterId: next.id }, maxAttempts: 3,
+            runAfter: Number.MAX_SAFE_INTEGER,
+          },
           () => getSeriesPipelineRun(this.options.database, run.id)?.status === "analyzing_chapters",
         );
-        const current = getSeriesPipelineRun(this.options.database, run.id);
-        if (current?.status === "analyzing_chapters") {
-          mapSeriesPipelineJob(this.options.database, run.id, next.id, result.job.id);
-        }
+        mapSeriesPipelineJob(this.options.database, run.id, next.id, result.job.id);
       } catch (error) {
         if (getSeriesPipelineRun(this.options.database, candidate.id)?.status === "paused") continue;
         setSeriesPipelineFailure(

@@ -23,6 +23,7 @@ import { createBookStoryBible } from "./book-story-bible-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 
 export const BOOK_STORY_BIBLE_JOB_TYPE = "book_story_bible_build";
+export const BOOK_STORY_BIBLE_TIMEOUT_MS = 180_000;
 
 export interface BookStoryBibleJobPayload {
   contractVersion: typeof BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION;
@@ -211,7 +212,7 @@ async function withCancellation<T>(context: Parameters<JobHandler>[0], call: (si
   const controller = new AbortController();
   const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
   try {
-    return await call(AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]));
+    return await call(AbortSignal.any([controller.signal, AbortSignal.timeout(BOOK_STORY_BIBLE_TIMEOUT_MS)]));
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("故事圣经模型请求超时");

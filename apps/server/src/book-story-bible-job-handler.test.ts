@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BOOK_STORY_BIBLE_JOB_TYPE,
+  BOOK_STORY_BIBLE_TIMEOUT_MS,
   createBookStoryBibleJobHandler,
   storyBibleJobRequestHash,
   type BookStoryBibleJobPayload,
@@ -22,6 +23,10 @@ const config = {
   baseUrl: "https://model.invalid/v1", apiKey: "test", model: "model-a", providerId: "provider-a",
   protocol: "openai-response" as const,
 };
+
+test("故事圣经使用三分钟有限单次请求超时", () => {
+  assert.equal(BOOK_STORY_BIBLE_TIMEOUT_MS, 180_000);
+});
 
 function content(sourceEventId: string, chapterId: string) {
   return {

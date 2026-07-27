@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
+import { BOOK_STORY_BIBLE_JOB_TYPE, createBookStoryBibleJobHandler } from "./book-story-bible-job-handler.js";
 import { createChapterEventsAnalysisJobHandler, CHAPTER_EVENTS_ANALYZE_JOB_TYPE } from "./chapter-events-job.js";
 import { openDatabase } from "./database.js";
 import {
@@ -21,8 +22,10 @@ import {
   createSeriesPipelineRun,
   getMappedChapterJobs,
   getMappedScriptJobs,
+  getMappedStoryBibleJob,
   getSeriesPipelineRun,
   mapSeriesPipelineJob,
+  mapSeriesPipelineStoryBibleJob,
   pauseSeriesPipelineRun,
   resumeSeriesPipelineRun,
   cancelSeriesPipelineRun,
@@ -522,5 +525,106 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
     assert.equal(seenHandoffs[0], null);
     assert.deepEqual(seenHandoffs.at(-1), secondPayload.previousScriptHandoff);
     assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("故事圣经按事件 identity 复用模型切换，失败局部重试并在暂停重启后持久进入规划", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-bible-"));
+  let connection = await seed(dataRoot);
+  try {
+    let database = connection.database;
+    for (const index of [1, 2]) database.prepare(`INSERT INTO chapter_events
+      (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+      VALUES (?,?,?,?,?,?,1)`).run(
+      `event_bible_${index}`, `chapter_a_${index}`, 0, 0, "revelation", JSON.stringify({ summary: `事件${index}` }),
+    );
+    const run = createSeriesPipelineRun(database, input());
+    setSeriesPipelineStatus(database, run.id, "configured", "building_story_bible");
+    let service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    await service.reconcile();
+    const mapping = getMappedStoryBibleJob(database, run.id)!;
+    const firstJob = getJob(database, mapping.job_id)!;
+    assert.equal(firstJob.type, BOOK_STORY_BIBLE_JOB_TYPE);
+    assert.equal((firstJob.payload as { providerId: string }).providerId, provider.providerId);
+
+    const switched = { ...provider, providerId: "provider-switched", model: "model-switched" };
+    service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => switched });
+    await service.reconcile();
+    assert.equal(getMappedStoryBibleJob(database, run.id)!.job_id, mapping.job_id);
+
+    service.pause(run.id);
+    database.prepare("UPDATE chapter_events SET payload_json=? WHERE id='event_bible_1'")
+      .run(JSON.stringify({ summary: "暂停后修正的事件" }));
+    database.prepare(
+      "UPDATE jobs SET status='succeeded',result_json=?,progress=1,finished_at=? WHERE id=?",
+    ).run(JSON.stringify({ storyBibleId: "stale_bible" }), Date.now(), mapping.job_id);
+    connection.close();
+    connection = openDatabase(dataRoot);
+    database = connection.database;
+    service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    assert.equal(service.resume(run.id).status, "building_story_bible");
+    await service.reconcile();
+    const remapped = getMappedStoryBibleJob(database, run.id)!;
+    assert.notEqual(remapped.job_id, mapping.job_id);
+    assert.equal(service.get(run.id)!.status, "building_story_bible");
+    assert.equal(getJob(database, mapping.job_id)!.status, "succeeded");
+    assert.equal(getJob(database, mapping.job_id)!.runAfter, Number.MAX_SAFE_INTEGER);
+    assert.equal(database.prepare(
+      "SELECT COUNT(*) AS total FROM series_pipeline_jobs WHERE run_id=? AND stage='story_bible'",
+    ).get(run.id)?.total, 1);
+    database.prepare(
+      "UPDATE jobs SET status='failed',error_code='temporary',error_message='临时失败',finished_at=? WHERE id=?",
+    ).run(Date.now(), remapped.job_id);
+    await service.reconcile();
+    assert.equal(service.get(run.id)!.failures[0]!.stage, "story_bible");
+    assert.equal(service.retry(run.id).status, "building_story_bible");
+
+    const content = (sourceEventId: string, chapterId: string) => ({
+      characters: [], relationships: [], locations: [], organizations: [], items: [], concepts: [],
+      timeline: [{ summary: "已验证事件", chapterIds: [chapterId], sourceEventIds: [sourceEventId] }],
+      flashbacks: [], plotThreads: [], confusingFacts: [], spoilerRestrictions: [], properNouns: [],
+    });
+    let call = 0;
+    const responses = [content("event_bible_1", "chapter_a_1"), content("event_bible_1", "chapter_a_1")];
+    const fetchImpl = (async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(responses[call++]),
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const worker = new JobWorker(database, {
+      [BOOK_STORY_BIBLE_JOB_TYPE]: createBookStoryBibleJobHandler(database, provider, { fetchImpl }),
+    }, { workerId: "pipeline-bible", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    const completed = service.get(run.id)!;
+    assert.equal(completed.status, "planning_episodes");
+    assert.match(completed.storyBibleId!, /^bible_/);
+    assert.equal(completed.progress.storyBible.completed, 1);
+    assert.equal(database.prepare("SELECT scope FROM book_story_bibles WHERE id=?")
+      .get(completed.storyBibleId)?.scope, "final");
+    assert.equal(getMappedStoryBibleJob(database, run.id)!.job_id, remapped.job_id);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("Story Bible parked Job 在 pause 或 cancel 先完成时不会映射或被 Worker claim", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-bible-race-"));
+  const connection = await seed(dataRoot);
+  try {
+    const database = connection.database;
+    const run = createSeriesPipelineRun(database, input());
+    setSeriesPipelineStatus(database, run.id, "configured", "building_story_bible");
+    const job = createJob(database, {
+      id: "job_story_bible_parked", type: BOOK_STORY_BIBLE_JOB_TYPE, payload: {},
+      runAfter: Number.MAX_SAFE_INTEGER,
+    });
+    pauseSeriesPipelineRun(database, run.id);
+    assert.equal(mapSeriesPipelineStoryBibleJob(database, run.id, "1".repeat(64), job.id), false);
+    assert.equal(getMappedStoryBibleJob(database, run.id), undefined);
+    const worker = new JobWorker(database, {
+      [BOOK_STORY_BIBLE_JOB_TYPE]: async () => ({ storyBibleId: "should_not_run" }),
+    }, { workerId: "pipeline-bible-race", leaseMs: 10_000, heartbeatMs: 1_000 });
+    assert.equal(await worker.runOne(), false);
+    resumeSeriesPipelineRun(database, run.id);
+    cancelSeriesPipelineRun(database, run.id);
+    assert.equal(mapSeriesPipelineStoryBibleJob(database, run.id, "1".repeat(64), job.id), false);
+    assert.equal(getJob(database, job.id)!.runAfter, Number.MAX_SAFE_INTEGER);
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });

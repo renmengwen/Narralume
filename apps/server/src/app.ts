@@ -126,6 +126,10 @@ import {
 import { registerSeriesPipelineRoutes } from "./series-pipeline-routes.js";
 import { SeriesPipelineService, SeriesPipelineWorker } from "./series-pipeline-service.js";
 import {
+  BOOK_STORY_BIBLE_JOB_TYPE,
+  createBookStoryBibleJobHandler,
+} from "./book-story-bible-job-handler.js";
+import {
   assertSeriesPipelineAllowsChapterEventMutation,
   SeriesPipelineError,
 } from "./series-pipeline-store.js";
@@ -341,6 +345,11 @@ export function buildApp(options: BuildAppOptions = {}) {
         options.episodeScriptGenerator ?? createOpenAiEpisodeScriptGenerator(provider),
       )(context);
     },
+    [BOOK_STORY_BIBLE_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("故事圣经任务对应的模型配置不可用");
+      return createBookStoryBibleJobHandler(connection.database, provider)(context);
+    },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
@@ -358,6 +367,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
   supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
   supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
+  supportedJobTypes.add(BOOK_STORY_BIBLE_JOB_TYPE);
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
   let pipelineWorker: SeriesPipelineWorker;

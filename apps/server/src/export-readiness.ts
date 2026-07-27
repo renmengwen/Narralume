@@ -4,6 +4,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { openVerifiedFinalExport } from "./final-video.js";
 import type { JobStatus } from "./job-store.js";
 import { loadRenderPlanSnapshot, type RenderPlanSnapshot } from "./render-chunk-job.js";
+import {
+  getTtsListeningReviewWorkspace, TTS_LISTENING_REVIEW_JOB_TYPE,
+} from "./tts-listening-review.js";
 
 const ID = /^[A-Za-z0-9_-]+$/u;
 const HASH = /^[0-9a-f]{64}$/u;
@@ -66,6 +69,33 @@ function parseObject(value: string | null) {
 
 function renderIdentityHash(snapshot: RenderPlanSnapshot) {
   return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
+
+function listeningReviewBlocker(database: DatabaseSync, episodeId: string, timelineHash: string) {
+  let latestReview;
+  try {
+    latestReview = getTtsListeningReviewWorkspace(database, episodeId, timelineHash).latestReview;
+  } catch (error) {
+    return {
+      code: "tts_listening_review_unavailable",
+      message: error instanceof Error ? error.message : "当前语音身份无法进行人工听审",
+    };
+  }
+  if (latestReview?.action === "approve") return null;
+  if (latestReview?.action === "reject") {
+    return { code: "tts_listening_review_rejected", message: "当前语音身份的人工听审未通过" };
+  }
+  const rows = database.prepare(
+    `SELECT payload_json FROM jobs WHERE type = ? AND status = 'succeeded'
+     ORDER BY finished_at DESC, created_at DESC, id DESC`,
+  ).all(TTS_LISTENING_REVIEW_JOB_TYPE) as unknown as Array<{ payload_json: string }>;
+  const hasOldIdentity = rows.some((row) => {
+    const payload = parseObject(row.payload_json);
+    return object(payload?.identity)?.episodeId === episodeId;
+  });
+  return hasOldIdentity
+    ? { code: "tts_listening_review_stale", message: "人工听审身份已变化，请按当前语音重新听审" }
+    : { code: "tts_listening_review_missing", message: "当前语音尚未完成人工听审" };
 }
 
 function exactResult(row: JobRow, snapshot: RenderPlanSnapshot) {
@@ -176,6 +206,7 @@ export async function deriveExportReadiness(input: {
   const renderJob = latestJob(input.database, "render_chunks", snapshot);
   const finalJob = latestJob(input.database, "final_video", snapshot);
   const candidate = finalResult(input.database, snapshot);
+  const listeningBlocker = listeningReviewBlocker(input.database, snapshot.episodeId, snapshot.timelineHash);
   let finalExport: ExportReadinessResult["finalExport"] = null;
   if (candidate) {
     try {
@@ -192,8 +223,8 @@ export async function deriveExportReadiness(input: {
   return {
     episodeId: snapshot.episodeId,
     timelineHash: snapshot.timelineHash,
-    productionReady: true,
-    blockers: [],
+    productionReady: listeningBlocker === null,
+    blockers: listeningBlocker === null ? [] : [listeningBlocker],
     identity: {
       scriptVersionId: snapshot.scriptVersionId,
       approvalRevision: snapshot.approvalRevision,

@@ -9,6 +9,7 @@ import { openDatabase } from "./database.js";
 import { deriveExportReadiness, ExportReadinessError } from "./export-readiness.js";
 import { exportFinalVideo } from "./final-video.js";
 import { loadRenderPlanSnapshot } from "./render-chunk-job.js";
+import { getTtsListeningReviewWorkspace } from "./tts-listening-review.js";
 
 const TIMELINE = "a".repeat(64);
 const hash = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
@@ -18,6 +19,8 @@ async function fixture() {
   const connection = openDatabase(dataRoot);
   const db = connection.database;
   db.prepare("INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status) VALUES ('book','书','books/source.txt',?,'UTF-8','ready')").run("1".repeat(64));
+  db.prepare(`INSERT INTO chapters (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
+    VALUES ('chapter','book',0,'章',0,1,1,?)`).run("0".repeat(64));
   db.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series','book','系列',1,1)").run();
   db.prepare("INSERT INTO episodes (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,created_at,updated_at) VALUES ('episode','series',1,'集','弧',180,1,1)").run();
   return { dataRoot, connection };
@@ -36,6 +39,31 @@ function seedReady(db: ReturnType<typeof openDatabase>["database"]) {
   db.prepare(`INSERT INTO visual_segments (id,episode_id,segment_index,script_version_id,approval_revision,timeline_hash,cue_start_index,cue_end_index,start_ms,end_ms,motion_kind,motion_amount_ppm,fade_ms,revision,created_at,updated_at)
     VALUES ('visual','episode',0,'script',1,?,0,0,0,60000,'none',0,0,1,1,1)`).run(TIMELINE);
   db.prepare("INSERT INTO visual_segment_assets (visual_segment_id,asset_index,asset_id,selected_candidate_id,candidate_review_revision) VALUES ('visual',0,'asset','candidate',1)").run();
+  const bibleJson = JSON.stringify({ properNouns: [] });
+  db.prepare(`INSERT INTO book_story_bibles
+    (id,book_id,scope,source_start_chapter_id,source_end_chapter_id,source_event_ids_json,source_events_hash,
+     parent_bible_ids_json,input_hash,contract_version,revision,provider_id,model,content_json,content_hash,created_at)
+    VALUES ('bible','book','final','chapter','chapter','["event"]',?,'[]',?,'book-story-bible-v1',1,'provider','model',?,?,1)`)
+    .run("7".repeat(64), "8".repeat(64), bibleJson, hash(bibleJson));
+  db.prepare(`INSERT INTO series_pipeline_runs
+    (id,series_project_id,status,episode_count,target_duration_seconds,source_start_chapter_id,source_end_chapter_id,
+     config_hash,story_bible_id,created_at,updated_at)
+    VALUES ('run','series','completed',1,180,'chapter','chapter',?,'bible',1,1)`).run("9".repeat(64));
+}
+
+function seedListeningReview(
+  db: ReturnType<typeof openDatabase>["database"], action: "approve" | "reject", id = `review-${action}`,
+) {
+  const workspace = getTtsListeningReviewWorkspace(db, "episode", TIMELINE);
+  const payload = {
+    contract: "tts-listening-review-v1", identity: workspace.identity, action,
+    checkedSegmentIndexes: action === "approve" ? workspace.requiredSegmentIndexes : [],
+    checkedProperNouns: action === "approve" ? workspace.requiredProperNouns.map((item) => item.term) : [], notes: null,
+  };
+  db.prepare(`INSERT INTO jobs
+    (id,type,payload_json,status,priority,progress,attempts,max_attempts,run_after,cancel_requested,result_json,created_at,updated_at,finished_at)
+    VALUES (?,'tts_listening_review',?,'succeeded',0,1,1,1,0,0,?,2,2,2)`)
+    .run(id, JSON.stringify(payload), JSON.stringify({ ...payload, jobId: id }));
 }
 
 test("只读复核从当前生产身份派生门禁、分片、任务和已验证最终视频", async () => {
@@ -48,6 +76,7 @@ test("只读复核从当前生产身份派生门禁、分片、任务和已验�
 
     const db = current.connection.database;
     seedReady(db);
+    seedListeningReview(db, "approve");
     const snapshot = loadRenderPlanSnapshot(db, "episode", TIMELINE);
     db.prepare(`INSERT INTO jobs (id,type,payload_json,status,priority,progress,attempts,max_attempts,run_after,cancel_requested,result_json,created_at,updated_at,finished_at)
       VALUES ('old-render','render_chunks',?,'succeeded',0,1,1,1,0,0,?,1,1,1)`).run(
@@ -90,6 +119,40 @@ test("只读复核从当前生产身份派生门禁、分片、任务和已验�
     await writeFile(exported.finalPath, "tampered");
     assert.equal((await deriveExportReadiness({ database: db, dataRoot: current.dataRoot,
       episodeId: "episode", timelineHash: TIMELINE })).finalExport?.verified, false);
+  } finally {
+    current.connection.close();
+    await rm(current.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("生产就绪只接受当前精确身份的人工听审批准", async () => {
+  const current = await fixture();
+  try {
+    const db = current.connection.database;
+    seedReady(db);
+    const missing = await deriveExportReadiness({ database: db, dataRoot: current.dataRoot,
+      episodeId: "episode", timelineHash: TIMELINE });
+    assert.equal(missing.productionReady, false);
+    assert.deepEqual(missing.blockers, [{ code: "tts_listening_review_missing", message: "当前语音尚未完成人工听审" }]);
+
+    seedListeningReview(db, "reject");
+    const rejected = await deriveExportReadiness({ database: db, dataRoot: current.dataRoot,
+      episodeId: "episode", timelineHash: TIMELINE });
+    assert.equal(rejected.productionReady, false);
+    assert.equal(rejected.blockers[0]?.code, "tts_listening_review_rejected");
+
+    seedListeningReview(db, "approve", "review-approve-latest");
+    db.prepare("UPDATE jobs SET created_at=3, updated_at=3, finished_at=3 WHERE id='review-approve-latest'").run();
+    const approved = await deriveExportReadiness({ database: db, dataRoot: current.dataRoot,
+      episodeId: "episode", timelineHash: TIMELINE });
+    assert.equal(approved.productionReady, true);
+    assert.deepEqual(approved.blockers, []);
+
+    db.prepare("UPDATE audio_segments SET voice = 'new-voice' WHERE episode_id = 'episode'").run();
+    const stale = await deriveExportReadiness({ database: db, dataRoot: current.dataRoot,
+      episodeId: "episode", timelineHash: TIMELINE });
+    assert.equal(stale.productionReady, false);
+    assert.equal(stale.blockers[0]?.code, "tts_listening_review_stale");
   } finally {
     current.connection.close();
     await rm(current.dataRoot, { recursive: true, force: true });

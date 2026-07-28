@@ -555,6 +555,20 @@ PC-02 当前 checkpoint：
 | 业务提交 | `e7a8a10 fix(ai): 补齐文本分析流式响应` |
 | 剩余风险 / 恢复 | 上游若忽略流式请求并返回普通 JSON，现有兼容分支继续解析；未做前端 token 增量展示，符合用户明确边界。需要恢复时 revert `e7a8a10`，不涉及数据迁移。 |
 
+## 2026-07-28 故事圣经按配置并发构建
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AI-STORY-BIBLE-CONCURRENCY-01` / 故事圣经各区间由串行改为有界并行；并发数读取每本书当前流水线 run 冻结的 `chapterConcurrency`，不得硬编码当前 run 的 `8`。 |
+| 状态 | `complete` |
+| 依赖与来源决策 | `internal-port`：复用现有 `series_pipeline_runs.chapter_concurrency`、Job 映射、流式模型调用、取消/超时和 checkpoint；不新增依赖、队列、配置字段或前端增量展示。 |
+| 实现边界 | handler 通过 story_bible Job 映射动态读取有效 run 的 `chapter_concurrency`；共享 Job 有多个有效 owner 时取最小值，无合法映射回退串行 `1`。区间结果按冻结顺序落位，全部区间完成后只执行一次 final；任一区间失败会中止同组在途模型请求。 |
+| Candidate / Review | 业务提交 `d5f46b0`；Coordinator 最小自审 PASS：实现中无并发数字面量 `8`，当前 run 配置只作为运行时数据消费，SSE、明确成功终态、180 秒空闲时限、900 秒总时限、取消和严格模型合同保持不变。 |
+| 验证证据 | 新增配置并发栅栏用例，证明配置 `2` 时峰值并发为 `2` 且 final 不提前；故事圣经定向 `25 PASS / 0 FAIL`；完整 server `402 PASS / 0 FAIL / 1 Windows 权限 SKIP`；server `typecheck`、`build`、`git diff --check` 全部 PASS。 |
+| 真实恢复 Gate | 仅后端 3101 由现有 watch 重建为 PID `31496`，`/api/health` HTTP 200；通过正式 resume API 将 run `pipeline_95ade1af…` 从 `paused` 恢复为 `building_story_bible`。该 run 冻结 `chapterConcurrency=8`；同一 Story Bible Job 进入 attempt 2，22 秒只读快照由 9/91 推进至 12/91、租约持续续期且无错误，证明新 handler 已真实执行。5174 在操作前已不监听，本轮未停止或重启前端。 |
+| 业务提交 | `d5f46b0 perf(ai): 按配置并发构建故事圣经区间` |
+| 剩余风险 / 恢复 | 暂停不会无损跳过旧 interval checkpoint；用户已接受当前少量进度重跑。当前 Job 已继续执行，不保证复用重启前已完成区间；需要回退时先通过正式 pause API 暂停后续任务，再 revert `d5f46b0`，不涉及数据迁移。 |
+
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。

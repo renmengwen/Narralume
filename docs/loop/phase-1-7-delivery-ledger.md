@@ -594,6 +594,20 @@ PC-02 当前 checkpoint：
 | 其他 AI 调用审计 | 章节事件单/批已随本提交闭合。分集来源推荐是单次模型调用，不存在部分单元恢复。全书分集规划虽然有 interval checkpoint，但尚无持久 interval 输出；忠实稿/包装稿的 skeleton、faithful beat、packaged 也尚无中间 checkpoint，失败重试仍会从头调用模型。两者需先定义耐久中间结果合同，不在本次无 migration 的最小修复中伪装完成。 |
 | 恢复入口 / 真实运行 | 3101 后端 watch 已只重载后端，`/api/health` HTTP 200；5174 始终保持 PID `36368`。重载后 run 仍为 paused，持久进度实际为 `51/91`，旧 Job 因停止进程记录 `lease_expired`。通过正式 JSON API 在 paused 状态执行 retry，再 resume 成功恢复为 `building_story_bible`；4 秒后仍直接投影 `51/91`、失败 0、同一 Job 建立 8 条上游 HTTPS 连接，证明未回到 `0/91` 且按该书冻结的 `chapterConcurrency=8` 运行剩余区间。全部 interval 完成后只执行一次 final。 |
 
+## 2026-07-29 故事圣经分层归并与真实恢复
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AI-STORY-BIBLE-REDUCTION-01` / 保留现有 90 个成功区间和 checkpoint，将最终单次 `90 → 1` 改为可恢复的十路分层归并；上游 SSE `error.code/type/message` 不脱敏、直接展示。 |
+| 状态 | `complete` |
+| 来源登记 | 按冻结优先级核查 DramaClaw、Toonflow `bc61ec7a1b5df31293b286981a5f4ad4635464ee`、LumenX、LocalMiniDrama、MuseDock `661bc6d1b4a84ecee466657a64f7e26698262190`；均无适配 Narralume 当前合同的可恢复故事圣经层级归并闭包，统一 `reference-only`。实现复用 Narralume 现有 `book_story_bibles` 父层、`job_checkpoints`、并发池和 SSE parser，无新依赖、migration、队列或 Store。 |
+| 实现边界 | 固定 fan-in 10；真实 90 区间变为 `90 → 9 → 1`，中间节点仍以 `scope=interval` 持久化，`parentBibleIds` 指向上一层，reduction checkpoint identity 由版本和父节点 ID/content hash 决定；单节点余数透传。流水线步骤直接统计 interval/reduction/final checkpoint，旧失败页准确显示 `90/100`。Responses 与 Anthropic 失败终态原样保留上游 code/type/message，经 `jobs.error_message` 进入现有失败列表；不新增 Web 组件。 |
+| Review / OpenDesign | 独立 verifier 确认错误原文沿 `streamedText → Job error_message → failures[].message → PipelineProgress` 直达现有红色失败列表，等宽 Job ID 和重试交互无回退；发现旧 progress 比例会把 `90/91` 误投影为 `99/100` 的 P2，已改为 checkpoint 真实计数并验证线上返回 `90/100`，finding 关闭。 |
+| 验证证据 | 分层 handler 回归覆盖 `11 → 2 → 1`、13 次首轮模型调用、第二轮 0 调用/0 写入；聚焦 44 PASS。最终全仓 `npm test` PASS：Server `407 PASS / 0 FAIL / 1 Windows 权限 SKIP`、Web `98 PASS / 0 FAIL`；根 `npm run typecheck`、`npm run build`、`git diff --check` 全部 PASS，Vite 137 modules。 |
+| 真实恢复 Gate | 业务提交后只重启 3101：后端 PID `1716 → 10432`，5174 前端 PID 始终 `36368`。对 run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 只执行一次有效 JSON retry；同一 Story Bible Job 从持久 `90/100` 依次推进到 `99/100`，证明未重跑 1794 章或 90 个区间，并新增 9 个中间 checkpoint；最终成功到 `100/100`、Story Bible `1/1`、失败 0，生成 `bible_0886984d-e693-4176-b1ff-0861cc5457a4`，run 自动进入 `planning_episodes`。首次无 Content-Type 的 POST 在 Fastify 边界以 415 拒绝，未进入 retry handler、未改变状态。 |
+| 业务提交 | `3734cbc fix(auto): 分层归并故事圣经并展示上游错误` |
+| 恢复 / 风险 | 每个中间节点独立持久，后续失败只补缺失 reduction/final；不再发送约 249 万字节的 90 区间单次最终输入。上游若仅发送无 code/message 的 `type:error`，页面仍只能原样显示其通用失败终态；有字段时直接展示原值。当前固定自动全本流水线继续处于 `planning_episodes`，工程修复完成不等于后续分集、稿件、TTS、视觉、渲染和导出已验收。 |
+
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。

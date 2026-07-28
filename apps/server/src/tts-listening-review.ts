@@ -92,6 +92,62 @@ function sameIdentity(left: TtsListeningReviewIdentity, right: TtsListeningRevie
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function listeningProperNouns(database: DatabaseSync, storyBibleId: string) {
+  try {
+    const finalBible = database.prepare(
+      `SELECT book_id, scope, parent_bible_ids_json, content_json, content_hash, invalidated_at
+       FROM book_story_bibles WHERE id = ?`,
+    ).get(storyBibleId) as {
+      book_id: string; scope: string; parent_bible_ids_json: string; content_json: string;
+      content_hash: string; invalidated_at: number | null;
+    } | undefined;
+    if (!finalBible || finalBible.scope !== "final" || finalBible.invalidated_at !== null ||
+        sha256(finalBible.content_json) !== finalBible.content_hash) throw new Error();
+    const frozenParents = JSON.parse(finalBible.parent_bible_ids_json) as unknown;
+    if (!Array.isArray(frozenParents)) throw new Error();
+    const parentRows = frozenParents.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error();
+      const snapshot = item as Record<string, unknown>;
+      if (Object.keys(snapshot).sort().join(",") !== "contentHash,id" || typeof snapshot.id !== "string" ||
+          typeof snapshot.contentHash !== "string" || !HASH.test(snapshot.contentHash)) throw new Error();
+      const parent = database.prepare(
+        `SELECT book_id, scope, content_json, content_hash, invalidated_at
+         FROM book_story_bibles WHERE id = ?`,
+      ).get(snapshot.id) as {
+        book_id: string; scope: string; content_json: string; content_hash: string; invalidated_at: number | null;
+      } | undefined;
+      if (!parent || parent.book_id !== finalBible.book_id || parent.scope !== "interval" || parent.invalidated_at !== null ||
+          parent.content_hash !== snapshot.contentHash || sha256(parent.content_json) !== parent.content_hash) throw new Error();
+      return parent;
+    });
+
+    const unique = new Map<string, { term: string; pronunciation: string; aliases: string[] }>();
+    for (const bible of [finalBible, ...parentRows]) {
+      const content = JSON.parse(bible.content_json) as { properNouns?: unknown };
+      if (!Array.isArray(content.properNouns)) throw new Error();
+      for (const item of content.properNouns) {
+        const noun = item as Record<string, unknown>;
+        if (typeof noun.term !== "string" || typeof noun.pronunciation !== "string" || !Array.isArray(noun.aliases) ||
+            noun.aliases.some((alias) => typeof alias !== "string")) throw new Error();
+        const normalized = {
+          term: noun.term.normalize("NFKC"),
+          pronunciation: noun.pronunciation,
+          aliases: [...new Set((noun.aliases as string[]).map((alias) => alias.normalize("NFKC")))].sort(),
+        };
+        unique.set(JSON.stringify(normalized), normalized);
+      }
+    }
+    return {
+      contentHash: finalBible.content_hash,
+      properNouns: [...unique.values()].sort((left, right) =>
+        left.term.localeCompare(right.term) || left.pronunciation.localeCompare(right.pronunciation) ||
+        JSON.stringify(left.aliases).localeCompare(JSON.stringify(right.aliases))),
+    };
+  } catch {
+    throw new TtsListeningReviewError(409, "当前故事圣经专名及冻结父层合同无效");
+  }
+}
+
 function currentWorkspace(database: DatabaseSync, episodeId: string, timelineHash: string) {
   if (!episodeId || !HASH.test(timelineHash)) throw new TtsListeningReviewError(400, "听审目标无效");
   const approved = requireApprovedScriptForProduction(database, episodeId, "tts");
@@ -119,25 +175,8 @@ function currentWorkspace(database: DatabaseSync, episodeId: string, timelineHas
   if (!run?.story_bible_id || run.status === "cancelled") {
     throw new TtsListeningReviewError(409, "当前系列流水线尚未冻结可用故事圣经");
   }
-  const bible = database.prepare(
-    `SELECT content_json, content_hash, invalidated_at FROM book_story_bibles WHERE id = ?`,
-  ).get(run.story_bible_id) as { content_json: string; content_hash: string; invalidated_at: number | null } | undefined;
-  if (!bible || bible.invalidated_at !== null || sha256(bible.content_json) !== bible.content_hash) {
-    throw new TtsListeningReviewError(409, "当前故事圣经身份无效");
-  }
-  let properNouns: Array<{ term: string; pronunciation: string; aliases: string[] }>;
-  try {
-    const content = JSON.parse(bible.content_json) as { properNouns?: unknown };
-    if (!Array.isArray(content.properNouns)) throw new Error();
-    properNouns = content.properNouns.map((item) => {
-      const noun = item as Record<string, unknown>;
-      if (typeof noun.term !== "string" || typeof noun.pronunciation !== "string" || !Array.isArray(noun.aliases) ||
-          noun.aliases.some((alias) => typeof alias !== "string")) throw new Error();
-      return { term: noun.term.normalize("NFKC"), pronunciation: noun.pronunciation, aliases: noun.aliases.map((alias) => alias.normalize("NFKC")) };
-    });
-  } catch {
-    throw new TtsListeningReviewError(409, "当前故事圣经专名合同无效");
-  }
+  const bible = listeningProperNouns(database, run.story_bible_id);
+  const properNouns = bible.properNouns;
 
   const requiredProperNouns: RequiredProperNounReview[] = [];
   for (const noun of properNouns) {
@@ -156,7 +195,7 @@ function currentWorkspace(database: DatabaseSync, episodeId: string, timelineHas
   const representativeHash = sha256(JSON.stringify({ requiredSegmentIndexes, requiredProperNouns }));
   const identity: TtsListeningReviewIdentity = {
     ...approved, timelineHash, providerId: rows[0]!.provider_id, voice: rows[0]!.voice, rate: rows[0]!.rate,
-    storyBibleId: run.story_bible_id, storyBibleContentHash: bible.content_hash, properNounsHash, representativeHash,
+    storyBibleId: run.story_bible_id, storyBibleContentHash: bible.contentHash, properNounsHash, representativeHash,
   };
   return {
     identity,

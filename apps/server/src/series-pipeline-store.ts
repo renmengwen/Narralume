@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { storyBibleStepTotal } from "./book-story-bible-reduction.js";
+
 import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
 import {
   chapterEventsAnalysisJobMatchesChapter,
@@ -659,14 +661,20 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
   const storyIntervals = storyJob?.payload && typeof storyJob.payload === "object" &&
     Array.isArray((storyJob.payload as { intervals?: unknown }).intervals)
     ? (storyJob.payload as { intervals: unknown[] }).intervals.length : undefined;
-  const storySteps = storyJob && storyIntervals !== undefined ? {
-    completed: Math.min(storyIntervals + 1, Math.max(0, Math.round(storyJob.progress * (storyIntervals + 1)))),
-    total: storyIntervals + 1,
+  const storyTotal = storyIntervals === undefined ? undefined : storyBibleStepTotal(storyIntervals);
+  const storyCheckpointCount = storyJob ? Number(database.prepare(
+    `SELECT COUNT(*) AS total FROM job_checkpoints
+     WHERE job_id = ? AND stage IN ('book-story-bible-interval', 'book-story-bible-reduction', 'book-story-bible-final')`,
+  ).get(storyJob.id)?.total ?? 0) : 0;
+  const storySteps = storyJob && storyTotal !== undefined ? {
+    completed: Math.min(storyTotal, Math.max(0, storyCheckpointCount)),
+    total: storyTotal,
   } : null;
   const storyFailure = storyJob && (storyJob.status === "failed" || storyJob.status === "cancelled") ? [{
     stage: "story_bible", subjectType: "bible_chunk", subjectId: storyMapping!.subject_id,
     jobId: storyJob.id, code: storyJob.status === "cancelled" ? "job_cancelled" : storyJob.errorCode,
-    message: storyJob.status === "cancelled" ? "故事圣经生成已中断，请重试" : "故事圣经生成失败，请重试",
+    message: storyJob.status === "cancelled" ? "故事圣经生成已中断，请重试"
+      : storyJob.errorMessage ?? "故事圣经生成失败，请重试",
     canRetry: true,
   }] : [];
   const planMapping = getMappedEpisodePlanJob(database, run.id);

@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   BookStoryBibleContractError,
   parseBookStoryBibleContent,
+  type BookStoryBibleContent,
 } from "./book-story-bible-contract.js";
 import {
   limitedJson,
@@ -19,6 +20,12 @@ import {
   type StoryBibleBuildLimits,
   type StoryBibleIntervalRequest,
 } from "./book-story-bible-job.js";
+import {
+  STORY_BIBLE_REDUCTION_FAN_IN,
+  storyBibleReductionGroups,
+  storyBibleReductionKey,
+  storyBibleStepTotal,
+} from "./book-story-bible-reduction.js";
 import { createBookStoryBible, findBookStoryBibleForJob } from "./book-story-bible-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { streamedText } from "./text-model-stream.js";
@@ -42,6 +49,13 @@ export interface BookStoryBibleJobPayload {
 interface StoredBible {
   id: string;
   contentHash: string;
+}
+
+interface StoryBibleNode {
+  bible: StoredBible;
+  content: BookStoryBibleContent;
+  chapterIds: string[];
+  sourceEventIds: string[];
 }
 
 interface HandlerOptions {
@@ -82,6 +96,7 @@ function parseModelContent(
   ];
   const unknown = referenced.find((chapterId) => !allowed.has(chapterId));
   if (unknown) throw new BookStoryBibleContractError(`故事圣经引用了未获准章节：${unknown}`);
+  return content;
 }
 
 function sha256(value: string) {
@@ -254,6 +269,14 @@ function intervalConcurrency(database: DatabaseSync, jobId: string) {
   return Number.isSafeInteger(row?.value) && Number(row!.value) > 0 ? Number(row!.value) : 1;
 }
 
+async function runConcurrent<T>(items: readonly T[], concurrency: number, run: (item: T) => Promise<void>) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await run(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
+
 export function createBookStoryBibleJobHandler(
   database: DatabaseSync,
   config: ChapterTextModelConfig,
@@ -269,6 +292,7 @@ export function createBookStoryBibleJobHandler(
     const intervalBibles = new Array<StoredBible>(task.intervals.length);
     const groupController = new AbortController();
     const pending: number[] = [];
+    const totalSteps = storyBibleStepTotal(task.intervals.length);
     let completed = 0;
     for (const [index, request] of task.intervals.entries()) {
       const checkpoint = context.getCheckpoint("book-story-bible-interval", request.identityHash);
@@ -288,12 +312,9 @@ export function createBookStoryBibleJobHandler(
       intervalBibles[index] = bible;
       completed += 1;
     }
-    if (completed) context.reportProgress(completed / (task.intervals.length + 1));
-    let nextIndex = 0;
-    const worker = async () => {
-      while (nextIndex < pending.length) {
+    if (completed) context.reportProgress(completed / totalSteps);
+    await runConcurrent(pending, intervalConcurrency(database, context.job.id), async (index) => {
         context.throwIfCancellationRequested();
-        const index = pending[nextIndex++]!;
         const request = task.intervals[index]!;
         try {
           const input = {
@@ -310,26 +331,79 @@ export function createBookStoryBibleJobHandler(
           verified[index] = parsed;
           intervalBibles[index] = bible;
           context.commitCheckpoint("book-story-bible-interval", request.identityHash, request.identityHash, () => undefined);
-          context.reportProgress(++completed / (task.intervals.length + 1));
+          context.reportProgress(++completed / totalSteps);
         } catch (error) {
           groupController.abort(error);
           throw error;
         }
-      }
-    };
-    await Promise.all(Array.from(
-      { length: Math.min(intervalConcurrency(database, context.job.id), pending.length) }, worker,
-    ));
+    });
     const finalRequest = buildStoryBibleFinalRequest(task.bookId, verified, {
       providerId: task.providerId, model: task.model,
     }, task.limits);
-    const finalCheckpoint = context.getCheckpoint("book-story-bible-final", finalRequest.identityHash);
     const chapterIds = task.intervals.flatMap((interval) => interval.chapterIds);
+    let nodes: StoryBibleNode[] = verified.map((item, index) => ({
+      bible: intervalBibles[index]!, content: item.content,
+      chapterIds: [...task.intervals[index]!.chapterIds],
+      sourceEventIds: [...task.intervals[index]!.sourceEventIds],
+    }));
+    while (nodes.length > STORY_BIBLE_REDUCTION_FAN_IN) {
+      const groups = storyBibleReductionGroups(nodes);
+      const reduced = new Array<StoryBibleNode>(groups.length);
+      await runConcurrent(groups.map((group, index) => ({ group, index })),
+        intervalConcurrency(database, context.job.id), async ({ group, index }) => {
+          if (group.length === 1) {
+            reduced[index] = group[0]!;
+            return;
+          }
+          context.throwIfCancellationRequested();
+          const reductionKey = storyBibleReductionKey(group.map((node) => node.bible));
+          const reductionChapterIds = group.flatMap((node) => node.chapterIds);
+          const reductionSourceEventIds = group.flatMap((node) => node.sourceEventIds);
+          const parentBibleIds = group.map((node) => node.bible.id);
+          const checkpoint = context.getCheckpoint("book-story-bible-reduction", reductionKey);
+          if (checkpoint?.inputHash === reductionKey) {
+            const bible = findBible(database, {
+              jobId: context.job.id, bookId: task.bookId, scope: "interval",
+              sourceStartChapterId: reductionChapterIds[0]!, sourceEndChapterId: reductionChapterIds.at(-1)!,
+              sourceEventIds: reductionSourceEventIds, parentBibleIds,
+            });
+            if (!bible) throw new Error(`故事圣经归并检查点缺少持久结果：${reductionKey}`);
+            const content = parseModelContent(bible.content, reductionSourceEventIds, reductionChapterIds);
+            reduced[index] = { bible, content, chapterIds: reductionChapterIds, sourceEventIds: reductionSourceEventIds };
+            completed += 1;
+            return;
+          }
+          try {
+            const content = await callModelAndParse(context, config, fetchImpl, {
+              kind: "final", chapterIds: reductionChapterIds,
+              intervals: group.map((node) => ({ content: node.content })),
+            }, reductionSourceEventIds, reductionChapterIds,
+            (raw) => parseBookStoryBibleContent(raw, new Set(reductionSourceEventIds)), groupController.signal);
+            context.throwIfCancellationRequested();
+            const bible = createBible(database, {
+              bookId: task.bookId, scope: "interval", sourceStartChapterId: reductionChapterIds[0]!,
+              sourceEndChapterId: reductionChapterIds.at(-1)!, sourceEventIds: reductionSourceEventIds,
+              parentBibleIds, providerId: task.providerId, model: task.model,
+              jobId: context.job.id, content,
+            }, { forceRebuild: task.forceRebuild });
+            reduced[index] = { bible, content, chapterIds: reductionChapterIds, sourceEventIds: reductionSourceEventIds };
+            context.commitCheckpoint("book-story-bible-reduction", reductionKey, reductionKey, () => undefined);
+            context.reportProgress(++completed / totalSteps);
+          } catch (error) {
+            groupController.abort(error);
+            throw error;
+          }
+        });
+      nodes = reduced;
+      context.reportProgress(completed / totalSteps);
+    }
+    const finalCheckpoint = context.getCheckpoint("book-story-bible-final", finalRequest.identityHash);
+    const finalParentBibleIds = nodes.map((node) => node.bible.id);
     if (finalCheckpoint?.inputHash === finalRequest.identityHash) {
       const bible = findBible(database, {
         jobId: context.job.id, bookId: task.bookId, scope: "final",
         sourceStartChapterId: chapterIds[0]!, sourceEndChapterId: chapterIds.at(-1)!,
-        sourceEventIds: finalRequest.sourceEventIds, parentBibleIds: intervalBibles.map((item) => item.id),
+        sourceEventIds: finalRequest.sourceEventIds, parentBibleIds: finalParentBibleIds,
       });
       if (!bible) throw new Error(`故事圣经最终检查点缺少持久结果：${finalRequest.identityHash}`);
       const parsed = parseStoryBibleFinalResponse(finalRequest, bible.content);
@@ -339,7 +413,7 @@ export function createBookStoryBibleJobHandler(
         intervalBibleIds: intervalBibles.map((item) => item.id) };
     }
     const input = {
-      kind: "final", chapterIds, intervals: finalRequest.intervals.map(({ content }) => ({ content })),
+      kind: "final", chapterIds, intervals: nodes.map(({ content }) => ({ content })),
     };
     const final = await callModelAndParse(context, config, fetchImpl, input, finalRequest.sourceEventIds,
       chapterIds,
@@ -348,7 +422,7 @@ export function createBookStoryBibleJobHandler(
     const bible = createBible(database, {
       bookId: task.bookId, scope: "final", sourceStartChapterId: task.intervals[0]!.chapterIds[0]!,
       sourceEndChapterId: task.intervals.at(-1)!.chapterIds.at(-1)!, sourceEventIds: finalRequest.sourceEventIds,
-      parentBibleIds: intervalBibles.map((item) => item.id), providerId: task.providerId, model: task.model,
+      parentBibleIds: finalParentBibleIds, providerId: task.providerId, model: task.model,
       jobId: context.job.id, content: final.content,
     }, { forceRebuild: task.forceRebuild });
     context.commitCheckpoint("book-story-bible-final", finalRequest.identityHash, finalRequest.identityHash, () => undefined);

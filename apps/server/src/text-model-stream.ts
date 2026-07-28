@@ -14,6 +14,18 @@ function streamError(message: string) {
   return new Error(`模型流式响应无效：${message}`);
 }
 
+function failureDetail(value: Record<string, unknown>, type: string) {
+  const response = value.response && typeof value.response === "object" && !Array.isArray(value.response)
+    ? value.response as Record<string, unknown> : undefined;
+  const nested = response?.error ?? value.error;
+  const error = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown> : undefined;
+  const code = [error?.code, error?.type, value.code].find((item) => typeof item === "string");
+  const message = [error?.message, value.message].find((item) => typeof item === "string");
+  const detail = [code, message].filter(Boolean).join(": ");
+  return detail ? `${type}: ${detail}` : `收到失败终态 ${type}`;
+}
+
 async function readWithSignal(reader: ReadableStreamDefaultReader<Uint8Array>, signal?: AbortSignal) {
   if (!signal) return reader.read();
   signal.throwIfAborted();
@@ -71,7 +83,7 @@ export async function streamedText(
         append(value.delta);
       } else if (type === "response.completed") terminal = true;
       else if (["response.failed", "response.incomplete", "error"].includes(type)) {
-        throw streamError(`收到失败终态 ${type}`);
+        throw streamError(failureDetail(value, type));
       }
       return;
     }
@@ -85,7 +97,7 @@ export async function streamedText(
         append(delta.text);
       }
     } else if (type === "message_stop") terminal = true;
-    else if (type === "error") throw streamError("收到失败终态 error");
+    else if (type === "error") throw streamError(failureDetail(value, type));
   };
   const line = (value: string) => {
     if (value === "") return dispatch();

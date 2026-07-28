@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
+import { canonicalBookStoryBibleJson, type BookStoryBibleContent } from "./book-story-bible-contract.js";
 import {
   BOOK_STORY_BIBLE_JOB_TYPE,
   BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS,
@@ -72,7 +74,8 @@ function contentWithChapterReference(
 function payload(chapterCount = 1): BookStoryBibleJobPayload {
   const intervals = buildStoryBibleIntervalRequests("book_a", Array.from({ length: chapterCount }, (_, chapterIndex) => ({
     chapterId: `chapter_${chapterIndex}`, chapterIndex,
-    sourceEvents: [{ id: `event_${chapterIndex}`, contentHash: `${chapterIndex + 1}`.repeat(64), inputBytes: 10 }],
+    sourceEvents: [{ id: `event_${chapterIndex}`,
+      contentHash: createHash("sha256").update(String(chapterIndex)).digest("hex"), inputBytes: 10 }],
   })), { providerId: config.providerId, model: config.model }, limits);
   const base = { contractVersion: BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION, bookId: "book_a", intervals, limits,
     forceRebuild: false } as const;
@@ -248,6 +251,60 @@ test("故事圣经重试复用已完成区间并从 checkpoint 进度继续", as
   assert.equal(calls, 1);
   assert.equal(execution.progress[0], 2 / 3);
   assert.deepEqual(execution.progress.at(-1), 1);
+});
+
+test("故事圣经按十路分层归并并整轮复用 checkpoint", async () => {
+  const task = payload(11);
+  task.limits = { ...task.limits, maxFinalIntervals: 11 };
+  task.requestHash = storyBibleJobRequestHash(task);
+  const calls: string[] = [];
+  const stored: Array<Record<string, unknown> & {
+    id: string; content: BookStoryBibleContent; contentHash: string;
+  }> = [];
+  const fetchImpl = (async (_input, init) => {
+    const input = prompt(init);
+    calls.push(input);
+    const eventId = input.match(/event_\d+/u)?.[0] ?? "event_0";
+    const chapterId = input.match(/chapter_\d+/u)?.[0] ?? "chapter_0";
+    return streamedModelResponse(content(eventId, chapterId));
+  }) as typeof fetch;
+  const createBible = ((_database: never, input: Record<string, unknown>) => {
+    const bibleContent = input.content as BookStoryBibleContent;
+    const row = {
+      ...input,
+      id: `bible_${stored.length + 1}`,
+      content: bibleContent,
+      contentHash: createHash("sha256").update(canonicalBookStoryBibleJson(bibleContent)).digest("hex"),
+    };
+    stored.push(row);
+    return row;
+  }) as never;
+  const findBible = ((_database: never, input: Record<string, unknown>) => stored.find((row) =>
+    row.jobId === input.jobId && row.bookId === input.bookId && row.scope === input.scope &&
+    row.sourceStartChapterId === input.sourceStartChapterId && row.sourceEndChapterId === input.sourceEndChapterId &&
+    JSON.stringify(row.sourceEventIds) === JSON.stringify(input.sourceEventIds) &&
+    JSON.stringify(row.parentBibleIds ?? []) === JSON.stringify(input.parentBibleIds ?? []))) as never;
+  const handler = createBookStoryBibleJobHandler(database(), config, { fetchImpl, createBible, findBible });
+
+  const first = context(task);
+  const firstResult = await handler(first.value);
+  assert.equal(calls.length, 13);
+  assert.equal(stored.length, 13);
+  assert.deepEqual(stored[11]?.parentBibleIds, Array.from({ length: 10 }, (_, index) => `bible_${index + 1}`));
+  assert.deepEqual(stored[12]?.parentBibleIds, ["bible_12", "bible_11"]);
+  assert.equal((JSON.parse(calls[12]!.match(/原任务：(.+)$/su)![1]!) as {
+    intervals: unknown[];
+  }).intervals.length, 2);
+
+  const second = context(task);
+  second.value.getCheckpoint = (stage: string, scopeKey: string) =>
+    first.checkpoints.includes(`${stage}:${scopeKey}`)
+      ? { jobId: second.value.job.id, stage, scopeKey, inputHash: scopeKey, completedAt: 1 }
+      : undefined;
+  const secondResult = await handler(second.value);
+  assert.deepEqual(secondResult, firstResult);
+  assert.equal(calls.length, 13);
+  assert.equal(stored.length, 13);
 });
 
 test("Story Bible 在 Anthropic Messages 也显式请求流式输出", async () => {

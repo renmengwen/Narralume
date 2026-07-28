@@ -78,6 +78,17 @@ test("流式失败终态、截断、无效事件和超限均失败", async (t) =
   });
 });
 
+test("流式失败原样保留 Responses 与 Messages 的上游错误代码和消息", async () => {
+  await assert.rejects(
+    () => streamedText(response(['data: {"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"input is too long"}}}\n\n']), "openai-response"),
+    /response\.failed: context_length_exceeded: input is too long/,
+  );
+  await assert.rejects(
+    () => streamedText(response(['data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n']), "anthropic-message"),
+    /error: overloaded_error: Overloaded/,
+  );
+});
+
 test("底层 reader 错误原样失败并释放锁", async () => {
   const failed = new Response(new ReadableStream<Uint8Array>({
     start(controller) { controller.error(new Error("reader failed")); },

@@ -1305,7 +1305,8 @@ test("故事圣经按事件 identity 复用模型切换，失败局部重试并�
     assert.equal(firstJob.type, BOOK_STORY_BIBLE_JOB_TYPE);
     assert.equal((firstJob.payload as { providerId: string }).providerId, provider.providerId);
     const storyStepTotal = (firstJob.payload as { intervals: unknown[] }).intervals.length + 1;
-    database.prepare("UPDATE jobs SET progress=? WHERE id=?").run(1 / storyStepTotal, firstJob.id);
+    database.prepare(`INSERT INTO job_checkpoints (job_id,stage,scope_key,input_hash,completed_at)
+      VALUES (?,?,?,?,?)`).run(firstJob.id, "book-story-bible-interval", "1".repeat(64), "1".repeat(64), Date.now());
     assert.deepEqual(service.get(run.id)!.progress.storyBible.steps, { completed: 1, total: storyStepTotal });
 
     const switched = { ...provider, providerId: "provider-switched", model: "model-switched" };
@@ -1338,6 +1339,7 @@ test("故事圣经按事件 identity 复用模型切换，失败局部重试并�
     ).run(Date.now(), remapped.job_id);
     await service.reconcile();
     assert.equal(service.get(run.id)!.failures[0]!.stage, "story_bible");
+    assert.equal(service.get(run.id)!.failures[0]!.message, "临时失败");
     assert.equal(service.retry(run.id).status, "building_story_bible");
 
     const content = (sourceEventId: string, chapterId: string) => ({

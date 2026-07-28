@@ -139,10 +139,10 @@ function parsePayload(value: unknown, config: ChapterTextModelConfig): BookStory
 
 function sourceEvents(database: DatabaseSync, request: StoryBibleIntervalRequest) {
   const rows = database.prepare(
-    `SELECT id, chapter_id, event_index, occurrence, event_type, payload_json
+    `SELECT id, chapter_id, event_type, payload_json
      FROM chapter_events WHERE id IN (${request.sourceEventIds.map(() => "?").join(",")})`,
   ).all(...request.sourceEventIds) as unknown as Array<{
-    id: string; chapter_id: string; event_index: number; occurrence: number; event_type: string; payload_json: string;
+    id: string; chapter_id: string; event_type: string; payload_json: string;
   }>;
   const byId = new Map(rows.map((row) => [row.id, row]));
   return request.sourceEventIds.map((id) => {
@@ -153,8 +153,7 @@ function sourceEvents(database: DatabaseSync, request: StoryBibleIntervalRequest
     let payload: unknown;
     try { payload = JSON.parse(event.payload_json); }
     catch { throw new Error("故事圣经任务来源事件不是有效 JSON"); }
-    return { id, chapterId: event.chapter_id, eventIndex: event.event_index, occurrence: event.occurrence,
-      eventType: event.event_type, payload };
+    return { id, chapterId: event.chapter_id, eventType: event.event_type, payload };
   });
 }
 
@@ -162,14 +161,12 @@ async function callModel(
   config: ChapterTextModelConfig,
   fetchImpl: typeof fetch,
   input: unknown,
-  allowedSourceEventIds: readonly string[],
-  allowedChapterIds: readonly string[],
   signal: AbortSignal,
   correctionError?: string,
 ) {
   const request = textModelRequest(config, correctionError
-    ? `你是书籍故事圣经汇总器。上一次输出被严格合同拒绝，请只纠正一次并重新输出完整 JSON。\n错误：${correctionError}\n精确输出 schema：\n${OUTPUT_SCHEMA}\n允许的 sourceEventIds：${canonical(allowedSourceEventIds)}\n允许的 chapterIds：${canonical(allowedChapterIds)}\n原任务：${canonical(input)}`
-    : `你是书籍故事圣经汇总器。interval 与 final 使用完全相同的输出 schema。只能引用允许的 sourceEventIds 和 chapterIds，只输出 JSON。\n精确输出 schema：\n${OUTPUT_SCHEMA}\n允许的 sourceEventIds：${canonical(allowedSourceEventIds)}\n允许的 chapterIds：${canonical(allowedChapterIds)}\n原任务：${canonical(input)}`);
+    ? `你是书籍故事圣经汇总器。上一次输出被严格合同拒绝，请只纠正一次并重新输出完整 JSON。\n错误：${correctionError}\n精确输出 schema：\n${OUTPUT_SCHEMA}\ninterval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n原任务：${canonical(input)}`
+    : `你是书籍故事圣经汇总器。interval 与 final 使用完全相同的输出 schema，只输出 JSON。interval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n精确输出 schema：\n${OUTPUT_SCHEMA}\n原任务：${canonical(input)}`);
   const response = await fetchImpl(request.endpoint, {
     method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
   });
@@ -194,13 +191,13 @@ async function callModelAndParse<T>(
   parse: (value: unknown) => T,
 ) {
   const raw = await withCancellation(context,
-    (signal) => callModel(config, fetchImpl, input, allowedSourceEventIds, allowedChapterIds, signal));
+    (signal) => callModel(config, fetchImpl, input, signal));
   try {
     parseModelContent(raw, allowedSourceEventIds, allowedChapterIds);
   } catch (error) {
     if (!(error instanceof BookStoryBibleContractError)) throw error;
     const corrected = await withCancellation(context,
-      (signal) => callModel(config, fetchImpl, input, allowedSourceEventIds, allowedChapterIds, signal, error.message));
+      (signal) => callModel(config, fetchImpl, input, signal, error.message));
     parseModelContent(corrected, allowedSourceEventIds, allowedChapterIds);
     return parse(corrected);
   }
@@ -235,7 +232,7 @@ export function createBookStoryBibleJobHandler(
     for (const [index, request] of task.intervals.entries()) {
       const checkpoint = context.getCheckpoint("book-story-bible-interval", request.identityHash);
       const input = {
-        kind: "interval", request, sourceEvents: sourceEvents(database, request),
+        kind: "interval", chapterIds: request.chapterIds, sourceEvents: sourceEvents(database, request),
       };
       const parsed = await callModelAndParse(context, config, fetchImpl, input, request.sourceEventIds, request.chapterIds,
         (raw) => parseStoryBibleIntervalResponse(request, raw));
@@ -254,11 +251,12 @@ export function createBookStoryBibleJobHandler(
       providerId: task.providerId, model: task.model,
     }, task.limits);
     const finalCheckpoint = context.getCheckpoint("book-story-bible-final", finalRequest.identityHash);
+    const chapterIds = task.intervals.flatMap((interval) => interval.chapterIds);
     const input = {
-      kind: "final", request: finalRequest,
+      kind: "final", chapterIds, intervals: finalRequest.intervals.map(({ content }) => ({ content })),
     };
     const final = await callModelAndParse(context, config, fetchImpl, input, finalRequest.sourceEventIds,
-      task.intervals.flatMap((interval) => interval.chapterIds),
+      chapterIds,
       (raw) => parseStoryBibleFinalResponse(finalRequest, raw));
     context.throwIfCancellationRequested();
     const bible = createBible(database, {

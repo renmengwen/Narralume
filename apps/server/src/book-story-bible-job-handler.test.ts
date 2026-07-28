@@ -77,7 +77,7 @@ function payload(chapterCount = 1): BookStoryBibleJobPayload {
 function database() {
   return { prepare: () => ({ all: (...ids: string[]) => ids.map((id) => ({
     id, chapter_id: id.replace("event", "chapter"), event_index: 0, occurrence: 1,
-    event_type: "plot", payload_json: JSON.stringify({ summary: id }),
+    event_type: "plot", payload_json: JSON.stringify({ summary: "事件摘要" }),
   })) }) } as never;
 }
 
@@ -89,6 +89,19 @@ function modelResponse(value: unknown) {
 
 function prompt(init?: RequestInit) {
   return (JSON.parse(String(init?.body)) as { input: string }).input;
+}
+
+function assertSlimPrompt(value: string, kind: "interval" | "final") {
+  for (const forbidden of ["\"request\"", "identityHash", "contentHash", "providerId", "model", "eventIndex", "occurrence"]) {
+    assert.equal(value.includes(forbidden), false, `模型输入不应包含 ${forbidden}`);
+  }
+  assert.match(value, /"chapterIds":\["chapter_0"\]/);
+  assert.equal(value.match(/event_0/gu)?.length, 1);
+  if (kind === "interval") {
+    assert.match(value, /"sourceEvents":\[\{"chapterId":"chapter_0","eventType":"plot","id":"event_0","payload":\{"summary":"事件摘要"\}\}\]/);
+  } else {
+    assert.match(value, /"intervals":\[\{"content":\{/);
+  }
 }
 
 function context(task: BookStoryBibleJobPayload, isCancelled: () => boolean = () => false) {
@@ -130,9 +143,11 @@ test("严格执行 interval 后独立 final，并将模型身份仅保存为溯�
     "flashbacks", "plotThreads", "confusingFacts", "spoilerRestrictions", "properNouns"]) assert.match(calls[0]!, new RegExp(`${key}:`));
   assert.match(calls[0]!, /revealCondition:string\|null/);
   assert.match(calls[0]!, /"foreshadowing"\|"suspense"\|"revelation"/);
-  assert.match(calls[0]!, /允许的 sourceEventIds：\["event_0"\]/);
-  assert.match(calls[0]!, /允许的 chapterIds：\["chapter_0"\]/);
+  assert.match(calls[0]!, /sourceEvents\[\]\.id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds/);
   assert.match(calls[1]!, /interval 与 final 使用完全相同的输出 schema/);
+  assert.match(calls[1]!, /只能使用 intervals\[\]\.content 中已有的 sourceEventIds/);
+  assertSlimPrompt(calls[0]!, "interval");
+  assertSlimPrompt(calls[1]!, "final");
   assert.equal(stored.length, 2);
   assert.deepEqual(stored.at(-1)?.parentBibleIds, ["bible_1"]);
   assert.equal(stored[0]?.providerId, config.providerId);
@@ -141,7 +156,7 @@ test("严格执行 interval 后独立 final，并将模型身份仅保存为溯�
   assert.deepEqual(result, { storyBibleId: "bible_2", contentHash: "2".repeat(64), intervalBibleIds: ["bible_1"] });
 });
 
-test("未知字段仅受控纠错一次并保留原任务、精确 schema 与来源白名单", async () => {
+test("未知字段仅受控纠错一次并保留最小原任务、精确 schema 与来源白名单", async () => {
   const task = payload();
   const calls: string[] = [];
   const invalid = { ...content("event_0", "chapter_0"), unexpected: [] };
@@ -161,8 +176,8 @@ test("未知字段仅受控纠错一次并保留原任务、精确 schema 与来
   assert.match(calls[1]!, /上一次输出被严格合同拒绝/);
   assert.match(calls[1]!, /错误：故事圣经包含未知字段：unexpected/);
   assert.match(calls[1]!, /顶层必须恰好包含以下 12 个数组/);
-  assert.match(calls[1]!, /允许的 sourceEventIds：\["event_0"\]/);
-  assert.match(calls[1]!, /原任务：\{"kind":"interval"/);
+  assert.match(calls[1]!, /原任务：\{"chapterIds":\["chapter_0"\],"kind":"interval"/);
+  assertSlimPrompt(calls[1]!, "interval");
 });
 
 test("第二答仍含未知字段时原样失败且不会第三次请求或持久化", async () => {

@@ -677,6 +677,11 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     message: planJob.status === "cancelled" ? "全书规划已中断，请重试" : "全书规划失败，请重试",
     canRetry: true,
   }] : [];
+  const stopping = run.status === "paused" && Boolean(database.prepare(
+    `SELECT 1 FROM jobs job JOIN series_pipeline_jobs mapping ON mapping.job_id = job.id
+     WHERE mapping.run_id = ? AND job.status = 'running' AND job.cancel_requested = 1
+       AND job.run_after = ? LIMIT 1`,
+  ).get(run.id, PAUSED_JOB_RUN_AFTER));
   return {
     ...run,
     progress: {
@@ -701,7 +706,7 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     failures: [...failures, ...storyFailure, ...planFailure, ...scriptFailures],
     actions: {
       canPause: !["paused", "cancelled", "completed"].includes(run.status),
-      canResume: run.status === "paused",
+      canResume: run.status === "paused" && !stopping,
       canCancel: !["cancelled", "completed"].includes(run.status),
       canRetry: failures.length + storyFailure.length + planFailure.length + scriptFailures.length > 0,
     },

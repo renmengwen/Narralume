@@ -41,6 +41,7 @@ import {
   resumeSeriesPipelineRun,
   cancelSeriesPipelineRun,
   retrySeriesPipelineRun,
+  seriesPipelineView,
   SeriesPipelineError,
   setSeriesPipelineStatus,
 } from "./series-pipeline-store.js";
@@ -365,11 +366,13 @@ test("pause 请求中断独占 running Job，停止完成后 resume 重新排队
     assert.deepEqual({ ...database.prepare(
       "SELECT status,cancel_requested,run_after FROM jobs WHERE id=?",
     ).get(job.id) }, { status: "running", cancel_requested: 1, run_after: Number.MAX_SAFE_INTEGER });
+    assert.equal(seriesPipelineView(database, getSeriesPipelineRun(database, run.id)!).actions.canResume, false);
     assert.throws(() => resumeSeriesPipelineRun(database, run.id), /正在停止/);
 
     database.prepare(
       `UPDATE jobs SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?`,
     ).run(Date.now(), job.id);
+    assert.equal(seriesPipelineView(database, getSeriesPipelineRun(database, run.id)!).actions.canResume, true);
     assert.equal(resumeSeriesPipelineRun(database, run.id).status, "analyzing_chapters");
     assert.deepEqual({ ...database.prepare(
       "SELECT status,progress,attempts,cancel_requested,run_after FROM jobs WHERE id=?",

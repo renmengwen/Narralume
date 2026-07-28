@@ -43,12 +43,12 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 ## 当前恢复入口
 
-- 当前分支：`codex/auto-full-book-pipeline`（从 `dev@7532c44` 派生；业务验证和推送仅在该开发分支进行，未经用户授权不合并 `main`）
-- 最近冻结控制提交：`dada63b`（当前控制提交由 Git 历史定位），位于 `codex/auto-full-book-pipeline`；开发基线与 `origin/dev` 均为 `7532c4469288ec22fa8f2ef619606c111d4b1617`。AUTO-01 server candidate revision `1af5209582c2d1da7acd1a9f41314f771ebcc2b6` / tree `e8650e779f20fcafe7aa16754233ec7c4d88579b` 已冻结，base 为 `efb67380b00580bfd5c7f338d953bb1596ba6516`。
-- 工作区：真实 Git index 为空；仅有冻结 candidate 的 12 个 server 业务路径未提交，Writer 已释放且冻结期间禁止修改这些路径。`/docs/` 下本地详细方案继续被 `.gitignore` 忽略，`.gitignore` 未修改。并行子代理只做不冲突的 AUTO-01 web 准备、AUTO-03/04 与 PC-06 来源核查，不触碰冻结路径或 Git index。
-- 最近已登记验证仍以 2026-07-26 证据为准：CFG-02 根 typecheck/test/build GREEN，server 221 PASS/1 Windows 权限 SKIP、web 53 PASS；北派 Episode 1 已入库并 approved，sources 连续覆盖 DB 章节 1..82，干净 v2/rate1 timeline `3c600aec…` 为 976,580ms、262 segments/cues，重启与音频 hash 恢复 PASS；PC-04 当前仍只有 smoke 单图覆盖，不能冒充真实多图验收。`cd0e3db`、`873e2fc` 和 `7532c44` 本轮只做代码/Git 边界核对，未重新运行测试，不新增验证结论。
-- 当前 Task：`AUTO-01` 为 `changes_requested`；server candidate `1af5209:e8650e7` 的 Spec 与 Code Quality Review 均 FAIL，旧 candidate 已失效，server Writer 重新租出；web tranche 继续在不重叠路径并行实现。`AUTO-02～04` 仍为 `queued`；`PC-05`、`PC-04` 仍为 `implementing`；`PC-06` 仍为 `queued`。
-- 下一动作：server Writer 只修四个已合并 P1：provider/model 移出复用 hash、通用章节分析 API active-run guard、共享 Job pause/cancel 与人工写线性化、cancelled Job 可见可重试；web Writer 同时完成设置/真实进度。修复后重跑门禁并生成新 candidate，旧 Review 不沿用。
+- 当前分支：`dev`；用户已明确授权把已验收的 `codex/auto-full-book-pipeline` 合并到 `dev`，未合并 `main`。
+- 最近业务合并提交：`447f8e4412b119c4d443c023b8a8f856ac04ff76`（`feat(auto): 合并固定全本改写流水线`）；合并前先以独立文档控制提交 `4499086` 原样保护 `dev` 起点的 `docs/project-design.md` 与本 Ledger 修改，随后解决的唯一冲突是本 Ledger，最终内容采用功能分支最新动态证据。本控制提交由 Git 历史定位。
+- 工作区：业务合并提交后工作树与 index 干净；本控制提交仅更新本 Ledger 恢复入口。`/docs/` 下本地详细方案继续被 `.gitignore` 忽略，`.gitignore` 未修改；未执行 reset、restore、clean 或 stash。
+- 最近验证：在 `dev` 的未提交 merge candidate 上串行执行 `npm run typecheck`、`npm test`、`npm run build` 与工作树/index `git diff --check`，全部 PASS；server 零失败，web 95/95，Vite 137 modules，最终 bundle 约 483.99kB/144.36kB gzip。合并前功能分支同一真实 run 的浏览器 Gate 仍为 `awaiting_review`，章节 3/3、Story Bible 1/1、规划 3/3、稿件 6/6、失败 0、批准 0。
+- 当前 Task：`AUTO-01～AUTO-04` 与对应 Requirement 均为 `complete`；PC-04/PC-05/PC-06 的已知工程接线缺口已关闭，但根 Goal 仍为 `active`，因为真实三集仍未经过用户逐集稿件批准、TTS 听感、视觉审美、联系表整集审核以及后续 render/final/MP4/package/restore 产品 Gate。
+- 下一动作：从同一真实 run 的 `awaiting_review` 恢复，由用户逐集审核包装稿；不得自动批准或修改 SQLite 绕过。完成稿件批准后继续真实双 TTS 短样试听与 voice/rate 选择、完整 timeline 人工听审、视觉候选批准、联系表整集审核，再执行 readiness → render_chunks → final_video → 受控 MP4 → 服务端项目包与隔离 restore。
 
 ## 2026-07-25 产品闭环复开
 

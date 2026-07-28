@@ -91,8 +91,7 @@ export function parseExportApiJob(value: unknown, expected: { episodeId: string;
 }
 
 export function parseExportReadiness(value: unknown, expected: { episodeId: string; timelineHash: string }): ExportReadiness {
-  const root = object(value);
-  const input = object(root.readiness);
+  const input = object(value);
   if (input.episodeId !== expected.episodeId || input.timelineHash !== expected.timelineHash) {
     throw new Error("导出复核结果不属于当前分集或时间轴");
   }

@@ -3,7 +3,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 
-import { ExportStage } from "../src/production/export/ExportStage.tsx";
+import { ExportStage, FinalVideoEvidence } from "../src/production/export/ExportStage.tsx";
 import {
   exportArtifactUrl,
   exportReadinessUrl,
@@ -41,18 +41,20 @@ function job(status: JobRecord["status"], type = "render_chunks"): JobRecord {
 }
 
 test("服务端复核合同拒绝身份错配和自相矛盾的门禁", () => {
-  const valid = { readiness: readiness({ productionReady: false, blockers: [{ code: "script", message: "包装稿尚未批准" }] }) };
+  const valid = readiness({ productionReady: false, blockers: [{ code: "script", message: "包装稿尚未批准" }] });
   assert.equal(parseExportReadiness(valid, identity).blockers[0]?.message, "包装稿尚未批准");
-  assert.throws(() => parseExportReadiness({ readiness: { ...valid.readiness, episodeId: "episode_2" } }, identity), /不属于当前分集/);
-  assert.throws(() => parseExportReadiness({ readiness: { ...valid.readiness, productionReady: true } }, identity), /阻断清单不一致/);
-  assert.throws(() => parseExportReadiness({ readiness: readiness({ renderChunks: { ready: true, completed: 1, total: 2 } }) }, identity), /分片复核计数不一致/);
+  assert.throws(() => parseExportReadiness({ ...valid, episodeId: "episode_2" }, identity), /不属于当前分集/);
+  assert.throws(() => parseExportReadiness({ ...valid, productionReady: true }, identity), /阻断清单不一致/);
+  assert.throws(() => parseExportReadiness(readiness({ renderChunks: { ready: true, completed: 1, total: 2 } }), identity), /分片复核计数不一致/);
+  assert.throws(() => parseExportReadiness({ ok: false, message: "复核失败" }, identity), /不属于当前分集/);
+  assert.throws(() => parseExportReadiness({ readiness: valid }, identity), /不属于当前分集/);
 });
 
 test("无 URL Job 时从 readiness 恢复当前 running 任务", () => {
-  const parsed = parseExportReadiness({ readiness: {
+  const parsed = parseExportReadiness({
     ...readiness(),
     jobs: { renderChunks: { id: "render_running", type: "render_chunks", status: "running", progress: 0.4, errorMessage: null }, finalVideo: null },
-  } }, identity);
+  }, identity);
   assert.equal(selectReadinessJob(parsed)?.id, "render_running");
   assert.equal(selectReadinessJob(parsed)?.status, "running");
 });
@@ -62,14 +64,14 @@ test("URL Job 拒绝 foreign identity、坏状态和错误类型", () => {
   assert.equal(parseExportApiJob(valid, identity).id, "job_1");
   assert.throws(() => parseExportApiJob({ job: { ...valid.job, payload: { ...identity, episodeId: "episode_2" } } }, identity), /不属于当前分集/);
   assert.throws(() => parseExportApiJob({ job: { ...valid.job, status: "waiting" } }, identity), /任务摘要格式无效/);
-  assert.throws(() => parseExportReadiness({ readiness: { ...readiness(), jobs: { renderChunks: { id: "bad", type: "final_video", status: "running", progress: 0, errorMessage: null }, finalVideo: null } } }, identity), /任务摘要格式无效/);
+  assert.throws(() => parseExportReadiness({ ...readiness(), jobs: { renderChunks: { id: "bad", type: "final_video", status: "running", progress: 0, errorMessage: null }, finalVideo: null } }, identity), /任务摘要格式无效/);
 });
 
 test("readiness 恢复当前阶段 terminal 失败任务并保留原因", () => {
-  const parsed = parseExportReadiness({ readiness: {
+  const parsed = parseExportReadiness({
     ...readiness(),
     jobs: { renderChunks: { id: "render_failed", type: "render_chunks", status: "failed", progress: 0.7, errorMessage: "FFmpeg 失败" }, finalVideo: null },
-  } }, identity);
+  }, identity);
   const recovered = selectReadinessJob(parsed);
   assert.equal(recovered?.id, "render_failed");
   assert.deepEqual(readinessOperationStatus(parsed, recovered), { message: "渲染分片任务失败：FFmpeg 失败", error: "FFmpeg 失败" });
@@ -166,4 +168,16 @@ test("独立导出页保留单主操作、44px 控件并等待 verified final �
   assert.match(html, /最终视频复核通过后可创建/);
   assert.doesNotMatch(html, />创建服务端项目包</);
   assert.equal((html.match(/bg-\[var\(--accent\)\]/g) ?? []).length, 1);
+});
+
+test("最终视频证据显示当前 Job ID 和真实 MP4 SHA-256", () => {
+  const html = renderToString(createElement(FinalVideoEvidence, {
+    final: { exportHash, fileHash, bytes: 1024, durationMs: 61_000 },
+    jobId: "job_final_video_1",
+  }));
+  assert.match(html, /最终视频证据/);
+  assert.match(html, /job_final_video_1/);
+  assert.match(html, new RegExp(fileHash));
+  assert.match(html, /MP4 SHA-256/);
+  assert.match(html, /1:01 · 1\.0 KiB/);
 });

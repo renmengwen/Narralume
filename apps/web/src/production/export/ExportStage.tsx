@@ -49,6 +49,7 @@ export function ExportStage(props: ExportWorkspaceOptions) {
             <Step index="01" title="render_chunks" detail={state.readiness ? `${state.readiness.renderChunks.completed}/${state.readiness.renderChunks.total} 个分片已验证` : "等待生产复核"} done={state.readiness?.renderChunks.ready === true} />
             <Step index="02" title="final_video" detail={final ? `${formatExportDuration(final.durationMs)} · ${formatExportBytes(final.bytes)}` : "必须在全部分片通过后执行"} done={Boolean(final)} />
           </ol>
+          {final ? <FinalVideoEvidence final={final} jobId={state.readiness?.jobs.finalVideo?.id} /> : null}
         </section>
       </div>
     </div>
@@ -111,4 +112,16 @@ function Identity({ label, value }: { label: string; value: string }) {
 
 function Step({ index, title, detail, done }: { index: string; title: string; detail: string; done: boolean }) {
   return <li className="grid grid-cols-[32px_1fr_auto] items-center gap-3"><span className="font-mono text-[10px] text-[var(--fg-muted)]">{index}</span><span><strong className="block font-mono">{title}</strong><span className="text-[var(--fg-secondary)]">{detail}</span></span><span className="font-semibold">{done ? "已通过" : "待处理"}</span></li>;
+}
+
+export function FinalVideoEvidence({ final, jobId }: {
+  final: { exportHash: string; fileHash: string; bytes: number; durationMs: number };
+  jobId: string | undefined;
+}) {
+  return <div className="mt-4 grid gap-2 border-t border-[var(--border-subtle)] pt-4 text-xs" aria-label="最终视频证据">
+    <p><span className="block text-[var(--fg-muted)]">当前 Job ID</span><code className="break-all text-[11px]">{jobId ?? "服务端未返回"}</code></p>
+    <p><span className="block text-[var(--fg-muted)]">MP4 SHA-256</span><code className="break-all text-[11px]">{final.fileHash}</code></p>
+    <p><span className="block text-[var(--fg-muted)]">导出标识</span><code className="break-all text-[11px]">{final.exportHash}</code></p>
+    <p className="text-[var(--fg-secondary)]">{`${formatExportDuration(final.durationMs)} · ${formatExportBytes(final.bytes)}`}</p>
+  </div>;
 }

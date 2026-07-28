@@ -620,8 +620,21 @@ PC-02 当前 checkpoint：
 | 业务提交 | `bde7a4e fix(auto): 按目标集数动态分区全书规划` |
 | 当前边界 / 恢复 | 工程阻断已解除，真实规划仍在运行，不登记为“20 集计划已完成”。若后续模型调用失败，只按正式 Job 错误处理；现有 `full-book-plan-interval` checkpoint 尚无对应耐久 interval 结果，不能伪称可无损复用成功区间，也不得直接改 SQLite 绕过。 |
 
+## 2026-07-29 规划与稿件安全并发及真实进度
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-03/04-CONCURRENCY-PROGRESS-01` / 评估并实现全书规划与忠实稿安全并发，读取本书冻结的 `chapterConcurrency`，并修复前端漏接当前 Job 真实进度。 |
+| 状态 | `complete`（工程实现与验证完成；正式 20 集规划产物仍未生成） |
+| 并发边界 | 全书规划 interval 使用有界 worker pool 并按原索引落位，全部 interval 完成后才执行 final；单 Episode 内 skeleton 仍顺序，faithful beats 有界并发且按 beat 原序落位，packaged 等待全部 faithful 完成；Episode 之间继续串行消费上一集 `scriptHandoff`。任一同组调用失败会中断其余在途请求。有效映射 run 的 `chapterConcurrency` 取最小值，无映射回退 `1`；不硬编码 `8`，不新增依赖、队列、Store 或 migration。 |
+| 真实进度 / OpenDesign | Run API 复用现有三秒轮询，透传当前 Job 的 `status/progress/attempts/maxAttempts`。规划页同时显示冻结 Episode 产物数与当前规划 Job 百分比，稿件页同时显示已持久双稿数、当前单集 Job 百分比和忠实稿并发上限；百分比直接来自 `jobs.progress`，不是 token 估算。沿用 `narralume-product` 暖中性高密度进度行，无新组件/样式/依赖；修正 checking coverage、paused、failed 等非运行状态文案冲突，queued attempt 明确为“已尝试”。独立 OpenDesign verifier 其余项 PASS。 |
+| 验证证据 | Full Book Plan 配置 `2` 的测试证明峰值并发 `2` 且 final 不提前；稿件配置 `2` 的测试证明 faithful 峰值并发 `2`、packaged 等待 3 个 faithful 完成；既有跨集 `scriptHandoff` 串行测试通过。最终 Server `410 PASS / 0 FAIL / 1 Windows 权限 SKIP`、Web `100 PASS / 0 FAIL`，根 `npm run typecheck`、`npm run build`、`git diff --check` 全部 PASS；Vite 137 modules。 |
+| 正式运行事实 | 业务接回 `dev` 后仅 3101 watch 热重载为 PID `27824`，`/api/health` HTTP 200；5174 保持原 PID `36368`。正式 Job `job_full_book_plan_9c5d…` 已在旧串行实现中耗尽 `3/3` 次并终态失败：`handler_failed`，原始错误“全书规划模型请求失败（HTTP 524）”；Run `pipeline_95ade1af…` 保持 `planning_episodes`、`episodePlan=0/20`、`scripts=0/40`、`canRetry=true`。本轮未自动 retry、pause、resume、cancel 或修改 SQLite。 |
+| 业务提交 / 恢复入口 | `f0009b3 perf(auto): 并发规划稿件并展示真实任务进度`。用户可在失败页显式重试；新 Job 执行时会使用该书冻结的 `chapterConcurrency=8` 并显示真实进度。现有 Full Book Plan interval 仍无耐久输出，旧失败重试会重新执行规划 interval；不得把 checkpoint 计数伪装成可恢复产物。 |
+
 ## 决策与剩余风险
 
+- 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。
 - 2026-07-25：用户授权后续生图、多模态和配音模型真实测试只读 `D:\code3\MuseDock` 中已有的本机配置与调用合同并直接执行，不因此普通配置问题暂停提问；MuseDock 仍不得成为 Narralume 运行时依赖，密钥/账号不得进入代码、提交、Ledger 或输出。
 - 2026-07-25：用户明确要求前端也优先复用参考项目逻辑、避免重复造轮子，并指出必须服从文档冻结优先级。PC-02 顺序固定为 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock`；第一版仅登记 MuseDock 的来源记录已由 `980721d` 纠正，尚未据此抽取业务代码。抽取前登记来源仓库、commit、源文件和改造说明；只迁移通用交互/编排方法，Narralume 保持独立运行时与自身产品合同。

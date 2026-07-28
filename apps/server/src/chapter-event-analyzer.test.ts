@@ -4,8 +4,21 @@ import test from "node:test";
 import {
   createOpenAiResponsesChapterAnalyzer,
   parseChapterAnalysisEvents,
+  textModelRequest,
   type ChapterEvidenceAtom,
 } from "./chapter-event-analyzer.js";
+
+test("文本模型请求默认保持非流式，只有显式选择才发送 stream", () => {
+  const normal = JSON.parse(textModelRequest({
+    baseUrl: "https://model.example/v1", apiKey: "key", model: "model", providerId: "provider",
+  }, "input").body) as Record<string, unknown>;
+  const streamed = JSON.parse(textModelRequest({
+    baseUrl: "https://model.example/v1", apiKey: "key", model: "model", providerId: "provider",
+    protocol: "anthropic-message",
+  }, "input", 8192, true).body) as Record<string, unknown>;
+  assert.equal("stream" in normal, false);
+  assert.equal(streamed.stream, true);
+});
 
 const atoms: ChapterEvidenceAtom[] = [
   { id: "evidence_a", byteStart: 100, byteEnd: 112, text: "吴邪进入墓道" },

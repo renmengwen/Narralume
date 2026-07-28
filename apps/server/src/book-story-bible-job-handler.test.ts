@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   BOOK_STORY_BIBLE_JOB_TYPE,
+  BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS,
   BOOK_STORY_BIBLE_TIMEOUT_MS,
+  BOOK_STORY_BIBLE_TOTAL_TIMEOUT_MS,
   createBookStoryBibleJobHandler,
   storyBibleJobRequestHash,
   type BookStoryBibleJobPayload,
@@ -24,8 +26,10 @@ const config = {
   protocol: "openai-response" as const,
 };
 
-test("故事圣经使用三分钟有限单次请求超时", () => {
+test("故事圣经使用有限首事件、空闲与总时限", () => {
   assert.equal(BOOK_STORY_BIBLE_TIMEOUT_MS, 180_000);
+  assert.equal(BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS, 180_000);
+  assert.equal(BOOK_STORY_BIBLE_TOTAL_TIMEOUT_MS, 900_000);
 });
 
 function content(sourceEventId: string, chapterId: string) {
@@ -87,6 +91,13 @@ function modelResponse(value: unknown) {
   });
 }
 
+function streamedModelResponse(value: unknown) {
+  const delta = JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(value) });
+  return new Response(`data: ${delta}\n\ndata: {"type":"response.completed"}\n\n`, {
+    status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" },
+  });
+}
+
 function prompt(init?: RequestInit) {
   return (JSON.parse(String(init?.body)) as { input: string }).input;
 }
@@ -124,11 +135,13 @@ function context(task: BookStoryBibleJobPayload, isCancelled: () => boolean = ()
 test("严格执行 interval 后独立 final，并将模型身份仅保存为溯源", async () => {
   const task = payload();
   const calls: string[] = [];
+  const streamFlags: unknown[] = [];
   const stored: Array<Record<string, unknown>> = [];
   let responseIndex = 0;
   const responses = [content("event_0", "chapter_0"), content("event_0", "chapter_0")];
   const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
     calls.push(prompt(init));
+    streamFlags.push((JSON.parse(String(init?.body)) as { stream?: unknown }).stream);
     return modelResponse(responses[responseIndex++]);
   };
   const createBible = ((_database: never, input: Record<string, unknown>) => {
@@ -138,6 +151,7 @@ test("严格执行 interval 后独立 final，并将模型身份仅保存为溯�
   const execution = context(task);
   const result = await createBookStoryBibleJobHandler(database(), config, { fetchImpl: fetchImpl as typeof fetch, createBible })(execution.value);
   assert.equal(calls.length, 2);
+  assert.deepEqual(streamFlags, [true, true]);
   assert.match(calls[0]!, /顶层必须恰好包含以下 12 个数组/);
   for (const key of ["characters", "relationships", "locations", "organizations", "items", "concepts", "timeline",
     "flashbacks", "plotThreads", "confusingFacts", "spoilerRestrictions", "properNouns"]) assert.match(calls[0]!, new RegExp(`${key}:`));
@@ -156,6 +170,63 @@ test("严格执行 interval 后独立 final，并将模型身份仅保存为溯�
   assert.deepEqual(result, { storyBibleId: "bible_2", contentHash: "2".repeat(64), intervalBibleIds: ["bible_1"] });
 });
 
+test("Story Bible 只在明确流终态后解析并持久化", async () => {
+  let calls = 0;
+  let writes = 0;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => { calls += 1; return streamedModelResponse(content("event_0", "chapter_0")); }) as typeof fetch,
+    createBible: (() => { writes += 1; return { id: `bible_${writes}`, contentHash: "1".repeat(64) }; }) as never,
+  });
+  await handler(context(payload()).value);
+  assert.equal(calls, 2);
+  assert.equal(writes, 2);
+});
+
+test("Story Bible 在 Anthropic Messages 也显式请求流式输出", async () => {
+  let body: Record<string, unknown> | undefined;
+  const handler = createBookStoryBibleJobHandler(database(), { ...config, protocol: "anthropic-message" }, {
+    fetchImpl: (async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response("failed", { status: 503 });
+    }) as typeof fetch,
+  });
+  await assert.rejects(() => handler(context(payload()).value), /HTTP 503/);
+  assert.equal(body?.stream, true);
+});
+
+test("流式响应无成功终态时不纠错且不持久化 partial", async () => {
+  let calls = 0;
+  let writes = 0;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => {
+      calls += 1;
+      return new Response('data: {"type":"response.output_text.delta","delta":"{}"}\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch,
+    createBible: (() => { writes += 1; return { id: "x", contentHash: "1".repeat(64) }; }) as never,
+  });
+  await assert.rejects(() => handler(context(payload()).value), /没有明确成功终态/);
+  assert.equal(calls, 1);
+  assert.equal(writes, 0);
+});
+
+test("流式 reader 等待期间响应持久取消且不触发纠错", async () => {
+  let cancelled = false;
+  let calls = 0;
+  const handler = createBookStoryBibleJobHandler(database(), config, {
+    fetchImpl: (async () => {
+      calls += 1;
+      cancelled = true;
+      return new Response(new ReadableStream<Uint8Array>(), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch,
+  });
+  await assert.rejects(() => handler(context(payload(), () => cancelled).value), JobCancelledError);
+  assert.equal(calls, 1);
+});
+
 test("未知字段仅受控纠错一次并保留最小原任务、精确 schema 与来源白名单", async () => {
   const task = payload();
   const calls: string[] = [];
@@ -165,7 +236,7 @@ test("未知字段仅受控纠错一次并保留最小原任务、精确 schema 
   const handler = createBookStoryBibleJobHandler(database(), config, {
     fetchImpl: (async (_input, init) => {
       calls.push(prompt(init));
-      return modelResponse(responses[responseIndex++]);
+      return streamedModelResponse(responses[responseIndex++]);
     }) as typeof fetch,
     createBible: ((_database: never, input: Record<string, unknown>) => ({
       id: String(input.scope), contentHash: "1".repeat(64),

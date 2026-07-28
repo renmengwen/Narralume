@@ -21,9 +21,12 @@ import {
 } from "./book-story-bible-job.js";
 import { createBookStoryBible } from "./book-story-bible-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { streamedText } from "./text-model-stream.js";
 
 export const BOOK_STORY_BIBLE_JOB_TYPE = "book_story_bible_build";
 export const BOOK_STORY_BIBLE_TIMEOUT_MS = 180_000;
+export const BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS = 180_000;
+export const BOOK_STORY_BIBLE_TOTAL_TIMEOUT_MS = 900_000;
 
 export interface BookStoryBibleJobPayload {
   contractVersion: typeof BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION;
@@ -162,11 +165,12 @@ async function callModel(
   fetchImpl: typeof fetch,
   input: unknown,
   signal: AbortSignal,
+  onActivity: () => void,
   correctionError?: string,
 ) {
   const request = textModelRequest(config, correctionError
     ? `你是书籍故事圣经汇总器。上一次输出被严格合同拒绝，请只纠正一次并重新输出完整 JSON。\n错误：${correctionError}\n精确输出 schema：\n${OUTPUT_SCHEMA}\ninterval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n原任务：${canonical(input)}`
-    : `你是书籍故事圣经汇总器。interval 与 final 使用完全相同的输出 schema，只输出 JSON。interval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n精确输出 schema：\n${OUTPUT_SCHEMA}\n原任务：${canonical(input)}`);
+    : `你是书籍故事圣经汇总器。interval 与 final 使用完全相同的输出 schema，只输出 JSON。interval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n精确输出 schema：\n${OUTPUT_SCHEMA}\n原任务：${canonical(input)}`, 8192, true);
   const response = await fetchImpl(request.endpoint, {
     method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
   });
@@ -174,11 +178,12 @@ async function callModel(
     await response.body?.cancel();
     throw new Error(`故事圣经模型请求失败（HTTP ${response.status}）`);
   }
-  try { return JSON.parse(responseText(await limitedJson(response))) as unknown; }
-  catch (error) {
-    if (error instanceof Error && /大小限制/u.test(error.message)) throw error;
-    throw new Error("故事圣经模型返回了无效 JSON");
-  }
+  const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+    ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+    : responseText(await limitedJson(response));
+  try {
+    return JSON.parse(text) as unknown;
+  } catch { throw new Error("故事圣经模型返回了无效 JSON"); }
 }
 
 async function callModelAndParse<T>(
@@ -191,30 +196,46 @@ async function callModelAndParse<T>(
   parse: (value: unknown) => T,
 ) {
   const raw = await withCancellation(context,
-    (signal) => callModel(config, fetchImpl, input, signal));
+    (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity));
   try {
     parseModelContent(raw, allowedSourceEventIds, allowedChapterIds);
   } catch (error) {
     if (!(error instanceof BookStoryBibleContractError)) throw error;
     const corrected = await withCancellation(context,
-      (signal) => callModel(config, fetchImpl, input, signal, error.message));
+      (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, error.message));
     parseModelContent(corrected, allowedSourceEventIds, allowedChapterIds);
     return parse(corrected);
   }
   return parse(raw);
 }
 
-async function withCancellation<T>(context: Parameters<JobHandler>[0], call: (signal: AbortSignal) => Promise<T>) {
+async function withCancellation<T>(
+  context: Parameters<JobHandler>[0],
+  call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+) {
   context.throwIfCancellationRequested();
   const controller = new AbortController();
+  const idleController = new AbortController();
+  const totalController = new AbortController();
   const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
+  let idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")), BOOK_STORY_BIBLE_TIMEOUT_MS);
+  const total = setTimeout(() => totalController.abort(new DOMException("total timeout", "TimeoutError")),
+    BOOK_STORY_BIBLE_TOTAL_TIMEOUT_MS);
+  const onActivity = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")), BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS);
+  };
   try {
-    return await call(AbortSignal.any([controller.signal, AbortSignal.timeout(BOOK_STORY_BIBLE_TIMEOUT_MS)]));
+    return await call(AbortSignal.any([
+      controller.signal,
+      idleController.signal,
+      totalController.signal,
+    ]), onActivity);
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("故事圣经模型请求超时");
     throw error;
-  } finally { clearInterval(poll); }
+  } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
 }
 
 export function createBookStoryBibleJobHandler(

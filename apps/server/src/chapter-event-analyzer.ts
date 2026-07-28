@@ -184,7 +184,7 @@ export function responseText(body: unknown) {
   throw new Error("章节分析模型返回结果缺少文本内容");
 }
 
-export function textModelRequest(config: ChapterTextModelConfig, input: string, maxTokens = 8192) {
+export function textModelRequest(config: ChapterTextModelConfig, input: string, maxTokens = 8192, stream = false) {
   const anthropic = config.protocol === "anthropic-message";
   const endpoint = new URL(anthropic ? "messages" : "responses", `${config.baseUrl.replace(/\/+$/, "")}/`);
   const headers: Record<string, string> = anthropic
@@ -194,8 +194,8 @@ export function textModelRequest(config: ChapterTextModelConfig, input: string, 
     endpoint,
     headers,
     body: JSON.stringify(anthropic
-      ? { model: config.model, max_tokens: maxTokens, messages: [{ role: "user", content: input }] }
-      : { model: config.model, input }),
+      ? { model: config.model, max_tokens: maxTokens, messages: [{ role: "user", content: input }], ...(stream ? { stream: true } : {}) }
+      : { model: config.model, input, ...(stream ? { stream: true } : {}) }),
   };
 }
 

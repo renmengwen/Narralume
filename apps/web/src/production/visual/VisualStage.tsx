@@ -51,8 +51,25 @@ export function VisualStage(props: Parameters<typeof useVisualWorkspace>[0]) {
     </div>
     <aside className="p-4"><h3 className="text-sm font-bold">联系表预览</h3><p className="mt-2 text-xs leading-6 text-[var(--fg-tertiary)]">{state.plan.continuous ? "字幕已连续覆盖" : "字幕尚未完整连续覆盖"} · {state.segments.length}/{state.plan.suggestion.targetCount || "?"} 段建议 · 开头 {state.plan.suggestion.openingCount}/{openingSuggestion} 画面 · {state.plan.productionReady ? "全部可生产" : "存在未通过门禁的绑定"}</p>
       <div className="mt-4 grid grid-cols-2 gap-2">{[...state.segments].sort((a, b) => a.segmentIndex - b.segmentIndex).map((segment) => { const selected = segment.assets.find((asset) => asset.selectedCandidateId)?.selectedCandidateId; return <article key={segment.id} className="overflow-hidden rounded border border-[var(--border-subtle)] bg-[var(--bg-subtle)]">{selected ? <img src={`/api/candidates/${encodeURIComponent(selected)}/image`} alt={`视觉段 ${segment.segmentIndex + 1} 预览`} className="aspect-[9/16] w-full object-cover" /> : <div className="grid aspect-[9/16] place-items-center text-[10px] text-[var(--fg-tertiary)]">未绑定图片</div>}<p className="p-2 text-[10px]">段 {segment.segmentIndex + 1} · cue {segment.cueStartIndex + 1}–{segment.cueEndIndex + 1}</p></article>; })}</div>
-      <button type="button" disabled={state.busy || !state.plan.productionReady} onClick={() => void state.exportContactSheet()} className="mt-4 min-h-10 w-full rounded border border-[var(--accent)] px-3 text-xs font-semibold text-[var(--accent)] disabled:border-[var(--border-subtle)] disabled:text-[var(--fg-tertiary)]">服务端真实导出联系表</button>
+      {!state.reviewWorkspace ? <button type="button" disabled={state.busy || !state.plan.productionReady} onClick={() => void state.exportContactSheet()} className="mt-4 min-h-11 w-full rounded bg-[var(--accent)] px-3 text-xs font-semibold text-white disabled:bg-[var(--bg-subtle)] disabled:text-[var(--fg-tertiary)]">{state.busy ? "正在处理…" : "服务端真实导出联系表"}</button> : null}
       {state.contactSheet ? <dl className="mt-4 grid gap-2 break-all rounded border border-[var(--border-subtle)] p-3 text-[10px]"><div><dt className="text-[var(--fg-tertiary)]">JSON</dt><dd>{state.contactSheet.jsonPath}</dd><dd className="font-mono">{state.contactSheet.jsonHash}</dd></div><div><dt className="text-[var(--fg-tertiary)]">HTML</dt><dd>{state.contactSheet.htmlPath}</dd><dd className="font-mono">{state.contactSheet.htmlHash}</dd></div></dl> : null}
+      <section aria-labelledby="contact-sheet-review-title" className="mt-5 border-t border-[var(--border-subtle)] pt-5">
+        <h4 id="contact-sheet-review-title" className="text-sm font-bold">整集联系表人工审核</h4>
+        <p className="mt-2 text-xs leading-5 text-[var(--fg-tertiary)]">导出、预览和逐图批准都不会自动通过整集审核。视觉段或时间轴变化后，旧审核会自动失效。</p>
+        <p aria-live="polite" className={`mt-3 rounded border px-3 py-2 text-xs leading-5 ${state.reviewStatus === "failure" ? "border-[var(--danger)] text-[var(--danger)]" : "border-[var(--border-subtle)] text-[var(--fg-secondary)]"}`}>{state.reviewMessage}</p>
+        {state.reviewWorkspace ? <>
+          <label className="mt-4 flex min-h-11 cursor-pointer items-start gap-3 rounded border border-[var(--border-subtle)] p-3 text-xs leading-5">
+            <input type="checkbox" checked={state.reviewConfirmed} disabled={state.busy} onChange={(event) => state.setReviewConfirmed(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent)]" />
+            <span>我已查看本集全部画面，并核对开头节奏与字幕覆盖。</span>
+          </label>
+          <label className="mt-3 grid gap-2 text-xs font-semibold">审核备注（可选）
+            <textarea value={state.reviewNotes} disabled={state.busy} maxLength={2000} onChange={(event) => state.setReviewNotes(event.target.value)} className="min-h-20 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3 font-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]" placeholder="记录需返修的画面、节奏或字幕覆盖问题。" />
+          </label>
+          <button type="button" disabled={state.busy || !state.reviewConfirmed} onClick={() => void state.submitContactSheetReview("approve")} className="mt-3 min-h-11 w-full rounded bg-[var(--accent)] px-3 text-xs font-semibold text-white disabled:bg-[var(--bg-subtle)] disabled:text-[var(--fg-tertiary)]">{state.reviewStatus === "loading" ? "正在处理…" : "通过整集联系表审核"}</button>
+          <button type="button" disabled={state.busy} onClick={() => void state.submitContactSheetReview("reject")} className="mt-3 min-h-11 w-full rounded border border-[var(--border-strong)] px-3 text-xs font-semibold disabled:opacity-50">不通过</button>
+          {state.reviewWorkspace.latestReview ? <p className="mt-3 text-xs leading-5 text-[var(--fg-tertiary)]">当前身份最新结果：{state.reviewWorkspace.latestReview.action === "approve" ? "已通过" : "不通过"}{state.reviewWorkspace.latestReview.notes ? ` · ${state.reviewWorkspace.latestReview.notes}` : ""}</p> : null}
+        </> : null}
+      </section>
     </aside>
   </section>;
 }

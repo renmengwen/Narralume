@@ -542,6 +542,19 @@ PC-02 当前 checkpoint：
 | 2026-07-28 AUTO-05 第四版双Review PASS与业务提交 | 五仓来源均`reference-only`，实现采用Narralume internal-port：migration v16使旧run冻结1/1、新run默认10/8并进入`series-pipeline-v2` configHash；工作台同区配置范围/集数/时长/每批章节/并发批次；连续pending runs按最终序列化prompt真实UTF-8 512KiB预算动态缩批，一个批Job一次模型请求，返回chapterId全集严格校验且evidence按章隔离；每章contentHash/checkpoint/事件替换独立，复用现有jobs/lease/JobWorker且最多8个专用章节Worker。首版Review依次发现并修复真实prompt转义超限、复用空洞跨非连续章节、重试覆盖已完成checkpoint、批内stale恢复死路；后续质量复审又关闭stale mapping先删后建窗口，Spec复审关闭独占stale running尚未终止即唤醒替代Job导致并发越界。最终candidate绑定base`e3455d7`与完整diff指纹`09cbb4fe6dc5d8e100eeac6d8b2365ccf644aae7`，Spec/Code Quality均PASS且无P0～P3；独占stale running保留mapping并占slot至终态，共享owner不误取消，替代mapping在同一`BEGIN IMMEDIATE`原子替换。Coordinator根门：server401项中400 PASS/1 Windows symlink权限SKIP，web97/97，`npm run typecheck`、`npm run build`、`git diff --check`全部PASS；Vite137 modules，约486.22kB/144.80kB gzip。业务以`0d33611 feat(auto): 支持动态多章批次与有界并发分析`独立提交；旧1794章run继续paused于4/1794，不自动恢复。下一步仅做隔离10章/8批运行Gate与真实浏览器五项配置验收。 |
 | 2026-07-28 AUTO-05 隔离运行与真实浏览器验收 PASS | 提交后隔离stub聚焦 Gate 46/46 PASS，覆盖多章单请求、chapterId全集/evidence隔离、最终prompt UTF-8 512KiB动态缩批、8批rolling窗口、单章超限稳定失败、连续pending runs、checkpoint防漂移、stale整批重组及pause/cancel/retry/restart。真实UI验收临时以`buildApp({dataRoot})`挂载隔离3101，5174保持PID32756不动；正式API导入3章测试书并创建系列，未配置或调用模型、未创建pipeline run（current HTTP404）。创建前同一“确认范围、成片规格与分析速度”表单显示起止章节、总集数、单集时长、每批最多章节数和并发批次数；时长默认1200、批次默认10且范围1～20、并发默认8且范围1～8，包含自动缩批与供应商限流提示，总集数为空时开始按钮禁用。随后恢复默认3101为PID22012且health HTTP200，5174仍为PID32756；真实旧run`pipeline_541514f2-eb39-40ce-9361-785cd90c312f`仍为已暂停、章节4/1794、复用/排队/执行中/失败均0、冻结20集/1200秒/1章/1批，未点击继续或取消。AUTO-05运行验收完成且无真实模型费用。 |
 
+## 2026-07-28 AI 文本分析流式补齐
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AI-STREAM-01` / 用户要求所有尚未流式化的 AI 文本分析显式请求流式输出，并由后端逐块读取 SSE；不做前端模型增量展示。 |
+| 状态 | `complete` |
+| 依赖与来源决策 | `internal-port`：直接复用 Narralume 已有 `text-model-stream.ts`，不新增依赖、协议、服务或前端状态；现有故事圣经、全书规划和稿件生成已验证同一实现。 |
+| Owner / 写租约 | Coordinator；业务写入仅限 `chapter-event-analyzer.ts/.test.ts` 与 `episode-recommendation-job.ts/.test.ts`，排除 Ledger、数据库、前端、配置和端口。 |
+| Candidate / Review | 业务提交 `e7a8a10`；低风险共享解析器接线由 Coordinator 自审 PASS：单章、批量章节事件与分集来源推荐均显式发送 `stream: true`，按响应 `content-type` 逐块消费 SSE，只有明确成功终态后解析完整 JSON；非 SSE JSON 兼容回退、Abort、容量限制和既有领域校验保持不变。 |
+| 验证证据 | 定向文本模型测试 `100 PASS / 0 FAIL`；完整 server 测试 `401 PASS / 0 FAIL / 1 Windows 权限 SKIP`；server `typecheck`、`build`、`git diff --check` 全部 PASS。 |
+| 业务提交 | `e7a8a10 fix(ai): 补齐文本分析流式响应` |
+| 剩余风险 / 恢复 | 上游若忽略流式请求并返回普通 JSON，现有兼容分支继续解析；未做前端 token 增量展示，符合用户明确边界。需要恢复时 revert `e7a8a10`，不涉及数据迁移。 |
+
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。

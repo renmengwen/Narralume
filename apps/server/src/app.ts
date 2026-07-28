@@ -399,7 +399,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     [FULL_BOOK_PLAN_JOB_TYPE]: async (context: JobExecutionContext) => {
       const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
       if (!provider) throw new Error("全书规划任务对应的模型配置不可用");
-      return createFullBookPlanJobHandler(provider)(context);
+      return createFullBookPlanJobHandler(provider, { database: connection.database })(context);
     },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),

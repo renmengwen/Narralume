@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -106,6 +107,43 @@ test("依次执行 interval 和独立 final，产出恰好 N 集的服务端验�
   assert.equal(result.validation.intervalQuotas.length, 2);
   assert.deepEqual(execution.progress, [1 / 3, 2 / 3, 1]);
   assert.equal(execution.checkpoints.length, 3);
+});
+
+test("按当前书籍流水线配置并发 interval，全部完成后才执行 final", async () => {
+  const task = payload();
+  const execution = context(task);
+  let inFlight = 0;
+  let peak = 0;
+  let intervalStarted = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const database = {
+    prepare: () => ({ get: (_jobId: string, stage: string) => {
+      assert.equal(stage, "episode_plan");
+      return { value: 2 };
+    } }),
+  } as unknown as DatabaseSync;
+  const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body)) as { input: string };
+    const input = JSON.parse(request.input.split("\n").at(-1)!) as {
+      kind: "interval" | "final";
+      request: { sourceEvents?: Array<{ id: string }> };
+    };
+    if (input.kind === "final") {
+      assert.equal(inFlight, 0);
+      return Response.json({ output_text: JSON.stringify(plan(["event_0", "event_1"])) });
+    }
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    intervalStarted += 1;
+    if (intervalStarted === task.intervals.length) release();
+    await gate;
+    inFlight -= 1;
+    return Response.json({ output_text: JSON.stringify(plan([input.request.sourceEvents![0]!.id])) });
+  };
+  await createFullBookPlanJobHandler(config, { database, fetchImpl: fetchImpl as typeof fetch })(execution.value);
+  assert.equal(peak, 2);
+  assert.deepEqual(execution.progress.slice().sort((left, right) => left - right), [1 / 3, 2 / 3, 1]);
 });
 
 test("全书规划只在流式成功终态后解析", async () => {

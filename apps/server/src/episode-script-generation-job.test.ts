@@ -22,6 +22,7 @@ import { getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
 import { writeModelConfig } from "./model-config.js";
 import { getScriptApproval, requireApprovedScriptForProduction } from "./script-approval-store.js";
+import { createSeriesPipelineRun, mapSeriesPipelineScriptJob } from "./series-pipeline-store.js";
 import { listScriptVersions } from "./script-version-store.js";
 
 const config: ChapterTextModelConfig = {
@@ -228,6 +229,69 @@ function successfulGenerator(observe?: (input: Parameters<GenerateEpisodeScript>
     })) };
   };
 }
+
+test("流水线稿件按本书配置并发忠实稿 beat，包装稿等待全部忠实稿", async () => {
+  const context = await fixture();
+  try {
+    const pipeline = createSeriesPipelineRun(context.database, {
+      seriesProjectId: "series",
+      episodeCount: 1,
+      targetDurationSeconds: 120,
+      sourceStartChapterId: "chapter_0",
+      sourceEndChapterId: "chapter_2",
+      chapterBatchSize: 1,
+      chapterConcurrency: 2,
+    });
+    context.database.prepare("UPDATE series_pipeline_runs SET status = 'generating_scripts' WHERE id = ?")
+      .run(pipeline.id);
+    const queued = await enqueueEpisodeScriptGenerationJob(context.database, context.dataRoot, config, {
+      payload: request,
+      maxAttempts: 1,
+    });
+    mapSeriesPipelineScriptJob(context.database, pipeline.id, "episode", queued.job.id);
+
+    let inFlight = 0;
+    let peak = 0;
+    let started = 0;
+    let completed = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const generate: GenerateEpisodeScript = async (input) => {
+      if (input.stage === "skeleton") return { beats: [
+        { intent: "第一段", sourceIndexes: [0] },
+        { intent: "第二段", sourceIndexes: [1] },
+        { intent: "第三段", sourceIndexes: [2] },
+      ] };
+      if (input.stage === "packaged") {
+        assert.equal(inFlight, 0);
+        assert.equal(completed, 3);
+        return { paragraphs: input.paragraphs };
+      }
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      started += 1;
+      if (started === 2) release();
+      await gate;
+      inFlight -= 1;
+      completed += 1;
+      return { text: input.sources[0]!.sourceText };
+    };
+    const worker = new JobWorker(context.database, {
+      [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
+        context.database,
+        context.dataRoot,
+        config,
+        generate,
+      ),
+    }, { workerId: "script-concurrency-test", leaseMs: 10_000, heartbeatMs: 1_000 });
+    await worker.runOne();
+    assert.equal(getJob(context.database, queued.job.id)!.status, "succeeded");
+    assert.equal(peak, 2);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
 
 test("长稿 Job 骨架不接收原文，faithful 按 beat 隔离原文并写入冻结父链", async () => {
   const context = await fixture();

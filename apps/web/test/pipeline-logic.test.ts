@@ -171,6 +171,76 @@ test("故事圣经构建展示后端返回的真实步骤进度", () => {
   assert.doesNotMatch(html, /单次模型请求不显示虚构百分比/);
 });
 
+test("全书规划保留冻结产物计数并展示当前 Job 真实进度", () => {
+  const current = run({
+    status: "planning_episodes",
+    episodeCount: 20,
+    chapterConcurrency: 8,
+    progress: {
+      ...run().progress,
+      episodePlan: { completed: 0, total: 20 },
+      scripts: { completed: 0, total: 40 },
+    },
+    current: {
+      stage: "episode_plan",
+      subjectType: "plan",
+      subjectId: "plan_1",
+      jobId: "job_plan",
+      jobStatus: "running",
+      jobProgress: 3 / 21,
+      jobAttempts: 1,
+      jobMaxAttempts: 3,
+    },
+  });
+  const html = renderToString(createElement(PipelineProgress, {
+    run: current, chapters, operation: "已恢复全本改写任务。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(html, /0\/20/);
+  assert.match(html, /当前规划任务 14%/);
+  assert.match(html, /第 1\/3 次执行/);
+  assert.match(html, /并发上限 8/);
+  assert.doesNotMatch(html, /单次模型请求不显示虚构百分比/);
+
+  const queuedHtml = renderToString(createElement(PipelineProgress, {
+    run: { ...current, current: { ...current.current!, jobStatus: "queued", jobProgress: 0, jobAttempts: 2 } },
+    chapters,
+    operation: "任务等待执行。",
+    onControl: () => undefined,
+    onReset: () => undefined,
+  }));
+  assert.match(queuedHtml, /当前任务等待执行；已尝试 2\/3 次/);
+});
+
+test("稿件阶段同时展示已持久双稿数与当前单集 Job 真实进度", () => {
+  const current = run({
+    status: "generating_scripts",
+    episodeCount: 20,
+    chapterConcurrency: 4,
+    progress: {
+      ...run().progress,
+      episodePlan: { completed: 20, total: 20 },
+      scripts: { completed: 2, total: 40 },
+    },
+    current: {
+      stage: "script_generation",
+      subjectType: "episode",
+      subjectId: "episode_2",
+      jobId: "job_scripts",
+      jobStatus: "running",
+      jobProgress: 0.5,
+      jobAttempts: 1,
+      jobMaxAttempts: 3,
+    },
+  });
+  const html = renderToString(createElement(PipelineProgress, {
+    run: current, chapters, operation: "正在生成稿件。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(html, /2\/40/);
+  assert.match(html, /正在生成第 2\/20 集/);
+  assert.match(html, /当前单集任务 50%/);
+  assert.match(html, /忠实稿并发上限 4/);
+});
+
 test("覆盖检查保持处理中语义，自动生产完成后明确等待逐集审核", () => {
   const completeProgress = {
     chapterAnalysis: { completed: 3, total: 3, reused: 0, queued: 0, running: 0, failed: 0 },
@@ -180,13 +250,13 @@ test("覆盖检查保持处理中语义，自动生产完成后明确等待逐�
   };
   const checking = run({ status: "checking_coverage", current: null, episodeCount: 3, progress: completeProgress });
   assert.equal(pipelineStatusPresentation(checking.status).heading, "固定流水线正在处理全书");
-  assert.equal(pipelineStatusText(checking), "正在生成并检查全本稿件。");
+  assert.equal(pipelineStatusText(checking), "稿件生成完成，正在检查完整性。");
   const checkingHtml = renderToString(createElement(PipelineProgress, {
     run: checking, chapters, operation: "正在检查稿件覆盖。", onControl: () => undefined, onReset: () => undefined,
   }));
   assert.match(checkingHtml, /固定流水线正在处理全书/);
   assert.match(checkingHtml, /状态：<!-- -->检查覆盖/);
-  assert.match(checkingHtml, /当前阶段；单次模型请求不显示虚构百分比/);
+  assert.match(checkingHtml, /稿件生成完成；正在检查完整性/);
 
   const awaiting = run({
     status: "awaiting_review", current: null, episodeCount: 3, progress: completeProgress,
@@ -200,6 +270,11 @@ test("覆盖检查保持处理中语义，自动生产完成后明确等待逐�
   assert.match(awaitingHtml, /状态：<!-- -->等待审核/);
   assert.match(awaitingHtml, /自动生产已完成，等待逐集审核/);
   assert.doesNotMatch(awaitingHtml, /固定流水线正在处理全书|暂停当前任务|取消全本改写/);
+
+  assert.equal(pipelineStatusPresentation("paused").heading, "全本改写已暂停");
+  assert.equal(pipelineStatusPresentation("failed").heading, "全本改写执行失败");
+  assert.equal(pipelineStatusPresentation("cancelled").heading, "全本改写已取消");
+  assert.equal(pipelineStatusPresentation("completed").heading, "全本改写已完成");
 });
 
 test("流水线只读不会锁死章节浏览，但会禁用事件写操作", () => {

@@ -5,6 +5,7 @@ import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { getEpisode } from "./episode-store.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { createScriptVersionPair } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 
@@ -426,6 +427,7 @@ function validatePackagedResult(value: unknown, allowed: ReadonlySet<number>) {
 async function callWithCancellation<T>(
   context: Parameters<JobHandler>[0],
   call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+  groupSignal?: AbortSignal,
 ) {
   context.throwIfCancellationRequested();
   const controller = new AbortController();
@@ -442,9 +444,15 @@ async function callWithCancellation<T>(
       EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS);
   };
   try {
-    return await call(AbortSignal.any([controller.signal, idleController.signal, totalController.signal]), onActivity);
+    return await call(AbortSignal.any([
+      controller.signal,
+      idleController.signal,
+      totalController.signal,
+      ...(groupSignal ? [groupSignal] : []),
+    ]), onActivity);
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
+    if (groupSignal?.aborted) throw groupSignal.reason ?? error;
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("长稿生成模型请求超时");
     throw error;
   } finally {
@@ -548,23 +556,39 @@ export function createEpisodeScriptGenerationJobHandler(
     context.reportProgress(0.2);
 
     const sourceMap = new Map(episode.sources.map((source) => [source.sourceIndex, source]));
-    const faithfulParagraphs = [] as Array<{ text: string; sourceIndexes: number[] }>;
-    for (const [index, beat] of beats.entries()) {
-      const result = await callWithCancellation(context, (signal, onActivity) => generate({
-        stage: "faithful",
-        beat,
-        characterBudget: Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
-          task.targetDurationSeconds / beats.length) / task.targetDurationSeconds))),
-        sources: beat.sourceIndexes.map((sourceIndex) => ({
-          sourceIndex,
-          sourceText: sourceMap.get(sourceIndex)!.sourceText,
-        })),
-        signal,
-        onActivity,
-      }));
-      faithfulParagraphs.push({ text: validateTextResult(result, "忠实稿正文"), sourceIndexes: beat.sourceIndexes });
-      context.reportProgress(0.2 + ((index + 1) / beats.length) * 0.4);
-    }
+    const faithfulParagraphs = new Array<{ text: string; sourceIndexes: number[] }>(beats.length);
+    const groupController = new AbortController();
+    let faithfulCompleted = 0;
+    await runConcurrent(
+      beats.map((_, index) => index),
+      mappedPipelineJobConcurrency(database, context.job.id, "script_generation"),
+      async (index) => {
+        const beat = beats[index]!;
+        try {
+          const result = await callWithCancellation(context, (signal, onActivity) => generate({
+            stage: "faithful",
+            beat,
+            characterBudget: Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
+              task.targetDurationSeconds / beats.length) / task.targetDurationSeconds))),
+            sources: beat.sourceIndexes.map((sourceIndex) => ({
+              sourceIndex,
+              sourceText: sourceMap.get(sourceIndex)!.sourceText,
+            })),
+            signal,
+            onActivity,
+          }), groupController.signal);
+          faithfulParagraphs[index] = {
+            text: validateTextResult(result, "忠实稿正文"),
+            sourceIndexes: beat.sourceIndexes,
+          };
+          faithfulCompleted += 1;
+          context.reportProgress(0.2 + (faithfulCompleted / beats.length) * 0.4);
+        } catch (error) {
+          groupController.abort(error);
+          throw error;
+        }
+      },
+    );
 
     const faithfulSources = new Set(faithfulParagraphs.flatMap((paragraph) => paragraph.sourceIndexes));
     const packagedResult = await callWithCancellation(context, (signal, onActivity) => generate({

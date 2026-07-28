@@ -25,7 +25,16 @@ export interface SeriesPipelineRun {
     episodePlan: { completed: number; total: number };
     scripts: { completed: number; total: number };
   };
-  current: { stage: string; subjectType: string; subjectId: string; jobId: string } | null;
+  current: {
+    stage: string;
+    subjectType: string;
+    subjectId: string;
+    jobId: string;
+    jobStatus?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    jobProgress?: number;
+    jobAttempts?: number;
+    jobMaxAttempts?: number;
+  } | null;
   failures: Array<{
     stage: string; subjectType: string; subjectId: string; jobId: string;
     code: string | null; message: string;
@@ -56,6 +65,15 @@ export function pipelineStatusPresentation(status: SeriesPipelineStatus): {
   };
   if (status === "awaiting_review") {
     return { heading: "自动生产完成，等待逐集审核", label: labels[status], stageDetail: "自动生产已完成，等待逐集审核" };
+  }
+  const inactiveHeadings: Partial<Record<SeriesPipelineStatus, string>> = {
+    paused: "全本改写已暂停",
+    failed: "全本改写执行失败",
+    cancelled: "全本改写已取消",
+    completed: "全本改写已完成",
+  };
+  if (inactiveHeadings[status]) {
+    return { heading: inactiveHeadings[status], label: labels[status] };
   }
   const activeStage = status === "building_story_bible" ? "storyBible"
     : ["planning_episodes", "validating_plan", "freezing_plan"].includes(status) ? "episodePlan"
@@ -117,7 +135,8 @@ export function pipelineStatusText(run: SeriesPipelineRun) {
   if (run.status === "planning_episodes" || run.status === "validating_plan" || run.status === "freezing_plan") {
     return "正在生成并校验全书分集方案。";
   }
-  if (run.status === "generating_scripts" || run.status === "checking_coverage") return "正在生成并检查全本稿件。";
+  if (run.status === "generating_scripts") return "正在生成全本稿件。";
+  if (run.status === "checking_coverage") return "稿件生成完成，正在检查完整性。";
   if (run.status === "awaiting_review") return "自动生产完成，等待逐集审核。";
   return "全本改写任务执行失败，可检查失败项后重试。";
 }

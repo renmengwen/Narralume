@@ -1466,6 +1466,12 @@ test("全书规划以当前 identity parked 映射，旧结果不推进并原子
     assert.equal(getJob(database, first.job_id)!.type, FULL_BOOK_PLAN_JOB_TYPE);
     assert.notEqual(getJob(database, first.job_id)!.runAfter, Number.MAX_SAFE_INTEGER);
     assert.equal(service.get(run.id)!.failureMessage, null);
+    database.prepare("UPDATE jobs SET progress=0.25,attempts=1 WHERE id=?").run(first.job_id);
+    const projected = service.get(run.id)!.current!;
+    assert.equal(projected.jobStatus, "queued");
+    assert.equal(projected.jobProgress, 0.25);
+    assert.equal(projected.jobAttempts, 1);
+    assert.equal(projected.jobMaxAttempts, 3);
     assert.equal(service.cancel(run.id).status, "cancelled");
     assert.equal(getJob(database, first.job_id)!.status, "cancelled");
     assert.equal(service.retry(run.id).status, "planning_episodes");

@@ -59,6 +59,24 @@ function runRecord(row: RunRow): SeriesPipelineRun {
   };
 }
 
+function currentJob(
+  stage: string,
+  subjectType: string,
+  subjectId: string,
+  job: JobRecord,
+) {
+  return {
+    stage,
+    subjectType,
+    subjectId,
+    jobId: job.id,
+    jobStatus: job.status,
+    jobProgress: job.progress,
+    jobAttempts: job.attempts,
+    jobMaxAttempts: job.maxAttempts,
+  };
+}
+
 function runRow(database: DatabaseSync, id: string) {
   return database.prepare("SELECT * FROM series_pipeline_runs WHERE id = ?").get(id) as RunRow | undefined;
 }
@@ -707,12 +725,12 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
       episodePlan: { completed: run.planHash ? run.episodeCount : 0, total: run.episodeCount },
       scripts: { completed: scriptJobs.filter((item) => item.job.status === "succeeded").length * 2, total: run.episodeCount * 2 },
     },
-    current: current ? { stage: "chapter_analysis", subjectType: "chapter", subjectId: current.chapterId, jobId: current.job.id }
+    current: current ? currentJob("chapter_analysis", "chapter", current.chapterId, current.job)
       : storyJob && (storyJob.status === "queued" || storyJob.status === "running")
-        ? { stage: "story_bible", subjectType: "bible_chunk", subjectId: storyMapping!.subject_id, jobId: storyJob.id }
+        ? currentJob("story_bible", "bible_chunk", storyMapping!.subject_id, storyJob)
       : planJob && (planJob.status === "queued" || planJob.status === "running")
-        ? { stage: "episode_plan", subjectType: "plan", subjectId: planMapping!.subject_id, jobId: planJob.id }
-      : currentScript ? { stage: "script_generation", subjectType: "episode", subjectId: currentScript.episodeId, jobId: currentScript.job.id }
+        ? currentJob("episode_plan", "plan", planMapping!.subject_id, planJob)
+      : currentScript ? currentJob("script_generation", "episode", currentScript.episodeId, currentScript.job)
       : null,
     failures: [...failures, ...storyFailure, ...planFailure, ...scriptFailures],
     actions: {

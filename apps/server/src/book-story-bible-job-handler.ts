@@ -28,6 +28,7 @@ import {
 } from "./book-story-bible-reduction.js";
 import { createBookStoryBible, findBookStoryBibleForJob } from "./book-story-bible-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
 
 export const BOOK_STORY_BIBLE_JOB_TYPE = "book_story_bible_build";
@@ -258,25 +259,6 @@ async function withCancellation<T>(
   } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
 }
 
-function intervalConcurrency(database: DatabaseSync, jobId: string) {
-  const row = database.prepare(
-    `SELECT MIN(run.chapter_concurrency) AS value
-     FROM series_pipeline_jobs mapping
-     JOIN series_pipeline_runs run ON run.id = mapping.run_id
-     WHERE mapping.job_id = ? AND mapping.stage = 'story_bible'
-       AND run.status NOT IN ('cancelled', 'completed')`,
-  ).get(jobId) as { value?: unknown } | undefined;
-  return Number.isSafeInteger(row?.value) && Number(row!.value) > 0 ? Number(row!.value) : 1;
-}
-
-async function runConcurrent<T>(items: readonly T[], concurrency: number, run: (item: T) => Promise<void>) {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) await run(items[next++]!);
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-}
-
 export function createBookStoryBibleJobHandler(
   database: DatabaseSync,
   config: ChapterTextModelConfig,
@@ -313,7 +295,7 @@ export function createBookStoryBibleJobHandler(
       completed += 1;
     }
     if (completed) context.reportProgress(completed / totalSteps);
-    await runConcurrent(pending, intervalConcurrency(database, context.job.id), async (index) => {
+    await runConcurrent(pending, mappedPipelineJobConcurrency(database, context.job.id, "story_bible"), async (index) => {
         context.throwIfCancellationRequested();
         const request = task.intervals[index]!;
         try {
@@ -350,7 +332,7 @@ export function createBookStoryBibleJobHandler(
       const groups = storyBibleReductionGroups(nodes);
       const reduced = new Array<StoryBibleNode>(groups.length);
       await runConcurrent(groups.map((group, index) => ({ group, index })),
-        intervalConcurrency(database, context.job.id), async ({ group, index }) => {
+        mappedPipelineJobConcurrency(database, context.job.id, "story_bible"), async ({ group, index }) => {
           if (group.length === 1) {
             reduced[index] = group[0]!;
             return;

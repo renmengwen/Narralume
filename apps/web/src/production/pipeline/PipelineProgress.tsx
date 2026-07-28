@@ -104,12 +104,34 @@ function stageDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan"
   if (run.status === "cancelled") return "已取消；不再派发任务";
   if (run.status === "failed" || run.failureMessage) return "存在失败项，请检查后重试";
   const presentation = pipelineStatusPresentation(run.status);
+  if (stage === "scripts" && run.status === "checking_coverage") return "稿件生成完成；正在检查完整性";
   if (presentation.activeStage === stage) {
     const steps = stage === "storyBible" ? run.progress.storyBible.steps : null;
     return steps ? `当前阶段；已完成 ${steps.completed}/${steps.total} 个构建步骤`
-      : "当前阶段；单次模型请求不显示虚构百分比";
+      : currentJobDetail(run, stage);
   }
   if (stage === "scripts" && presentation.stageDetail) return presentation.stageDetail;
   const progress = run.progress[stage];
   return progress.total > 0 && progress.completed === progress.total ? "阶段已完成" : "等待上游阶段完成";
+}
+
+function currentJobDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan" | "scripts") {
+  const current = run.current;
+  if (!current || current.jobProgress === undefined) return "当前阶段；正在等待任务进度";
+  const progress = `${Math.round(current.jobProgress * 100)}%`;
+  const attempt = current.jobAttempts !== undefined && current.jobAttempts > 0 && current.jobMaxAttempts !== undefined
+    ? `；第 ${current.jobAttempts}/${current.jobMaxAttempts} 次执行`
+    : "";
+  if (current.jobStatus === "queued") {
+    const attempted = current.jobAttempts !== undefined && current.jobAttempts > 0 && current.jobMaxAttempts !== undefined
+      ? `；已尝试 ${current.jobAttempts}/${current.jobMaxAttempts} 次`
+      : "";
+    return `当前任务等待执行${attempted}`;
+  }
+  if (stage === "episodePlan") return `当前规划任务 ${progress}${attempt}；并发上限 ${run.chapterConcurrency}`;
+  if (stage === "scripts") {
+    const episode = Math.min(run.episodeCount, Math.floor(run.progress.scripts.completed / 2) + 1);
+    return `正在生成第 ${episode}/${run.episodeCount} 集；当前单集任务 ${progress}${attempt}；忠实稿并发上限 ${run.chapterConcurrency}`;
+  }
+  return `当前任务 ${progress}${attempt}`;
 }

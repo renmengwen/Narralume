@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 
 import {
   limitedJson,
@@ -14,9 +15,11 @@ import {
   fullBookPlanIntervalResponseParser,
   type FullBookPlanBuildLimits,
   type FullBookPlanIntervalRequest,
+  type VerifiedFullBookPlanInterval,
 } from "./full-book-plan-job.js";
 import { FullBookPlanContractError } from "./full-book-plan-contract.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
 
 export const FULL_BOOK_PLAN_JOB_TYPE = "full_book_plan_build";
@@ -36,7 +39,7 @@ export interface FullBookPlanJobPayload {
   requestHash: string;
 }
 
-interface HandlerOptions { fetchImpl?: typeof fetch }
+interface HandlerOptions { fetchImpl?: typeof fetch; database?: DatabaseSync }
 
 const HASH = /^[0-9a-f]{64}$/u;
 
@@ -186,14 +189,15 @@ async function callAndParse<T>(
   context: Parameters<JobHandler>[0],
   call: (signal: AbortSignal, correction: string | undefined, onActivity: () => void) => Promise<unknown>,
   parse: (value: unknown) => T,
+  groupSignal?: AbortSignal,
 ) {
-  const raw = await withCancellation(context, (signal, onActivity) => call(signal, undefined, onActivity));
+  const raw = await withCancellation(context, (signal, onActivity) => call(signal, undefined, onActivity), groupSignal);
   try {
     return parse(raw);
   } catch (error) {
     if (!(error instanceof FullBookPlanContractError)) throw error;
     const corrected = await withCancellation(context,
-      (signal, onActivity) => call(signal, error.message, onActivity));
+      (signal, onActivity) => call(signal, error.message, onActivity), groupSignal);
     return parse(corrected);
   }
 }
@@ -201,6 +205,7 @@ async function callAndParse<T>(
 async function withCancellation<T>(
   context: Parameters<JobHandler>[0],
   call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+  groupSignal?: AbortSignal,
 ) {
   context.throwIfCancellationRequested();
   const controller = new AbortController();
@@ -221,9 +226,11 @@ async function withCancellation<T>(
       controller.signal,
       idleController.signal,
       totalController.signal,
+      ...(groupSignal ? [groupSignal] : []),
     ]), onActivity);
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
+    if (groupSignal?.aborted) throw groupSignal.reason ?? error;
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("全书规划模型请求超时");
     throw error;
   } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
@@ -237,17 +244,33 @@ export function createFullBookPlanJobHandler(
   return async (context) => {
     if (context.job.type !== FULL_BOOK_PLAN_JOB_TYPE) throw new Error("全书规划任务类型无效");
     const task = parsePayload(context.job.payload, config);
-    const verified = [];
-    for (const [index, request] of task.intervals.entries()) {
-      const input = { kind: "interval" as const, request };
-      const parse = fullBookPlanIntervalResponseParser(request);
-      const parsed = await callAndParse(context,
-        (signal, correction, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, correction), parse);
-      context.throwIfCancellationRequested();
-      verified.push(parsed);
-      context.commitCheckpoint("full-book-plan-interval", request.identityHash, request.identityHash, () => undefined);
-      context.reportProgress((index + 1) / (task.intervals.length + 1));
-    }
+    const verified = new Array<VerifiedFullBookPlanInterval>(task.intervals.length);
+    const groupController = new AbortController();
+    let completed = 0;
+    await runConcurrent(
+      task.intervals.map((_, index) => index),
+      options.database
+        ? mappedPipelineJobConcurrency(options.database, context.job.id, "episode_plan")
+        : 1,
+      async (index) => {
+        const request = task.intervals[index]!;
+        try {
+          const input = { kind: "interval" as const, request };
+          const parse = fullBookPlanIntervalResponseParser(request);
+          verified[index] = await callAndParse(context,
+            (signal, correction, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, correction),
+            parse,
+            groupController.signal,
+          );
+          context.throwIfCancellationRequested();
+          context.commitCheckpoint("full-book-plan-interval", request.identityHash, request.identityHash, () => undefined);
+          context.reportProgress(++completed / (task.intervals.length + 1));
+        } catch (error) {
+          groupController.abort(error);
+          throw error;
+        }
+      },
+    );
     const finalRequest = buildFullBookPlanFinalRequest(
       task.bookId, task.storyBible, task.episodeCount, verified,
       { providerId: task.providerId, model: task.model }, task.limits,

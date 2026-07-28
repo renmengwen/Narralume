@@ -209,6 +209,26 @@ test("删除小说清理全部项目与关联任务，并保留其他小说共�
     insertJob.run("job_queued", JSON.stringify({ candidateId: "candidate_unique" }), "queued");
     insertJob.run("job_other", JSON.stringify({ seriesId: "other_series" }), "succeeded");
     database.prepare(
+      `INSERT INTO series_pipeline_runs (
+         id, series_project_id, status, episode_count, target_duration_seconds,
+         source_start_chapter_id, source_end_chapter_id, config_hash, created_at, updated_at
+       ) VALUES ('pipeline', 'series', 'configured', 1, 180, 'chapter', 'chapter', ?, 1, 1)`,
+    ).run("6".repeat(64));
+    database.prepare(
+      `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
+       VALUES ('pipeline', 'chapter_analysis', 'chapter', 'chapter', 'job_queued', 1)`,
+    ).run();
+    database.prepare(
+      `INSERT INTO book_story_bibles (
+         id, book_id, scope, source_start_chapter_id, source_end_chapter_id,
+         source_event_ids_json, source_events_hash, parent_bible_ids_json, input_hash,
+         contract_version, revision, provider_id, model, job_id, content_json, content_hash, created_at
+       ) VALUES (
+         'bible', 'book', 'interval', 'chapter', 'chapter', '["event"]', ?, '[]', ?,
+         'test', 1, 'provider', 'model', 'job_queued', '{}', ?, 1
+       )`,
+    ).run("7".repeat(64), "8".repeat(64), "9".repeat(64));
+    database.prepare(
       "UPDATE jobs SET status = 'running', lease_owner = 'worker', lease_expires_at = 999999 WHERE id = 'job_running'",
     ).run();
 
@@ -239,6 +259,9 @@ test("删除小说清理全部项目与关联任务，并保留其他小说共�
       assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE id IN (
         'book', 'chapter', 'series', 'episode', 'asset_unique', 'asset_shared', 'candidate_unique', 'candidate_shared'
       )`).get()?.count, 0, table);
+    }
+    for (const table of ["series_pipeline_runs", "series_pipeline_jobs", "book_story_bibles"]) {
+      assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count, 0, table);
     }
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM jobs WHERE id IN ('job_running', 'job_queued')").get()?.count, 0);
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM books WHERE id = 'other_book'").get()?.count, 1);

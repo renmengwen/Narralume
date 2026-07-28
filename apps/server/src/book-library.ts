@@ -224,8 +224,8 @@ export async function deleteBook(database: DatabaseSync, dataRoot: string, bookI
       manifestPath = writeDeletionManifest(dataRoot, { version: 1, bookId: book.id, paths: [...paths] });
 
       const deleteJob = database.prepare("DELETE FROM jobs WHERE id = ?");
-      for (const job of jobs) deleteJob.run(job.id);
       database.prepare("DELETE FROM books WHERE id = ?").run(book.id);
+      for (const job of jobs) deleteJob.run(job.id);
       database.exec("COMMIT");
       return { book, manifestPath };
     } catch (error) {

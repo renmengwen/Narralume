@@ -57,7 +57,7 @@ export const registerSeriesPipelineRoutes: FastifyPluginAsync<Options> = async (
   });
 
   const controls = {
-    pause: { action: (id: string) => options.service.pause(id), message: "全本流水线已暂停后续任务" },
+    pause: { action: (id: string) => options.service.pause(id), message: "全本流水线正在暂停当前任务" },
     resume: { action: (id: string) => options.service.resume(id), message: "全本流水线已继续" },
     cancel: { action: (id: string) => options.service.cancel(id), message: "全本流水线已取消" },
     retry: { action: (id: string) => options.service.retry(id), message: "失败章节已重新排队" },

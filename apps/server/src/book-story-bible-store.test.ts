@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   createBookStoryBible,
+  findBookStoryBibleForJob,
   getBookStoryBible,
   invalidateBookStoryBible,
 } from "./book-story-bible-store.js";
@@ -26,6 +27,8 @@ async function fixture() {
   db.prepare(`INSERT INTO books
     (id,title,original_file_path,original_file_hash,encoding,import_status)
     VALUES ('book','书','books/book/source.txt',?,'UTF-8','ready')`).run("a".repeat(64));
+  db.prepare(`INSERT INTO jobs (id,type,payload_json,status,run_after,created_at,updated_at)
+    VALUES ('job_bible','book_story_bible_build','{}','succeeded',1,1,1)`).run();
   for (const [id, index] of [["chapter_1", 0], ["chapter_2", 1], ["chapter_3", 2]] as const) {
     db.prepare(`INSERT INTO chapters
       (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
@@ -46,7 +49,8 @@ test("同一输入复用最新有效版本且 provider/model 不参与 identity"
     const base = {
       bookId: "book", scope: "interval" as const, sourceStartChapterId: "chapter_1",
       sourceEndChapterId: "chapter_2", sourceEventIds: ["event_2", "event_1"],
-      providerId: "provider-a", model: "model-a", content: content("event_1", "chapter_1"),
+      providerId: "provider-a", model: "model-a", jobId: "job_bible",
+      content: content("event_1", "chapter_1"),
     };
     const first = createBookStoryBible(current.connection.database, base, { now: 10 });
     const reused = createBookStoryBible(current.connection.database,
@@ -56,6 +60,16 @@ test("同一输入复用最新有效版本且 provider/model 不参与 identity"
     assert.equal(reused.revision, 1);
     assert.match(reused.sourceEventsHash, /^[0-9a-f]{64}$/u);
     assert.deepEqual(reused.sourceEventIds, ["event_1", "event_2"]);
+    assert.equal(findBookStoryBibleForJob(current.connection.database, {
+      jobId: "job_bible", bookId: "book", scope: "interval",
+      sourceStartChapterId: "chapter_1", sourceEndChapterId: "chapter_2",
+      sourceEventIds: ["event_2", "event_1"],
+    })?.id, first.id);
+    assert.equal(findBookStoryBibleForJob(current.connection.database, {
+      jobId: "other_job", bookId: "book", scope: "interval",
+      sourceStartChapterId: "chapter_1", sourceEndChapterId: "chapter_2",
+      sourceEventIds: ["event_1", "event_2"],
+    }), undefined);
   } finally {
     current.connection.close();
     await rm(current.root, { recursive: true, force: true });

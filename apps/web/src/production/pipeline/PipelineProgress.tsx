@@ -72,7 +72,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
 
       <div className="flex flex-wrap justify-end gap-2">
         {pipelineIsTerminal(run) ? <button type="button" className="min-h-11 rounded border border-[var(--accent)] bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] disabled:opacity-50" disabled={!!busyAction} onClick={onReset}>返回全本改写设置</button> : null}
-        {run.actions.canPause ? <button type="button" className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl("pause")}>{busyAction === "pause" ? "正在暂停后续任务…" : "暂停后续任务"}</button> : null}
+        {run.actions.canPause ? <button type="button" className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl("pause")}>{busyAction === "pause" ? "正在暂停当前任务…" : "暂停当前任务"}</button> : null}
         {primaryAction ? <button type="button" className="min-h-11 rounded border border-transparent bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-strong)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl(primaryAction)}>{busyAction === primaryAction ? operation : primaryLabel}</button> : null}
         {run.actions.canCancel ? <AlertDialog>
           <AlertDialogTrigger asChild><button type="button" className="min-h-11 rounded border border-[var(--danger)] px-4 text-sm font-semibold text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-50" disabled={!!busyAction}>取消全本改写</button></AlertDialogTrigger>

@@ -13,6 +13,7 @@ import {
 import {
   BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION,
   buildStoryBibleIntervalRequests,
+  parseStoryBibleIntervalResponse,
   type StoryBibleBuildLimits,
 } from "./book-story-bible-job.js";
 import { JobCancelledError, type JobExecutionContext } from "./job-worker.js";
@@ -217,6 +218,36 @@ test("故事圣经区间使用当前 run 配置的并发批次数并在全部完
   await handler(context(task).value);
   assert.equal(peak, 2);
   assert.equal(finalStarted, true);
+});
+
+test("故事圣经重试复用已完成区间并从 checkpoint 进度继续", async () => {
+  const task = payload(2);
+  const execution = context(task);
+  execution.value.getCheckpoint = (stage: string, scopeKey: string) => stage === "book-story-bible-interval"
+    ? { jobId: execution.value.job.id, stage, scopeKey, inputHash: scopeKey, completedAt: 1 } : undefined;
+  let calls = 0;
+  const handler = createBookStoryBibleJobHandler(database(2), config, {
+    fetchImpl: (async () => {
+      calls += 1;
+      return streamedModelResponse(content("event_0", "chapter_0"));
+    }) as typeof fetch,
+    findBible: ((_database: never, input: { sourceStartChapterId: string }) => {
+      const index = input.sourceStartChapterId.endsWith("_0") ? 0 : 1;
+      const value = content(`event_${index}`, `chapter_${index}`);
+      return {
+        id: `interval_${index}`, content: value,
+        contentHash: parseStoryBibleIntervalResponse(task.intervals[index]!, value).contentHash,
+      };
+    }) as never,
+    createBible: ((_database: never, input: Record<string, unknown>) => ({
+      id: String(input.scope), contentHash: "1".repeat(64),
+    })) as never,
+  });
+
+  await handler(execution.value);
+  assert.equal(calls, 1);
+  assert.equal(execution.progress[0], 2 / 3);
+  assert.deepEqual(execution.progress.at(-1), 1);
 });
 
 test("Story Bible 在 Anthropic Messages 也显式请求流式输出", async () => {

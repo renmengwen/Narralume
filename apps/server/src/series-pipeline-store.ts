@@ -490,6 +490,10 @@ export function pauseSeriesPipelineRun(database: DatabaseSync, id: string, now =
       if (job.status === "queued" && !hasOtherActiveOwner(database, job.id, id)) {
         database.prepare("UPDATE jobs SET run_after = ?, updated_at = ? WHERE id = ? AND status = 'queued'")
           .run(PAUSED_JOB_RUN_AFTER, now, job.id);
+      } else if (job.status === "running" && !hasOtherActiveOwner(database, job.id, id)) {
+        database.prepare("UPDATE jobs SET run_after = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+          .run(PAUSED_JOB_RUN_AFTER, now, job.id);
+        requestJobCancellation(database, job.id, now);
       }
     }
     return getSeriesPipelineRun(database, id)!;
@@ -497,20 +501,36 @@ export function pauseSeriesPipelineRun(database: DatabaseSync, id: string, now =
 }
 
 export function resumeSeriesPipelineRun(database: DatabaseSync, id: string, now = Date.now()) {
-  const run = getSeriesPipelineRun(database, id);
-  if (!run) throw new SeriesPipelineError(404, "全本流水线不存在");
-  if (run.status !== "paused") return run;
-  database.prepare(
-    "UPDATE series_pipeline_runs SET status = resume_status, resume_status = NULL, updated_at = ? WHERE id = ? AND status = 'paused'",
-  ).run(now, id);
-  database.prepare(
-    `UPDATE jobs SET run_after = ?, updated_at = ?
-     WHERE status = 'queued' AND run_after = ? AND id IN (
-       SELECT job_id FROM series_pipeline_jobs
-       WHERE run_id = ? AND stage NOT IN ('story_bible', 'chapter_analysis')
-     )`,
-  ).run(now, now, PAUSED_JOB_RUN_AFTER, id);
-  return getSeriesPipelineRun(database, id)!;
+  return immediateTransaction(database, () => {
+    const run = getSeriesPipelineRun(database, id);
+    if (!run) throw new SeriesPipelineError(404, "全本流水线不存在");
+    if (run.status !== "paused") return run;
+    const stopping = database.prepare(
+      `SELECT 1 FROM jobs job JOIN series_pipeline_jobs mapping ON mapping.job_id = job.id
+       WHERE mapping.run_id = ? AND job.status = 'running' AND job.cancel_requested = 1
+         AND job.run_after = ? LIMIT 1`,
+    ).get(id, PAUSED_JOB_RUN_AFTER);
+    if (stopping) throw new SeriesPipelineError(409, "当前任务正在停止，请稍后再继续");
+    database.prepare(
+      `UPDATE jobs SET status = 'queued', progress = 0, attempts = 0, cancel_requested = 0,
+         lease_owner = NULL, lease_expires_at = NULL, result_json = NULL,
+         error_code = NULL, error_message = NULL, started_at = NULL, finished_at = NULL, updated_at = ?
+       WHERE status = 'cancelled' AND run_after = ? AND id IN (
+         SELECT job_id FROM series_pipeline_jobs WHERE run_id = ?
+       )`,
+    ).run(now, PAUSED_JOB_RUN_AFTER, id);
+    database.prepare(
+      "UPDATE series_pipeline_runs SET status = resume_status, resume_status = NULL, updated_at = ? WHERE id = ? AND status = 'paused'",
+    ).run(now, id);
+    database.prepare(
+      `UPDATE jobs SET run_after = ?, updated_at = ?
+       WHERE status = 'queued' AND run_after = ? AND id IN (
+         SELECT job_id FROM series_pipeline_jobs
+         WHERE run_id = ? AND stage NOT IN ('story_bible', 'chapter_analysis')
+       )`,
+    ).run(now, now, PAUSED_JOB_RUN_AFTER, id);
+    return getSeriesPipelineRun(database, id)!;
+  });
 }
 
 export function cancelSeriesPipelineRun(database: DatabaseSync, id: string, now = Date.now()) {

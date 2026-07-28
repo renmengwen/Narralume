@@ -348,6 +348,37 @@ test("章节分析复用成功章、暂停不派发、失败局部重试并在�
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });
 
+test("pause 请求中断独占 running Job，停止完成后 resume 重新排队", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-pause-running-"));
+  const connection = await seed(dataRoot);
+  try {
+    const database = connection.database;
+    const run = createSeriesPipelineRun(database, input());
+    setSeriesPipelineStatus(database, run.id, "configured", "analyzing_chapters");
+    const job = createJob(database, { id: "job_pause_running", type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: {} });
+    assert.equal(mapSeriesPipelineJob(database, run.id, "chapter_a_1", job.id), true);
+    database.prepare(
+      `UPDATE jobs SET status='running',attempts=1,lease_owner='pause-worker',lease_expires_at=? WHERE id=?`,
+    ).run(Date.now() + 60_000, job.id);
+
+    assert.equal(pauseSeriesPipelineRun(database, run.id).status, "paused");
+    assert.deepEqual({ ...database.prepare(
+      "SELECT status,cancel_requested,run_after FROM jobs WHERE id=?",
+    ).get(job.id) }, { status: "running", cancel_requested: 1, run_after: Number.MAX_SAFE_INTEGER });
+    assert.throws(() => resumeSeriesPipelineRun(database, run.id), /正在停止/);
+
+    database.prepare(
+      `UPDATE jobs SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?`,
+    ).run(Date.now(), job.id);
+    assert.equal(resumeSeriesPipelineRun(database, run.id).status, "analyzing_chapters");
+    assert.deepEqual({ ...database.prepare(
+      "SELECT status,progress,attempts,cancel_requested,run_after FROM jobs WHERE id=?",
+    ).get(job.id) }, {
+      status: "queued", progress: 0, attempts: 0, cancel_requested: 0, run_after: Number.MAX_SAFE_INTEGER,
+    });
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
 test("章节分析 rolling 窗口维持八个批 Job 并在完成后补位", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-rolling-eight-"));
   const parts = Array.from({ length: 9 }, (_, index) => Buffer.from(`第${index + 1}章内容。`, "utf8"));

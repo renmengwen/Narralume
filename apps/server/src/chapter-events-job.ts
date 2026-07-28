@@ -403,6 +403,10 @@ export function createChapterEventsAnalysisJobHandler(
     context.throwIfCancellationRequested();
     const source = await buildChapterEvidenceAtoms(database, dataRoot, task.bookId, task.chapterId);
     if (source.contentHash !== task.contentHash) throw new Error("章节原文在任务排队后已变化");
+    if (context.getCheckpoint("chapter-events-analyze", task.chapterId)) {
+      context.reportProgress(1);
+      return { analyzed: 0, preserved: false, reused: true };
+    }
     const controller = new AbortController();
     const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
     let inputs: readonly ChapterEventInput[];
@@ -455,12 +459,17 @@ export function createChapterEventsBatchAnalysisJobHandler(
       if (source.contentHash !== chapter.contentHash) throw new Error("章节原文在任务排队后已变化");
       return { chapterId: chapter.chapterId, atoms: source.atoms };
     }));
+    const pending = chapters.filter((chapter) =>
+      !context.getCheckpoint("chapter-events-analyze", chapter.chapterId));
+    let reused = chapters.length - pending.length;
+    if (reused) context.reportProgress(reused / task.chapters.length);
+    if (!pending.length) return { analyzed: 0, reused, preserved: 0, chapters: task.chapters.length };
     const controller = new AbortController();
     const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
     let outputs: readonly { chapterId: string; events: readonly ChapterEventInput[] }[];
     try {
       outputs = await analyze({
-        chapters,
+        chapters: pending,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(CHAPTER_ANALYSIS_TIMEOUT_MS)]),
       });
     } catch (error) {
@@ -471,7 +480,7 @@ export function createChapterEventsBatchAnalysisJobHandler(
       clearInterval(poll);
     }
     context.throwIfCancellationRequested();
-    const expected = new Set(task.chapters.map((chapter) => chapter.chapterId));
+    const expected = new Set(pending.map((chapter) => chapter.chapterId));
     const seen = new Set<string>();
     if (!Array.isArray(outputs) || outputs.length !== expected.size) throw new Error("多章分析结果章节集合不完整");
     const prepared = await Promise.all(outputs.map(async (output) => {
@@ -481,9 +490,6 @@ export function createChapterEventsBatchAnalysisJobHandler(
       if (seen.has(output.chapterId)) throw new Error("多章分析结果重复包含章节");
       seen.add(output.chapterId);
       if (!Array.isArray(output.events)) throw new Error("多章分析结果事件列表无效");
-      if (context.getCheckpoint("chapter-events-analyze", output.chapterId)) {
-        return { chapterId: output.chapterId, events: undefined, checkpointReused: true };
-      }
       if (output.events.length === 0) {
         const existing = database.prepare("SELECT 1 FROM chapter_events WHERE chapter_id = ? LIMIT 1").get(output.chapterId);
         if (!existing) throw new Error("多章分析未为每个章节生成可持久事件");
@@ -497,13 +503,11 @@ export function createChapterEventsBatchAnalysisJobHandler(
     }));
     if (seen.size !== expected.size) throw new Error("多章分析结果章节集合不完整");
     let analyzed = 0;
-    let reused = 0;
     let preserved = 0;
     for (const [index, chapter] of prepared.entries()) {
       context.throwIfCancellationRequested();
       if (!chapter.events) {
-        if (chapter.checkpointReused) reused += 1;
-        else preserved += 1;
+        preserved += 1;
       } else {
         const result = context.commitCheckpoint(
           "chapter-events-analyze",
@@ -517,8 +521,8 @@ export function createChapterEventsBatchAnalysisJobHandler(
         if (result.created || result.replaced) analyzed += 1;
         else reused += 1;
       }
-      context.reportProgress((index + 1) / prepared.length);
+      context.reportProgress((chapters.length - pending.length + index + 1) / task.chapters.length);
     }
-    return { analyzed, reused, preserved, chapters: prepared.length };
+    return { analyzed, reused, preserved, chapters: task.chapters.length };
   };
 }

@@ -132,6 +132,8 @@ test("全本进度渲染真实数量和当前章节，不伪造百分比", () =>
   assert.match(html, /复用 1/);
   assert.match(html, /第 2 章/);
   assert.match(html, /job_2/);
+  assert.match(html, /暂停当前任务/);
+  assert.doesNotMatch(html, /暂停后续任务/);
   assert.doesNotMatch(html, /<progress|%/);
   assert.match(html, /min-h-11/);
 });
@@ -197,7 +199,7 @@ test("覆盖检查保持处理中语义，自动生产完成后明确等待逐�
   assert.match(awaitingHtml, /自动生产完成，等待逐集审核/);
   assert.match(awaitingHtml, /状态：<!-- -->等待审核/);
   assert.match(awaitingHtml, /自动生产已完成，等待逐集审核/);
-  assert.doesNotMatch(awaitingHtml, /固定流水线正在处理全书|暂停后续任务|取消全本改写/);
+  assert.doesNotMatch(awaitingHtml, /固定流水线正在处理全书|暂停当前任务|取消全本改写/);
 });
 
 test("流水线只读不会锁死章节浏览，但会禁用事件写操作", () => {

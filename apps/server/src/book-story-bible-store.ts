@@ -212,6 +212,31 @@ export function getBookStoryBible(database: DatabaseSync, id: string) {
   return rowResult(database, row);
 }
 
+export function findBookStoryBibleForJob(
+  database: DatabaseSync,
+  input: {
+    jobId: string; bookId: string; scope: BookStoryBibleScope;
+    sourceStartChapterId: string; sourceEndChapterId: string;
+    sourceEventIds: readonly string[]; parentBibleIds?: readonly string[];
+  },
+) {
+  const rows = database.prepare(
+    `SELECT ${SELECT_COLUMNS} FROM book_story_bibles
+     WHERE job_id = ? AND book_id = ? AND scope = ?
+       AND source_start_chapter_id = ? AND source_end_chapter_id = ? AND invalidated_at IS NULL
+     ORDER BY revision DESC`,
+  ).all(input.jobId, input.bookId, input.scope, input.sourceStartChapterId,
+    input.sourceEndChapterId) as unknown as BibleRow[];
+  const sourceEventIds = [...input.sourceEventIds].sort((left, right) => left.localeCompare(right));
+  const parentBibleIds = [...(input.parentBibleIds ?? [])].sort((left, right) => left.localeCompare(right));
+  for (const row of rows) {
+    const bible = rowResult(database, row);
+    if (JSON.stringify(bible.sourceEventIds) === JSON.stringify(sourceEventIds) &&
+        JSON.stringify(bible.parentBibleIds) === JSON.stringify(parentBibleIds)) return bible;
+  }
+  return undefined;
+}
+
 export function createBookStoryBible(
   database: DatabaseSync, input: BookStoryBibleInput, options: { forceRebuild?: boolean; now?: number } = {},
 ) {

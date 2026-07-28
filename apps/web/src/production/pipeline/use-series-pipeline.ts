@@ -125,7 +125,7 @@ export function useSeriesPipeline({ bookId, seriesId, initialRunId, onRunIdChang
     setBusyAction(action);
     setError(undefined);
     const loadingText = action === "create" ? "正在创建全本改写任务…"
-      : action === "pause" ? "正在暂停后续任务…"
+      : action === "pause" ? "正在暂停当前任务…"
       : action === "resume" ? "正在继续全本改写任务…"
       : action === "retry" ? "正在重新排队失败章节…"
       : "正在取消全本改写任务…";

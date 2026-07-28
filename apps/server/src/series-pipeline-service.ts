@@ -5,6 +5,7 @@ import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { chapterEventsAnalysisJobIdentity, enqueueChapterEventsAnalysisJob } from "./chapter-events-job.js";
 import {
   enqueueEpisodeScriptGenerationJob,
+  EPISODE_SCRIPT_GENERATION_JOB_TYPE,
   type EpisodeScriptGenerationRequest,
   type ScriptHandoff,
 } from "./episode-script-generation-job.js";
@@ -34,6 +35,7 @@ import {
 } from "./full-book-plan-job-handler.js";
 import { freezeFullBookPlan } from "./full-book-plan-store.js";
 import { canonicalFullBookPlanJson, parseFullBookPlan } from "./full-book-plan-contract.js";
+import { validateStoredScriptVersion } from "./script-version-store.js";
 import {
   cancelSeriesPipelineRun,
   createSeriesPipelineRun,
@@ -108,6 +110,10 @@ export class SeriesPipelineService {
         }
         if (run.status === "generating_scripts") {
           await this.reconcileScripts(run);
+          continue;
+        }
+        if (run.status === "checking_coverage") {
+          this.reconcileCoverage(run);
           continue;
         }
         if (["planning_episodes", "validating_plan", "freezing_plan"].includes(run.status)) {
@@ -188,6 +194,10 @@ export class SeriesPipelineService {
         mapSeriesPipelineJob(this.options.database, run.id, next.id, result.job.id);
       } catch (error) {
         if (getSeriesPipelineRun(this.options.database, candidate.id)?.status === "paused") continue;
+        if (candidate.status === "checking_coverage") {
+          this.failCoverage(candidate.id, "script_coverage_check_failed", "覆盖复核执行失败，请检查冻结分集、任务映射和稿件数据");
+          continue;
+        }
         setSeriesPipelineFailure(
           this.options.database,
           candidate.id,
@@ -493,6 +503,87 @@ export class SeriesPipelineService {
       return;
     }
     setSeriesPipelineStatus(this.options.database, run.id, "generating_scripts", "checking_coverage");
+  }
+
+  private reconcileCoverage(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
+    const episodes = this.options.database.prepare(
+      "SELECT id, episode_index FROM episodes WHERE series_project_id = ? ORDER BY episode_index",
+    ).all(run.seriesProjectId) as unknown as Array<{ id: string; episode_index: number }>;
+    if (episodes.length !== run.episodeCount || episodes.some((episode, index) => episode.episode_index !== index + 1)) {
+      this.failCoverage(run.id, "script_coverage_episode_invalid", "覆盖复核失败：冻结分集数量或连续序号与全书计划不一致");
+      return;
+    }
+
+    const mappings = getMappedScriptJobs(this.options.database, run.id);
+    const byEpisode = new Map(mappings.map((mapping) => [mapping.subject_id, mapping.job_id]));
+    if (mappings.length !== episodes.length || episodes.some((episode) => !byEpisode.has(episode.id))) {
+      this.failCoverage(run.id, "script_coverage_mapping_missing", "覆盖复核失败：存在分集缺少当前稿件任务映射");
+      return;
+    }
+
+    const versionIds = new Set<string>();
+    for (const episode of episodes) {
+      const source = this.options.database.prepare(
+        `SELECT COUNT(*) AS total, COUNT(DISTINCT source_index) AS distinct_total,
+                MIN(source_index) AS first_index, MAX(source_index) AS last_index
+         FROM episode_sources WHERE episode_id = ?`,
+      ).get(episode.id) as { total: number; distinct_total: number; first_index: number | null; last_index: number | null };
+      if (source.total < 1 || source.distinct_total !== source.total || source.first_index !== 0 ||
+          source.last_index !== source.total - 1) {
+        this.failCoverage(run.id, "script_coverage_sources_invalid", `覆盖复核失败：第 ${episode.episode_index} 集冻结来源缺失或序号不连续`);
+        return;
+      }
+
+      const job = getJob(this.options.database, byEpisode.get(episode.id)!);
+      if (!job || job.type !== EPISODE_SCRIPT_GENERATION_JOB_TYPE || job.status !== "succeeded") {
+        this.failCoverage(run.id, "script_coverage_job_invalid", `覆盖复核失败：第 ${episode.episode_index} 集当前稿件任务未成功`);
+        return;
+      }
+      const result = job.result as { faithfulVersionId?: unknown; packagedVersionId?: unknown } | null;
+      if (typeof result?.faithfulVersionId !== "string" || typeof result.packagedVersionId !== "string") {
+        this.failCoverage(run.id, "script_coverage_result_invalid", `覆盖复核失败：第 ${episode.episode_index} 集任务缺少双稿版本身份`);
+        return;
+      }
+      const faithful = this.options.database.prepare(
+        "SELECT episode_id, kind, parent_version_id FROM script_versions WHERE id = ?",
+      ).get(result.faithfulVersionId) as { episode_id: string; kind: string; parent_version_id: string | null } | undefined;
+      const packaged = this.options.database.prepare(
+        "SELECT episode_id, kind, parent_version_id FROM script_versions WHERE id = ?",
+      ).get(result.packagedVersionId) as { episode_id: string; kind: string; parent_version_id: string | null } | undefined;
+      if (!faithful || faithful.episode_id !== episode.id || faithful.kind !== "faithful" || faithful.parent_version_id ||
+          !packaged || packaged.episode_id !== episode.id || packaged.kind !== "packaged" ||
+          packaged.parent_version_id !== result.faithfulVersionId) {
+        this.failCoverage(run.id, "script_coverage_parent_invalid", `覆盖复核失败：第 ${episode.episode_index} 集双稿缺失或父链无效`);
+        return;
+      }
+      try {
+        validateStoredScriptVersion(this.options.database, result.faithfulVersionId);
+        validateStoredScriptVersion(this.options.database, result.packagedVersionId);
+      } catch {
+        this.failCoverage(run.id, "script_coverage_version_invalid", `覆盖复核失败：第 ${episode.episode_index} 集稿件内容或来源快照损坏`);
+        return;
+      }
+      for (const versionId of [result.faithfulVersionId, result.packagedVersionId]) {
+        const covered = Number(this.options.database.prepare(
+          "SELECT COUNT(DISTINCT episode_source_index) AS total FROM script_version_sources WHERE script_version_id = ?",
+        ).get(versionId)?.total);
+        if (covered !== source.total) {
+          this.failCoverage(run.id, "script_coverage_incomplete", `覆盖复核失败：第 ${episode.episode_index} 集稿件未覆盖全部冻结来源`);
+          return;
+        }
+        versionIds.add(versionId);
+      }
+    }
+    if (versionIds.size !== run.episodeCount * 2) {
+      this.failCoverage(run.id, "script_coverage_total_invalid", "覆盖复核失败：双稿覆盖总数与全书计划不一致");
+      return;
+    }
+    setSeriesPipelineStatus(this.options.database, run.id, "checking_coverage", "awaiting_review");
+  }
+
+  private failCoverage(runId: string, code: string, message: string) {
+    const failed = setSeriesPipelineStatus(this.options.database, runId, "checking_coverage", "failed");
+    if (failed?.status === "failed") setSeriesPipelineFailure(this.options.database, runId, code, message);
   }
 
   private scriptHandoff(job: NonNullable<ReturnType<typeof getJob>>): ScriptHandoff {

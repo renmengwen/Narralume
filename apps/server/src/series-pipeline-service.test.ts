@@ -24,6 +24,7 @@ import { canonicalFullBookPlanJson } from "./full-book-plan-contract.js";
 import { FULL_BOOK_PLAN_JOB_TYPE } from "./full-book-plan-job-handler.js";
 import { JobWorker } from "./job-worker.js";
 import { SeriesPipelineService } from "./series-pipeline-service.js";
+import { createScriptVersionPair } from "./script-version-store.js";
 import {
   assertSeriesPipelineAllowsChapterEventMutation,
   createSeriesPipelineRun,
@@ -35,6 +36,7 @@ import {
   mapSeriesPipelineJob,
   mapSeriesPipelineEpisodePlanJob,
   mapSeriesPipelineStoryBibleJob,
+  mapSeriesPipelineScriptJob,
   pauseSeriesPipelineRun,
   resumeSeriesPipelineRun,
   cancelSeriesPipelineRun,
@@ -80,6 +82,122 @@ function input(suffix = "a") {
     sourceStartChapterId: `chapter_${suffix}_1`, sourceEndChapterId: `chapter_${suffix}_2`,
   };
 }
+
+async function coverageFixture(dataRoot: string) {
+  const connection = await seed(dataRoot);
+  const database = connection.database;
+  const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 2 });
+  setSeriesPipelineStatus(database, run.id, "configured", "checking_coverage");
+  const versions = [] as Array<{ episodeId: string; faithfulId: string; packagedId: string }>;
+  for (const index of [1, 2]) {
+    const episodeId = `coverage_episode_${index}`;
+    const chapterId = `chapter_a_${index}`;
+    const eventId = `coverage_event_${index}`;
+    const chapter = database.prepare(
+      "SELECT byte_start,byte_end,content_hash FROM chapters WHERE id = ?",
+    ).get(chapterId) as { byte_start: number; byte_end: number; content_hash: string };
+    database.prepare(`INSERT INTO chapter_events
+      (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+      VALUES (?,?,0,0,'revelation',?,1)`).run(eventId, chapterId, JSON.stringify({ fact: `事实${index}` }));
+    database.prepare(`INSERT INTO episodes
+      (id,series_project_id,episode_index,title,story_arc,target_duration_seconds,recap,next_hook,created_at,updated_at)
+      VALUES (?,'series_a',?,?,?,1200,NULL,NULL,1,1)`).run(episodeId, index, `第${index}集`, `故事弧${index}`);
+    database.prepare(`INSERT INTO episode_sources
+      (episode_id,source_index,chapter_id,source_event_id,source_byte_start,source_byte_end,source_hash)
+      VALUES (?,0,?,?,?,?,?)`).run(
+      episodeId, chapterId, eventId, chapter.byte_start, chapter.byte_end, chapter.content_hash,
+    );
+    const pair = createScriptVersionPair(database, episodeId, {
+      faithfulParagraphs: [{ text: `忠实稿${index}`, sourceIndexes: [0] }],
+      packagedParagraphs: [{ text: `包装稿${index}`, sourceIndexes: [0] }],
+    }, () => undefined);
+    const job = createJob(database, {
+      id: `coverage_job_${index}`, type: EPISODE_SCRIPT_GENERATION_JOB_TYPE, payload: {}, maxAttempts: 1,
+    });
+    database.prepare(
+      "UPDATE jobs SET status='succeeded',progress=1,result_json=?,finished_at=1,updated_at=1 WHERE id=?",
+    ).run(JSON.stringify({ faithfulVersionId: pair.faithful.id, packagedVersionId: pair.packaged.id }), job.id);
+    mapSeriesPipelineScriptJob(database, run.id, episodeId, job.id);
+    versions.push({ episodeId, faithfulId: pair.faithful.id, packagedId: pair.packaged.id });
+  }
+  return { connection, runId: run.id, versions };
+}
+
+test("checking_coverage 冷重启后进入 awaiting_review 且幂等保持零批准", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-coverage-ready-"));
+  let fixture = await coverageFixture(dataRoot);
+  fixture.connection.close();
+  const connection = openDatabase(dataRoot);
+  try {
+    const service = new SeriesPipelineService({
+      database: connection.database, dataRoot, resolveChapterTextProvider: async () => provider,
+    });
+    await service.reconcile();
+    assert.equal(service.get(fixture.runId)!.status, "awaiting_review");
+    assert.equal(service.get(fixture.runId)!.failureCode, null);
+    assert.equal(connection.database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
+    await service.reconcile();
+    assert.equal(service.get(fixture.runId)!.status, "awaiting_review");
+    assert.equal(connection.database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
+  } finally {
+    connection.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("checking_coverage 对缺分集、缺映射、缺稿件和坏父链进入可诊断 failed", async (t) => {
+  const cases: Array<{
+    name: string;
+    code: string;
+    corrupt(database: ReturnType<typeof openDatabase>["database"], versions: Awaited<ReturnType<typeof coverageFixture>>["versions"]): void;
+  }> = [
+    {
+      name: "缺分集", code: "script_coverage_episode_invalid",
+      corrupt: (database, versions) => { database.prepare("DELETE FROM episodes WHERE id = ?").run(versions[1]!.episodeId); },
+    },
+    {
+      name: "缺映射", code: "script_coverage_mapping_missing",
+      corrupt: (database, versions) => {
+        database.prepare("DELETE FROM series_pipeline_jobs WHERE stage='script_generation' AND subject_id=?")
+          .run(versions[1]!.episodeId);
+      },
+    },
+    {
+      name: "缺稿件", code: "script_coverage_parent_invalid",
+      corrupt: (database, versions) => { database.prepare("DELETE FROM script_versions WHERE id = ?").run(versions[1]!.packagedId); },
+    },
+    {
+      name: "坏父链", code: "script_coverage_parent_invalid",
+      corrupt: (database, versions) => {
+        database.prepare("UPDATE script_versions SET parent_version_id = NULL WHERE id = ?").run(versions[1]!.packagedId);
+      },
+    },
+  ];
+  for (const item of cases) await t.test(item.name, async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-coverage-invalid-"));
+    const fixture = await coverageFixture(dataRoot);
+    try {
+      const database = fixture.connection.database;
+      item.corrupt(database, fixture.versions);
+      const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+      await service.reconcile();
+      const failed = service.get(fixture.runId)!;
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.failureCode, item.code);
+      assert.match(failed.failureMessage ?? "", /覆盖复核失败/u);
+      await service.reconcile();
+      assert.deepEqual({
+        status: service.get(fixture.runId)!.status,
+        code: service.get(fixture.runId)!.failureCode,
+        message: service.get(fixture.runId)!.failureMessage,
+      }, { status: "failed", code: failed.failureCode, message: failed.failureMessage });
+      assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
+    } finally {
+      fixture.connection.close();
+      await rm(dataRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 test("流水线创建校验连续范围、拒绝重复 active，并隔离另一本书", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-create-"));

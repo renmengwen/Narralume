@@ -3,7 +3,7 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "../../components/ui/alert-dialog";
 import type { Chapter } from "../types";
-import { pipelineIsTerminal, pipelineStatusText, type SeriesPipelineRun } from "./pipeline-logic";
+import { pipelineIsTerminal, pipelineStatusPresentation, pipelineStatusText, type SeriesPipelineRun } from "./pipeline-logic";
 
 type ControlAction = "pause" | "resume" | "retry" | "cancel";
 
@@ -21,6 +21,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
     return chapter ? `第 ${chapter.chapter_index + 1} 章 · ${chapter.title}` : id;
   };
   const chapter = run.progress.chapterAnalysis;
+  const presentation = pipelineStatusPresentation(run.status);
   const primaryAction = run.actions.canResume ? "resume" : run.actions.canRetry ? "retry" : undefined;
   const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败章节";
   const stateMessage = run.current
@@ -32,10 +33,10 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
       <div className="flex items-start justify-between gap-4 max-md:flex-col">
         <div>
           <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.14em] text-[var(--accent)]">全本改写 / 真实进度</p>
-          <h2 id="pipeline-progress-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">固定流水线正在处理全书</h2>
+          <h2 id="pipeline-progress-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">{presentation.heading}</h2>
           <p className="mt-2 font-mono text-xs text-[var(--fg-tertiary)]">RUN {run.id}</p>
         </div>
-        <span className="min-h-11 border border-[var(--border-strong)] bg-[var(--bg-subtle)] px-4 py-3 text-sm font-semibold">状态：{pipelineStatusLabel(run.status)}</span>
+        <span className="min-h-11 border border-[var(--border-strong)] bg-[var(--bg-subtle)] px-4 py-3 text-sm font-semibold">状态：{presentation.label}</span>
       </div>
 
       <div className="min-h-11 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-secondary)]" role="status" aria-live="polite">
@@ -83,22 +84,13 @@ function ProgressRow({ label, count, detail }: { label: string; count: string; d
   </div>;
 }
 
-function pipelineStatusLabel(status: SeriesPipelineRun["status"]) {
-  const labels: Record<SeriesPipelineRun["status"], string> = {
-    configured: "已配置", analyzing_chapters: "分析章节", building_story_bible: "构建故事圣经",
-    planning_episodes: "规划分集", validating_plan: "校验计划", freezing_plan: "冻结计划",
-    generating_scripts: "生成稿件", checking_coverage: "检查覆盖", awaiting_review: "等待审核",
-    paused: "已暂停", failed: "执行失败", cancelled: "已取消", completed: "已完成",
-  };
-  return labels[status];
-}
-
 function stageDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan" | "scripts") {
   if (run.status === "paused") return "已暂停；已完成结果保留";
   if (run.status === "cancelled") return "已取消；不再派发任务";
   if (run.status === "failed" || run.failureMessage) return "存在失败项，请检查后重试";
-  const active = stage === "storyBible" ? run.status === "building_story_bible"
-    : stage === "episodePlan" ? ["planning_episodes", "validating_plan", "freezing_plan"].includes(run.status)
-    : ["generating_scripts", "checking_coverage"].includes(run.status);
-  return active ? "当前阶段；单次模型请求不显示虚构百分比" : "等待上游阶段完成";
+  const presentation = pipelineStatusPresentation(run.status);
+  if (presentation.activeStage === stage) return "当前阶段；单次模型请求不显示虚构百分比";
+  if (stage === "scripts" && presentation.stageDetail) return presentation.stageDetail;
+  const progress = run.progress[stage];
+  return progress.total > 0 && progress.completed === progress.total ? "阶段已完成" : "等待上游阶段完成";
 }

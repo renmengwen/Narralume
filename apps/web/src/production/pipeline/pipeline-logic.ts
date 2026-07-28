@@ -38,6 +38,28 @@ export interface PipelineCreateInput {
   sourceEndChapterId: string;
 }
 
+export function pipelineStatusPresentation(status: SeriesPipelineStatus): {
+  heading: string;
+  label: string;
+  activeStage?: "storyBible" | "episodePlan" | "scripts";
+  stageDetail?: string;
+} {
+  const labels: Record<SeriesPipelineStatus, string> = {
+    configured: "已配置", analyzing_chapters: "分析章节", building_story_bible: "构建故事圣经",
+    planning_episodes: "规划分集", validating_plan: "校验计划", freezing_plan: "冻结计划",
+    generating_scripts: "生成稿件", checking_coverage: "检查覆盖", awaiting_review: "等待审核",
+    paused: "已暂停", failed: "执行失败", cancelled: "已取消", completed: "已完成",
+  };
+  if (status === "awaiting_review") {
+    return { heading: "自动生产完成，等待逐集审核", label: labels[status], stageDetail: "自动生产已完成，等待逐集审核" };
+  }
+  const activeStage = status === "building_story_bible" ? "storyBible"
+    : ["planning_episodes", "validating_plan", "freezing_plan"].includes(status) ? "episodePlan"
+    : ["generating_scripts", "checking_coverage"].includes(status) ? "scripts"
+    : undefined;
+  return { heading: "固定流水线正在处理全书", label: labels[status], activeStage };
+}
+
 export function pipelineCreateInput(
   input: PipelineCreateInput,
   chapters: Chapter[],
@@ -86,7 +108,7 @@ export function pipelineStatusText(run: SeriesPipelineRun) {
     return "正在生成并校验全书分集方案。";
   }
   if (run.status === "generating_scripts" || run.status === "checking_coverage") return "正在生成并检查全本稿件。";
-  if (run.status === "awaiting_review") return "全本稿件已生成，等待逐集审核。";
+  if (run.status === "awaiting_review") return "自动生产完成，等待逐集审核。";
   return "全本改写任务执行失败，可检查失败项后重试。";
 }
 

@@ -153,7 +153,7 @@ export function listPipelineChapters(database: DatabaseSync, run: SeriesPipeline
 
 export function listRunnableSeriesPipelineRuns(database: DatabaseSync) {
   return (database.prepare(
-    "SELECT * FROM series_pipeline_runs WHERE status IN ('configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes', 'validating_plan', 'freezing_plan', 'generating_scripts') ORDER BY created_at, id",
+    "SELECT * FROM series_pipeline_runs WHERE status IN ('configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes', 'validating_plan', 'freezing_plan', 'generating_scripts', 'checking_coverage') ORDER BY created_at, id",
   ).all() as unknown as RunRow[]).map(runRecord);
 }
 

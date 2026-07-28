@@ -10,6 +10,7 @@ import {
   pipelineChapterEventsReadOnly,
   pipelineCreateInput,
   pipelineRangeCount,
+  pipelineStatusPresentation,
   pipelineStatusText,
   type SeriesPipelineRun,
 } from "../src/production/pipeline/pipeline-logic.ts";
@@ -109,6 +110,37 @@ test("全本进度渲染真实数量和当前章节，不伪造百分比", () =>
   assert.match(html, /job_2/);
   assert.doesNotMatch(html, /<progress|%/);
   assert.match(html, /min-h-11/);
+});
+
+test("覆盖检查保持处理中语义，自动生产完成后明确等待逐集审核", () => {
+  const completeProgress = {
+    chapterAnalysis: { completed: 3, total: 3, reused: 0, queued: 0, running: 0, failed: 0 },
+    storyBible: { completed: 1, total: 1 },
+    episodePlan: { completed: 3, total: 3 },
+    scripts: { completed: 6, total: 6 },
+  };
+  const checking = run({ status: "checking_coverage", current: null, episodeCount: 3, progress: completeProgress });
+  assert.equal(pipelineStatusPresentation(checking.status).heading, "固定流水线正在处理全书");
+  assert.equal(pipelineStatusText(checking), "正在生成并检查全本稿件。");
+  const checkingHtml = renderToString(createElement(PipelineProgress, {
+    run: checking, chapters, operation: "正在检查稿件覆盖。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(checkingHtml, /固定流水线正在处理全书/);
+  assert.match(checkingHtml, /状态：<!-- -->检查覆盖/);
+  assert.match(checkingHtml, /当前阶段；单次模型请求不显示虚构百分比/);
+
+  const awaiting = run({
+    status: "awaiting_review", current: null, episodeCount: 3, progress: completeProgress,
+    actions: { canPause: false, canResume: false, canCancel: false, canRetry: false },
+  });
+  assert.equal(pipelineStatusText(awaiting), "自动生产完成，等待逐集审核。");
+  const awaitingHtml = renderToString(createElement(PipelineProgress, {
+    run: awaiting, chapters, operation: "已恢复全本改写任务。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(awaitingHtml, /自动生产完成，等待逐集审核/);
+  assert.match(awaitingHtml, /状态：<!-- -->等待审核/);
+  assert.match(awaitingHtml, /自动生产已完成，等待逐集审核/);
+  assert.doesNotMatch(awaitingHtml, /固定流水线正在处理全书|暂停后续任务|取消全本改写/);
 });
 
 test("流水线只读不会锁死章节浏览，但会禁用事件写操作", () => {

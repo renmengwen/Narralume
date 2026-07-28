@@ -581,6 +581,19 @@ PC-02 当前 checkpoint：
 | 业务提交 | `c1c97d4 feat(auto): 展示故事圣经构建步骤进度` |
 | 运行状态 / 风险 | 后端源码 watch 热更新使真实 Story Bible Job 进入 attempt 3/3 并从 `0/91` 重跑；当前仍为 running、租约持续续期、无错误。本 Task 完成后不再修改后端或重启服务，避免再次打断在途请求。 |
 
+## 2026-07-28 AI 任务暂停与断点恢复修复
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AI-RECOVERY-01` / 暂停全本流水线时真正中断当前后端模型请求；故事圣经与章节事件重试不得再次调用已完成单元。 |
+| 状态 | `complete` |
+| 运行前置 | 通过正式 pause API 将 run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 置为 `paused`，`resumeStatus=building_story_bible`；随后只停止 3101 后端进程树，5174 前端保持运行。暂停时数据库保留 46 个 `book-story-bible-interval` checkpoint 和 46 个 interval Bible。 |
+| 实现边界 | 故事圣经启动时按 Job、书籍、scope、章节范围、事件/父 Bible 身份和内容 hash 重新验证持久结果，恢复原序聚合与真实进度，只将缺失区间送入按当前 run `chapterConcurrency` 配置的 rolling worker pool；final checkpoint 同样可恢复。章节单/批分析在模型调用前过滤已完成 checkpoint。pause 对该 run 独占 running Job 写入 pause sentinel 并请求取消，50ms cancellation poll 会中断 SSE；共享 active owner 不误取消，停止尚未完成时 resume 返回 409，取消落定后再安全排队。无 migration、无新依赖、无硬编码并发数。 |
+| UI / OpenDesign | 按 `narralume-product` 保留现有暖中性进度界面，只将“暂停后续任务”改为“暂停当前任务”，提供中文 loading 并沿用单 action busy 防重复提交；不新增组件、样式或模型 token 增量展示。 |
+| 验证证据 | Server `404 PASS / 0 FAIL / 1 Windows 权限 SKIP`；Web `98 PASS / 0 FAIL`；两端 typecheck/build 与 `git diff --check` 全部 PASS。业务提交 `99dc279 fix(auto): 恢复故事圣经进度并中断暂停任务`。 |
+| 其他 AI 调用审计 | 章节事件单/批已随本提交闭合。分集来源推荐是单次模型调用，不存在部分单元恢复。全书分集规划虽然有 interval checkpoint，但尚无持久 interval 输出；忠实稿/包装稿的 skeleton、faithful beat、packaged 也尚无中间 checkpoint，失败重试仍会从头调用模型。两者需先定义耐久中间结果合同，不在本次无 migration 的最小修复中伪装完成。 |
+| 恢复入口 | 只启动 3101 后端并确认 `/api/health` HTTP 200、5174 PID 不变；run 应继续保持 paused。通过正式 resume API 恢复后，预期先投影约 `46/91`，只请求剩余区间并在全部 interval 完成后执行一次 final。 |
+
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。

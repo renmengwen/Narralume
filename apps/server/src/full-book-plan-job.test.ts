@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FULL_BOOK_PLAN_PROMPT_VERSION,
   FullBookPlanJobContractError,
   buildFullBookPlanFinalRequest,
   buildFullBookPlanIntervalRequests,
+  fullBookPlanFinalResponseParser,
   parseFullBookPlanFinalResponse,
   parseFullBookPlanIntervalResponse,
   type FullBookPlanBuildLimits,
@@ -141,4 +143,27 @@ test("错误类型稳定", () => {
     () => buildFullBookPlanIntervalRequests("bad id", bible, chapters(), 4, { providerId: "p", model: "m" }, limits),
     FullBookPlanJobContractError,
   );
+});
+
+test("prompt v2 进入确定性 identity，旧版本 identity 不再可复用", () => {
+  const request = buildFullBookPlanIntervalRequests(
+    "book_1", bible, chapters(), 4, { providerId: "p", model: "m" }, limits,
+  )[0]!;
+  assert.equal(FULL_BOOK_PLAN_PROMPT_VERSION, "full-book-plan-prompt-v2");
+  assert.equal(request.identity.promptVersion, FULL_BOOK_PLAN_PROMPT_VERSION);
+  const oldVersion = structuredClone(request);
+  oldVersion.identity.promptVersion = "full-book-plan-prompt-v1";
+  assert.throws(() => parseFullBookPlanIntervalResponse(oldVersion, plan(0, 2)), /请求身份无效/u);
+});
+
+test("已验证 interval 在 final 响应校验器创建前损坏会按本地身份错误失败", () => {
+  const requests = buildFullBookPlanIntervalRequests(
+    "book_1", bible, chapters(), 4, { providerId: "p", model: "m" }, limits,
+  );
+  const verified = requests.map((request, index) => parseFullBookPlanIntervalResponse(request, plan(index * 2, 2)));
+  const finalRequest = buildFullBookPlanFinalRequest(
+    "book_1", bible, 4, verified, { providerId: "p", model: "m" }, limits,
+  );
+  finalRequest.intervals[0]!.content.episodes[0]!.title = "篡改";
+  assert.throws(() => fullBookPlanFinalResponseParser(finalRequest), FullBookPlanJobContractError);
 });

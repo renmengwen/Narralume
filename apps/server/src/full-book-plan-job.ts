@@ -10,7 +10,7 @@ import {
 } from "./full-book-plan-contract.js";
 
 export const FULL_BOOK_PLAN_JOB_CONTRACT_VERSION = "full-book-plan-job-v1";
-export const FULL_BOOK_PLAN_PROMPT_VERSION = "full-book-plan-prompt-v1";
+export const FULL_BOOK_PLAN_PROMPT_VERSION = "full-book-plan-prompt-v2";
 export const FULL_BOOK_PLAN_PARSER_VERSION = "full-book-plan-parser-v1";
 
 export class FullBookPlanJobContractError extends Error {}
@@ -303,14 +303,21 @@ function validateIntervalRequest(request: FullBookPlanIntervalRequest) {
 }
 
 export function parseFullBookPlanIntervalResponse(request: FullBookPlanIntervalRequest, value: unknown): VerifiedFullBookPlanInterval {
+  return fullBookPlanIntervalResponseParser(request)(value);
+}
+
+export function fullBookPlanIntervalResponseParser(request: FullBookPlanIntervalRequest) {
   validateIntervalRequest(request);
-  const content = parseFullBookPlan(value, {
+  const options = {
     startChapterIndex: request.identity.startChapterIndex,
     endChapterIndex: request.identity.endChapterIndex,
     episodeCount: request.identity.episodeCount,
     allowedSourceEvents: allowedEvents(request.sourceEvents),
-  });
-  return { request, content, contentHash: sha256(canonicalFullBookPlanJson(content)) };
+  };
+  return (value: unknown): VerifiedFullBookPlanInterval => {
+    const content = parseFullBookPlan(value, options);
+    return { request, content, contentHash: sha256(canonicalFullBookPlanJson(content)) };
+  };
 }
 
 export function buildFullBookPlanFinalRequest(
@@ -389,6 +396,10 @@ export function buildFullBookPlanFinalRequest(
 }
 
 export function parseFullBookPlanFinalResponse(request: FullBookPlanFinalRequest, value: unknown) {
+  return fullBookPlanFinalResponseParser(request)(value);
+}
+
+export function fullBookPlanFinalResponseParser(request: FullBookPlanFinalRequest) {
   const intervalInputs = request.intervals.map(({ identityHash, contentHash, content }, index) => {
     if (identityHash !== request.intervalIdentityHashes[index] || contentHash !== sha256(canonicalFullBookPlanJson(content))) {
       throw new FullBookPlanJobContractError("全书规划最终聚合区间内容无效");
@@ -409,12 +420,15 @@ export function parseFullBookPlanFinalResponse(request: FullBookPlanFinalRequest
     throw new FullBookPlanJobContractError("全书规划最终请求身份无效");
   }
   validProvenance(request.provenance);
-  const content = parseFullBookPlan(value, {
+  const options = {
     startChapterIndex: request.identity.startChapterIndex,
     endChapterIndex: request.identity.endChapterIndex,
     episodeCount: request.identity.episodeCount,
     allowedSourceEvents: allowedEvents(request.sourceEvents),
     intervalQuotas: request.intervalQuotas,
-  });
-  return { content, contentHash: sha256(canonicalFullBookPlanJson(content)) };
+  };
+  return (value: unknown) => {
+    const content = parseFullBookPlan(value, options);
+    return { content, contentHash: sha256(canonicalFullBookPlanJson(content)) };
+  };
 }

@@ -109,6 +109,59 @@ test("伪造来源或破坏配额的模型结果在返回 Store 前失败", asyn
       return new Response(JSON.stringify({ output_text: JSON.stringify(forged) }), { status: 200 });
     }) as typeof fetch;
     await assert.rejects(() => createFullBookPlanJobHandler(config, { fetchImpl })(context(task).value));
+    assert.equal(calls, 2);
+  }
+});
+
+test("首答回显包装字段时仅纠错一次，并使用同一任务与精确 schema", async () => {
+  const task = payload();
+  const prompts: string[] = [];
+  const responses = [
+    { kind: "interval", identityHash: "x", start: 0, end: 0, episodeCount: 1, ...plan(["event_0"]) },
+    plan(["event_0"]),
+    plan(["event_1"]),
+    plan(["event_0", "event_1"]),
+  ];
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body)) as { input: string };
+    prompts.push(request.input);
+    return new Response(JSON.stringify({ output_text: JSON.stringify(responses.shift()) }), { status: 200 });
+  }) as typeof fetch;
+  const result = await createFullBookPlanJobHandler(config, { fetchImpl })(context(task).value) as {
+    plan: { episodes: unknown[] };
+  };
+  assert.equal(result.plan.episodes.length, 2);
+  assert.equal(prompts.length, 4);
+  assert.match(prompts[0]!, /唯一允许的输出 schema.*\{episodes:\[\{index:number,title:string,storyArc:string,sourceEventIds:string\[\],recap:string\|null,nextHook:string\|null\}\]\}/u);
+  assert.match(prompts[1]!, /包含未知字段/u);
+  assert.equal(prompts[0]!.split("\n").at(-1), prompts[1]!.split("\n").at(-1));
+  assert.match(prompts[3]!, /逐项满足 request\.intervalQuotas/u);
+});
+
+test("纠错答仍非法时不发起第三次请求", async () => {
+  const task = payload();
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ output_text: JSON.stringify({ kind: "interval", ...plan(["event_0"]) }) }));
+  }) as typeof fetch;
+  await assert.rejects(() => createFullBookPlanJobHandler(config, { fetchImpl })(context(task).value), /未知字段/u);
+  assert.equal(calls, 2);
+});
+
+test("HTTP、非 JSON 与 abort 错误不触发合同纠错", async () => {
+  const cases: Array<{ fetchImpl: typeof fetch; message: RegExp }> = [
+    { fetchImpl: (async () => new Response("bad gateway", { status: 502 })) as typeof fetch, message: /HTTP 502/u },
+    { fetchImpl: (async () => new Response("not json")) as typeof fetch, message: /无效 JSON/u },
+    { fetchImpl: (async () => { throw new DOMException("aborted", "AbortError"); }) as typeof fetch, message: /aborted/u },
+  ];
+  for (const item of cases) {
+    let calls = 0;
+    const fetchImpl = (async (...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      return item.fetchImpl(...args);
+    }) as typeof fetch;
+    await assert.rejects(() => createFullBookPlanJobHandler(config, { fetchImpl })(context(payload()).value), item.message);
     assert.equal(calls, 1);
   }
 });

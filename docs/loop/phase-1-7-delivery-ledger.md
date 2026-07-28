@@ -608,6 +608,18 @@ PC-02 当前 checkpoint：
 | 业务提交 | `3734cbc fix(auto): 分层归并故事圣经并展示上游错误` |
 | 恢复 / 风险 | 每个中间节点独立持久，后续失败只补缺失 reduction/final；不再发送约 249 万字节的 90 区间单次最终输入。上游若仅发送无 code/message 的 `type:error`，页面仍只能原样显示其通用失败终态；有字段时直接展示原值。当前固定自动全本流水线继续处于 `planning_episodes`，工程修复完成不等于后续分集、稿件、TTS、视觉、渲染和导出已验收。 |
 
+## 2026-07-29 全书规划动态分区恢复
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-03-LONG-BOOK-PARTITION-01` / 修复真实 1794 章、20 集 run 在 Story Bible 完成后无法创建全书规划 Job 的协调阻断。 |
+| 根因 | `reconcileEpisodePlan` 固定使用每区间最多 20 章，1794 章被切为约 90 个规划区间；`full-book-plan-job` 合同要求每个区间至少分配 1 集，因此在创建 Job 前拒绝“90 区间分配 20 集”，只留下泛化 `pipeline_reconcile_failed`，数据库无 `episode_plan` mapping 且页面 `canRetry=false`。 |
+| 修复边界 | 复用现有 Full Book Plan 合同、Job、parked mapping 和模型输入门禁；按用户冻结的 `episodeCount` 反推连续动态分区。当前 1794 章/20 集得到 20 个区间，每区间最多 90 章；真实区间含 610～745 个事件、逻辑来源数据约 1.08～1.32 MiB，但真正发送的 metadata 请求约 298～345 KiB，继续受 512 KiB 序列化输入硬门禁约束。成功建立或恢复当前规划 Job 时清除旧协调错误，不新增依赖、migration、队列或 Store。 |
+| 验证证据 | 新增长篇 1794 章→20 动态区间回归，并扩展当前 identity parked mapping 测试验证旧协调错误清除；聚焦 2 PASS。最终全仓 `npm test`、`npm run typecheck`、`npm run build` 与 `git diff --check` 全部 PASS；Server 0 FAIL/1 Windows 权限 SKIP，Web 98 PASS/0 FAIL，Vite 137 modules。 |
+| 真实恢复 Gate | run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 已清除 `pipeline_reconcile_failed`，失败项 0；创建并运行正式 Job `job_full_book_plan_9c5d85d7e35fc573920b66d46058b3ab806c56ca0856d4a1e284dc4568f11470`。首个 interval checkpoint 已成功，Job progress `1/21`（20 interval + 1 final），证明不再阻断于 Job 创建前。因开发热重载，该 Job 当前为 attempt 3/3；Coordinator 已停止后端源码修改、重启和控制操作，保留其继续执行。 |
+| 业务提交 | `bde7a4e fix(auto): 按目标集数动态分区全书规划` |
+| 当前边界 / 恢复 | 工程阻断已解除，真实规划仍在运行，不登记为“20 集计划已完成”。若后续模型调用失败，只按正式 Job 错误处理；现有 `full-book-plan-interval` checkpoint 尚无对应耐久 interval 结果，不能伪称可无损复用成功区间，也不得直接改 SQLite 绕过。 |
+
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。

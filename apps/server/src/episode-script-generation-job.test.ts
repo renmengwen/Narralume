@@ -12,6 +12,9 @@ import {
   createEpisodeScriptGenerationJobHandler,
   enqueueEpisodeScriptGenerationJob,
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+  EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS,
+  EPISODE_SCRIPT_GENERATION_TIMEOUT_MS,
+  EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS,
   type GenerateEpisodeScript,
 } from "./episode-script-generation-job.js";
 import { createOpenAiEpisodeScriptGenerator } from "./episode-script-provider.js";
@@ -92,6 +95,7 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
     const body = JSON.parse(String(init?.body)) as { input: string; text?: unknown };
     assert.match(body.input, /JSON/u);
     assert.equal(body.text, undefined);
+    assert.equal((body as { stream?: unknown }).stream, true);
     return new Response(JSON.stringify({ output_text: JSON.stringify(outputs[calls++]!) }), {
       headers: { "content-type": "application/json" },
     });
@@ -106,6 +110,56 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
   await generate({ stage: "packaged", targetDurationSeconds: 120, characterBudget: 400,
     paragraphs: [{ text: "忠实稿", sourceIndexes: [0] }], signal });
   assert.equal(calls, 3);
+});
+
+test("骨架 prompt 注入完整来源 allowlist 与唯一输出 schema", async () => {
+  let prompt = "";
+  const generate = createOpenAiEpisodeScriptGenerator(config, (async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { input: string; stream?: boolean };
+    prompt = body.input;
+    assert.equal(body.stream, true);
+    return Response.json({ output_text: JSON.stringify({ beats: [{ intent: "完整", sourceIndexes: [0, 1] }] }) });
+  }) as typeof fetch);
+  await generate({
+    stage: "skeleton",
+    episode: { id: "episode", storyArc: "进入墓道", recap: null, nextHook: null, targetDurationSeconds: 120 },
+    characterBudget: 400,
+    calibration: { identity: "provisional" },
+    sources: [
+      { sourceIndex: 0, chapterId: "chapter_0", sourceEventId: "event_0", eventType: "revelation", event: { fact: "事实0" } },
+      { sourceIndex: 1, chapterId: "chapter_1", sourceEventId: "event_1", eventType: "revelation", event: { fact: "事实1" } },
+    ],
+    signal: new AbortController().signal,
+  });
+  assert.match(prompt, /唯一输出 schema/u);
+  assert.match(prompt, /全局恰好出现一次/u);
+  assert.match(prompt, /严格递增/u);
+  assert.match(prompt, /不得遗漏、重复、伪造或越界/u);
+  assert.equal(prompt.includes('[{"sourceIndex":0,"sourceEventId":"event_0"},{"sourceIndex":1,"sourceEventId":"event_1"}]'), true);
+  assert.match(prompt, /输出中只能出现 sourceIndexes，不得输出 sourceEventId/u);
+});
+
+test("Responses SSE 仅在明确成功终态后返回完整骨架", async () => {
+  const output = JSON.stringify({ beats: [{ intent: "完整", sourceIndexes: [0] }] });
+  const generate = createOpenAiEpisodeScriptGenerator(config, (async () => new Response(
+    `data: ${JSON.stringify({ type: "response.output_text.delta", delta: output })}\n\ndata: ${JSON.stringify({ type: "response.completed" })}\n\n`,
+    { headers: { "content-type": "text/event-stream" } },
+  )) as typeof fetch);
+  const result = await generate({
+    stage: "skeleton",
+    episode: { id: "episode", storyArc: "进入墓道", recap: null, nextHook: null, targetDurationSeconds: 120 },
+    characterBudget: 400,
+    calibration: { identity: "provisional" },
+    sources: [{ sourceIndex: 0, chapterId: "chapter_0", sourceEventId: "event_0", eventType: "revelation", event: { fact: "事实0" } }],
+    signal: new AbortController().signal,
+  });
+  assert.deepEqual(result, { beats: [{ intent: "完整", sourceIndexes: [0] }] });
+});
+
+test("长稿模型调用使用 180 秒首包与空闲、900 秒总上限", () => {
+  assert.equal(EPISODE_SCRIPT_GENERATION_TIMEOUT_MS, 180_000);
+  assert.equal(EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS, 180_000);
+  assert.equal(EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS, 900_000);
 });
 
 test("Anthropic Messages 配置使用 messages 端点与对应鉴权合同", async () => {
@@ -220,6 +274,87 @@ test("长稿 Job 骨架不接收原文，faithful 按 beat 隔离原文并写入
     context.connection.close();
     await rm(context.dataRoot, { recursive: true, force: true });
   }
+});
+
+test("骨架完整 JSON 漏来源后仅纠正一次并原子写入双稿", async () => {
+  const context = await fixture();
+  const skeletonPrompts: string[] = [];
+  let calls = 0;
+  const outputs = [
+    { beats: [{ intent: "漏项", sourceIndexes: [0, 1] }] },
+    { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] },
+    { text: "忠实稿" },
+    { paragraphs: [{ text: "包装稿", sourceIndexes: [0, 1, 2] }] },
+  ];
+  try {
+    const generate = createOpenAiEpisodeScriptGenerator(config, (async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { input: string };
+      if (calls < 2) skeletonPrompts.push(body.input);
+      return Response.json({ output_text: JSON.stringify(outputs[calls++]!) });
+    }) as typeof fetch);
+    const result = await run(context, generate);
+    assert.equal(result.job.status, "succeeded");
+    assert.equal(calls, 4);
+    assert.equal(skeletonPrompts.length, 2);
+    assert.match(skeletonPrompts[1]!, /故事骨架必须明确覆盖全部冻结来源/u);
+    assert.match(skeletonPrompts[1]!, /只纠正一次并重新输出完整 JSON/u);
+    assert.equal(listScriptVersions(context.database, "episode", "faithful").length, 1);
+    assert.equal(listScriptVersions(context.database, "episode", "packaged").length, 1);
+    assert.deepEqual((result.job.result as { scriptHandoff: unknown }).scriptHandoff, {
+      summary: "进入墓道",
+      continuityNotes: ["发现机关", "完整"],
+    });
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("骨架纠正后仍漏来源最多调用两次且不写稿", async () => {
+  const context = await fixture();
+  let calls = 0;
+  try {
+    const generate = createOpenAiEpisodeScriptGenerator(config, (async () => {
+      calls += 1;
+      return Response.json({ output_text: JSON.stringify({ beats: [{ intent: "仍漏项", sourceIndexes: [0, 1] }] }) });
+    }) as typeof fetch);
+    const result = await run(context, generate);
+    assert.equal(result.job.status, "failed");
+    assert.equal(calls, 2);
+    assert.equal(listScriptVersions(context.database, "episode").length, 0);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("HTTP、非 JSON、abort 与 SSE 无终态失败均不进入骨架纠错", async (t) => {
+  const cases: Array<[string, () => Promise<Response>]> = [
+    ["HTTP", async () => new Response("失败", { status: 503 })],
+    ["非 JSON", async () => new Response("不是 JSON", { headers: { "content-type": "application/json" } })],
+    ["abort", async () => { throw new DOMException("aborted", "AbortError"); }],
+    ["SSE 无终态", async () => new Response(
+      `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "{\\\"beats\\\":[]}" })}\n\n`,
+      { headers: { "content-type": "text/event-stream" } },
+    )],
+  ];
+  for (const [name, response] of cases) await t.test(name, async () => {
+    const context = await fixture();
+    let calls = 0;
+    try {
+      const generate = createOpenAiEpisodeScriptGenerator(config, (async () => {
+        calls += 1;
+        return response();
+      }) as typeof fetch);
+      const result = await run(context, generate);
+      assert.equal(result.job.status, "failed");
+      assert.equal(calls, 1);
+      assert.equal(listScriptVersions(context.database, "episode").length, 0);
+    } finally {
+      context.connection.close();
+      await rm(context.dataRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 test("骨架拒绝空、重复、越界、伪造及乱序来源", async (t) => {

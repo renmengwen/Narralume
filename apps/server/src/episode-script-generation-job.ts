@@ -9,6 +9,9 @@ import { createScriptVersionPair } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
+export const EPISODE_SCRIPT_GENERATION_TIMEOUT_MS = 180_000;
+export const EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS = 180_000;
+export const EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS = 900_000;
 
 export interface EpisodeScriptGenerationRequest {
   seriesId: string;
@@ -74,6 +77,8 @@ interface SkeletonInput {
     eventType: string;
     event: Record<string, string>;
   }>;
+  correctionError?: string;
+  onActivity?: () => void;
   signal: AbortSignal;
 }
 
@@ -82,6 +87,7 @@ interface FaithfulInput {
   beat: ScriptBeat;
   characterBudget: number;
   sources: Array<{ sourceIndex: number; sourceText: string }>;
+  onActivity?: () => void;
   signal: AbortSignal;
 }
 
@@ -90,6 +96,7 @@ interface PackagedInput {
   targetDurationSeconds: number;
   characterBudget: number;
   paragraphs: Array<{ text: string; sourceIndexes: number[] }>;
+  onActivity?: () => void;
   signal: AbortSignal;
 }
 
@@ -342,7 +349,23 @@ function assertCurrentDatabaseIdentity(database: DatabaseSync, task: FrozenPaylo
   })) throw new Error("分集、目标时长、来源或事件摘要在任务排队后已变化，请重新生成");
 }
 
+class EpisodeScriptSkeletonContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EpisodeScriptSkeletonContractError";
+  }
+}
+
 function validateBeats(value: unknown, sources: readonly FrozenSource[], targetDurationSeconds: number): ScriptBeat[] {
+  try {
+    return validateBeatsContract(value, sources, targetDurationSeconds);
+  } catch (error) {
+    if (error instanceof EpisodeScriptSkeletonContractError) throw error;
+    throw new EpisodeScriptSkeletonContractError(error instanceof Error ? error.message : "故事骨架无效");
+  }
+}
+
+function validateBeatsContract(value: unknown, sources: readonly FrozenSource[], targetDurationSeconds: number): ScriptBeat[] {
   if (!Array.isArray(value) || value.length === 0) throw new Error("骨架必须包含至少一个故事 beat");
   const available = new Set(sources.map((source) => source.sourceIndex));
   const used = new Set<number>();
@@ -402,19 +425,32 @@ function validatePackagedResult(value: unknown, allowed: ReadonlySet<number>) {
 
 async function callWithCancellation<T>(
   context: Parameters<JobHandler>[0],
-  call: (signal: AbortSignal) => Promise<T>,
+  call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
 ) {
   context.throwIfCancellationRequested();
   const controller = new AbortController();
+  const idleController = new AbortController();
+  const totalController = new AbortController();
   const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
+  let idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")),
+    EPISODE_SCRIPT_GENERATION_TIMEOUT_MS);
+  const total = setTimeout(() => totalController.abort(new DOMException("total timeout", "TimeoutError")),
+    EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS);
+  const onActivity = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")),
+      EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS);
+  };
   try {
-    return await call(AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]));
+    return await call(AbortSignal.any([controller.signal, idleController.signal, totalController.signal]), onActivity);
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("长稿生成模型请求超时");
     throw error;
   } finally {
     clearInterval(poll);
+    clearTimeout(idle);
+    clearTimeout(total);
   }
 }
 
@@ -474,7 +510,7 @@ export function createEpisodeScriptGenerationJobHandler(
     const episode = await requireCurrentEpisode(database, dataRoot, task);
     assertCalibration(database, task.episodeId, task);
     const characterBudget = Math.floor(task.targetDurationSeconds * task.charactersPerSecond * task.narrationOccupancy);
-    const skeletonResult = await callWithCancellation(context, (signal) => generate({
+    const skeletonInput: Omit<SkeletonInput, "signal" | "onActivity" | "correctionError"> = {
       stage: "skeleton",
       episode: {
         id: task.episodeId,
@@ -493,15 +529,28 @@ export function createEpisodeScriptGenerationJobHandler(
         eventType: source.eventType,
         event: JSON.parse(source.eventPayloadJson) as Record<string, string>,
       })),
+    };
+    const generateSkeleton = (correctionError?: string) => callWithCancellation(context, (signal, onActivity) => generate({
+      ...skeletonInput,
+      ...(correctionError ? { correctionError } : {}),
       signal,
+      onActivity,
     }));
-    const beats = validateBeats((skeletonResult as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
+    const skeletonResult = await generateSkeleton();
+    let beats: ScriptBeat[];
+    try {
+      beats = validateBeats((skeletonResult as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
+    } catch (error) {
+      if (!(error instanceof EpisodeScriptSkeletonContractError)) throw error;
+      const corrected = await generateSkeleton(error.message);
+      beats = validateBeats((corrected as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
+    }
     context.reportProgress(0.2);
 
     const sourceMap = new Map(episode.sources.map((source) => [source.sourceIndex, source]));
     const faithfulParagraphs = [] as Array<{ text: string; sourceIndexes: number[] }>;
     for (const [index, beat] of beats.entries()) {
-      const result = await callWithCancellation(context, (signal) => generate({
+      const result = await callWithCancellation(context, (signal, onActivity) => generate({
         stage: "faithful",
         beat,
         characterBudget: Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
@@ -511,18 +560,20 @@ export function createEpisodeScriptGenerationJobHandler(
           sourceText: sourceMap.get(sourceIndex)!.sourceText,
         })),
         signal,
+        onActivity,
       }));
       faithfulParagraphs.push({ text: validateTextResult(result, "忠实稿正文"), sourceIndexes: beat.sourceIndexes });
       context.reportProgress(0.2 + ((index + 1) / beats.length) * 0.4);
     }
 
     const faithfulSources = new Set(faithfulParagraphs.flatMap((paragraph) => paragraph.sourceIndexes));
-    const packagedResult = await callWithCancellation(context, (signal) => generate({
+    const packagedResult = await callWithCancellation(context, (signal, onActivity) => generate({
       stage: "packaged",
       targetDurationSeconds: task.targetDurationSeconds,
       characterBudget,
       paragraphs: faithfulParagraphs,
       signal,
+      onActivity,
     }));
     const packagedParagraphs = validatePackagedResult(packagedResult, faithfulSources);
     context.reportProgress(0.9);

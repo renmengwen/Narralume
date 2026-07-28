@@ -82,6 +82,33 @@ export interface SeriesPipelineServiceOptions {
     "voice" | "rate" | "charactersPerSecond" | "narrationOccupancy" | "calibration">;
 }
 
+export function fullBookPlanBuildLimits(
+  chapters: readonly FullBookPlanChapterInput[],
+  episodeCount: number,
+): FullBookPlanBuildLimits {
+  if (!chapters.length || !Number.isSafeInteger(episodeCount) || episodeCount < 1) {
+    throw new Error("全书规划动态分区参数无效");
+  }
+  const maxChaptersPerInterval = Math.ceil(chapters.length / episodeCount);
+  let maxEventsPerInterval = 0;
+  let maxInputBytesPerInterval = 0;
+  for (let index = 0; index < chapters.length; index += maxChaptersPerInterval) {
+    const group = chapters.slice(index, index + maxChaptersPerInterval);
+    maxEventsPerInterval = Math.max(maxEventsPerInterval,
+      group.reduce((total, chapter) => total + chapter.sourceEvents.length, 0));
+    maxInputBytesPerInterval = Math.max(maxInputBytesPerInterval,
+      group.reduce((total, chapter) => total + chapter.sourceEvents.reduce(
+        (sum, event) => sum + event.inputBytes, 0), 0));
+  }
+  return {
+    maxChaptersPerInterval,
+    maxEventsPerInterval,
+    maxInputBytesPerInterval,
+    maxFinalIntervals: episodeCount,
+    maxFinalInputBytes: 5_000_000,
+  };
+}
+
 export class SeriesPipelineService {
   constructor(private readonly options: SeriesPipelineServiceOptions) {}
 
@@ -392,15 +419,16 @@ export class SeriesPipelineService {
        WHERE id = ? AND book_id = ? AND scope = 'final' AND invalidated_at IS NULL`,
     ).get(run.storyBibleId, bookId) as { id: string; content_hash: string } | undefined : undefined;
     if (!bible) throw new Error("全书规划缺少当前故事圣经");
-    const limits: FullBookPlanBuildLimits = {
-      maxChaptersPerInterval: 20, maxEventsPerInterval: 500, maxInputBytesPerInterval: 1_000_000,
-      maxFinalIntervals: 1000, maxFinalInputBytes: 5_000_000,
-    };
     const chapters = this.fullBookPlanInputs(run);
+    const limits = fullBookPlanBuildLimits(chapters, run.episodeCount);
     const intervals = buildFullBookPlanIntervalRequests(
       bookId, { id: bible.id, contentHash: bible.content_hash }, chapters, run.episodeCount,
       { providerId: provider.providerId, model: provider.model }, limits,
     );
+    const oversized = intervals.find((interval) => Buffer.byteLength(JSON.stringify({
+      kind: "interval", request: interval,
+    }), "utf8") > MAX_CHAPTER_BATCH_INPUT_BYTES);
+    if (oversized) throw new Error(`全书规划区间 ${oversized.identityHash} 的模型输入超过 512 KiB 安全上限`);
     const base: Omit<FullBookPlanJobPayload, "providerId" | "model" | "requestHash"> = {
       contractVersion: FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
       bookId, storyBible: { id: bible.id, contentHash: bible.content_hash },
@@ -410,6 +438,9 @@ export class SeriesPipelineService {
     const pipelineIdentity = createHash("sha256").update(`${requestHash}:${run.configHash}`).digest("hex");
     const mapping = getMappedEpisodePlanJob(this.options.database, run.id);
     const job = mapping?.subject_id === pipelineIdentity ? getJob(this.options.database, mapping.job_id) : undefined;
+    if (job && job.status !== "failed" && job.status !== "cancelled" && run.failureCode) {
+      setSeriesPipelineStatus(this.options.database, run.id, run.status, run.status);
+    }
     if (job?.status === "failed" || job?.status === "cancelled") {
       setSeriesPipelineFailure(this.options.database, run.id,
         job.status === "cancelled" ? "job_cancelled" : job.errorCode ?? "episode_plan_failed",

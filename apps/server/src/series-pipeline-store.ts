@@ -201,6 +201,9 @@ export function mapSeriesPipelineEpisodePlanJob(
              AND run.status NOT IN ('paused', 'cancelled', 'completed')
          )`,
     ).run(now, now, jobId, PAUSED_JOB_RUN_AFTER);
+    database.prepare(
+      "UPDATE series_pipeline_runs SET failure_code = NULL, failure_message = NULL, updated_at = ? WHERE id = ?",
+    ).run(now, runId);
     return true;
   });
 }

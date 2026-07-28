@@ -21,9 +21,10 @@ import {
 } from "./episode-script-generation-job.js";
 import { createJob, getJob } from "./job-store.js";
 import { canonicalFullBookPlanJson } from "./full-book-plan-contract.js";
+import { buildFullBookPlanIntervalRequests } from "./full-book-plan-job.js";
 import { FULL_BOOK_PLAN_JOB_TYPE } from "./full-book-plan-job-handler.js";
 import { JobWorker } from "./job-worker.js";
-import { SeriesPipelineService } from "./series-pipeline-service.js";
+import { fullBookPlanBuildLimits, SeriesPipelineService } from "./series-pipeline-service.js";
 import { createScriptVersionPair } from "./script-version-store.js";
 import {
   assertSeriesPipelineAllowsChapterEventMutation,
@@ -43,12 +44,42 @@ import {
   retrySeriesPipelineRun,
   seriesPipelineView,
   SeriesPipelineError,
+  setSeriesPipelineFailure,
   setSeriesPipelineStatus,
 } from "./series-pipeline-store.js";
 
 const provider: ChapterTextModelConfig = {
   baseUrl: "http://local.invalid", apiKey: "test", model: "test-model", providerId: "test-provider",
 };
+
+test("全书规划按目标集数动态合并长篇章节且保持有界输入", () => {
+  const chapters = Array.from({ length: 1_794 }, (_, chapterIndex) => ({
+    chapterId: `chapter_${chapterIndex}`,
+    chapterIndex,
+    sourceEvents: [{
+      id: `event_${chapterIndex}`,
+      chapterId: `chapter_${chapterIndex}`,
+      chapterIndex,
+      byteRanges: [{ byteStart: chapterIndex * 10, byteEnd: chapterIndex * 10 + 9 }],
+      contentHash: createHash("sha256").update(String(chapterIndex)).digest("hex"),
+      inputBytes: 100,
+    }],
+  }));
+  const limits = fullBookPlanBuildLimits(chapters, 20);
+  assert.deepEqual(limits, {
+    maxChaptersPerInterval: 90,
+    maxEventsPerInterval: 90,
+    maxInputBytesPerInterval: 9_000,
+    maxFinalIntervals: 20,
+    maxFinalInputBytes: 5_000_000,
+  });
+  const intervals = buildFullBookPlanIntervalRequests(
+    "book_a", { id: "bible_a", contentHash: "1".repeat(64) }, chapters, 20,
+    { providerId: provider.providerId, model: provider.model }, limits,
+  );
+  assert.equal(intervals.length, 20);
+  assert.equal(intervals.reduce((total, interval) => total + interval.identity.episodeCount, 0), 20);
+});
 
 async function seed(dataRoot: string, suffix = "a", existing?: ReturnType<typeof openDatabase>) {
   const first = Buffer.from(`${suffix}甲在庭院出现。`, "utf8");
@@ -1428,11 +1459,13 @@ test("全书规划以当前 identity parked 映射，旧结果不推进并原子
     database.prepare(
       "UPDATE series_pipeline_runs SET status='planning_episodes',story_bible_id=? WHERE id=?",
     ).run(bible.id, run.id);
+    setSeriesPipelineFailure(database, run.id, "pipeline_reconcile_failed", "旧协调错误");
     const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
     await service.reconcile();
     const first = getMappedEpisodePlanJob(database, run.id)!;
     assert.equal(getJob(database, first.job_id)!.type, FULL_BOOK_PLAN_JOB_TYPE);
     assert.notEqual(getJob(database, first.job_id)!.runAfter, Number.MAX_SAFE_INTEGER);
+    assert.equal(service.get(run.id)!.failureMessage, null);
     assert.equal(service.cancel(run.id).status, "cancelled");
     assert.equal(getJob(database, first.job_id)!.status, "cancelled");
     assert.equal(service.retry(run.id).status, "planning_episodes");

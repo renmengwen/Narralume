@@ -13,6 +13,8 @@ export interface SeriesPipelineRun {
   resumeStatus: SeriesPipelineStatus | null;
   episodeCount: number;
   targetDurationSeconds: number;
+  chapterBatchSize: number;
+  chapterConcurrency: number;
   sourceStartChapterId: string;
   sourceEndChapterId: string;
   failureCode: string | null;
@@ -34,6 +36,8 @@ export interface SeriesPipelineRun {
 export interface PipelineCreateInput {
   episodeCount: number;
   targetDurationSeconds: number;
+  chapterBatchSize: number;
+  chapterConcurrency: number;
   sourceStartChapterId: string;
   sourceEndChapterId: string;
 }
@@ -75,6 +79,12 @@ export function pipelineCreateInput(
       input.targetDurationSeconds < policy.minimumSeconds || input.targetDurationSeconds > policy.maximumSeconds ||
       (input.targetDurationSeconds - policy.minimumSeconds) % policy.stepSeconds !== 0) {
     throw new Error(`单集时长必须是 ${policy.minimumSeconds}～${policy.maximumSeconds} 秒，并按 ${policy.stepSeconds} 秒递增`);
+  }
+  if (!Number.isSafeInteger(input.chapterBatchSize) || input.chapterBatchSize < 1 || input.chapterBatchSize > 20) {
+    throw new Error("每批最多章节数必须是 1～20 之间的整数");
+  }
+  if (!Number.isSafeInteger(input.chapterConcurrency) || input.chapterConcurrency < 1 || input.chapterConcurrency > 8) {
+    throw new Error("并发批次数必须是 1～8 之间的整数");
   }
   return input;
 }

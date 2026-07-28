@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createOpenAiResponsesChapterBatchAnalyzer,
   createOpenAiResponsesChapterAnalyzer,
+  MAX_CHAPTER_BATCH_INPUT_BYTES,
+  parseChapterBatchAnalysisEvents,
+  prepareChapterBatchPrompt,
   parseChapterAnalysisEvents,
   textModelRequest,
   type ChapterEvidenceAtom,
@@ -153,4 +157,60 @@ test("分批合并后为重复事件身份稳定分配 occurrence", async () => 
   const second = await run();
   assert.deepEqual(first.map((event) => event.occurrence), [0, 1, 0, 0, 2]);
   assert.deepEqual(second, first);
+});
+
+test("多章单请求严格校验章节全集并拒绝跨章 evidence", async () => {
+  const chapters = [
+    { chapterId: "chapter-a", atoms: [{ ...atoms[0]!, id: "c1e1" }] },
+    { chapterId: "chapter-b", atoms: [{ ...atoms[1]!, id: "c2e1" }] },
+  ];
+  assert.throws(() => parseChapterBatchAnalysisEvents(JSON.stringify({ chapters: [
+    { chapterId: "chapter-a", events: [] },
+    { chapterId: "chapter-a", events: [] },
+  ] }), chapters), /重复包含章节/);
+  assert.throws(() => parseChapterBatchAnalysisEvents(JSON.stringify({ chapters: [
+    { chapterId: "chapter-a", events: [{ type: "location", payload: { name: "越界" }, evidenceIds: ["c2e1"] }] },
+    { chapterId: "chapter-b", events: [] },
+  ] }), chapters), /未知证据 ID/);
+
+  let calls = 0;
+  const analyzer = createOpenAiResponsesChapterBatchAnalyzer(config, (async () => {
+    calls += 1;
+    return modelResponse({ chapters: [
+      { chapterId: "chapter-a", events: [{ type: "character", payload: { name: "吴邪" }, evidenceIds: ["c1e1"] }] },
+      { chapterId: "chapter-b", events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["c2e1"] }] },
+    ] });
+  }) as typeof fetch);
+  const result = await analyzer({ chapters: [
+    { chapterId: "chapter-a", atoms: [atoms[0]!] },
+    { chapterId: "chapter-b", atoms: [atoms[1]!] },
+  ] });
+  assert.equal(calls, 1);
+  assert.deepEqual(result.map((item) => item.chapterId), ["chapter-a", "chapter-b"]);
+});
+
+test("批次预算使用最终 JSON prompt 的真实 UTF-8 字节数并执行 512 KiB 边界", () => {
+  const escaped = Array.from({ length: 1_000 }, (_, index): ChapterEvidenceAtom => ({
+    id: `raw-${index}`,
+    byteStart: index,
+    byteEnd: index + 1,
+    text: `短句\"\\\u0000-${index}\n`,
+  }));
+  const escapedPrompt = prepareChapterBatchPrompt([{ chapterId: "chapter-转义", atoms: escaped }]);
+  assert.equal(escapedPrompt.bytes, Buffer.byteLength(escapedPrompt.prompt, "utf8"));
+  assert.equal(escapedPrompt.prompt.includes('短句\\\"\\\\\\u0000'), true);
+
+  const bytes = (length: number) => prepareChapterBatchPrompt([{
+    chapterId: "chapter-boundary",
+    atoms: [{ id: "raw", byteStart: 0, byteEnd: length, text: "a".repeat(length) }],
+  }]).bytes;
+  let low = 0;
+  let high = MAX_CHAPTER_BATCH_INPUT_BYTES;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (bytes(middle) <= MAX_CHAPTER_BATCH_INPUT_BYTES) low = middle;
+    else high = middle - 1;
+  }
+  assert.equal(bytes(low) <= MAX_CHAPTER_BATCH_INPUT_BYTES, true);
+  assert.equal(bytes(low + 1) > MAX_CHAPTER_BATCH_INPUT_BYTES, true);
 });

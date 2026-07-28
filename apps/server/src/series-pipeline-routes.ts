@@ -7,6 +7,7 @@ interface Options { service: SeriesPipelineService; worker: SeriesPipelineWorker
 interface CreateBody {
   episodeCount?: unknown; targetDurationSeconds?: unknown;
   sourceStartChapterId?: unknown; sourceEndChapterId?: unknown;
+  chapterBatchSize?: unknown; chapterConcurrency?: unknown;
 }
 
 function statusCode(error: unknown) {
@@ -29,6 +30,8 @@ export const registerSeriesPipelineRoutes: FastifyPluginAsync<Options> = async (
           targetDurationSeconds: request.body?.targetDurationSeconds as number,
           sourceStartChapterId: request.body?.sourceStartChapterId as string,
           sourceEndChapterId: request.body?.sourceEndChapterId as string,
+          chapterBatchSize: request.body?.chapterBatchSize as number,
+          chapterConcurrency: request.body?.chapterConcurrency as number,
         });
         options.worker.poke();
         return reply.code(201).send({ ok: true, message: "全本自动改写流水线已创建", run });

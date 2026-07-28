@@ -83,6 +83,32 @@ function input(suffix = "a") {
   };
 }
 
+async function seedMany(dataRoot: string, suffix: string, parts: readonly Buffer[]) {
+  const source = Buffer.concat(parts);
+  const relativePath = `books/book_${suffix}/source.txt`;
+  await mkdir(dirname(join(dataRoot, relativePath)), { recursive: true });
+  await writeFile(join(dataRoot, relativePath), source);
+  const connection = openDatabase(dataRoot);
+  const database = connection.database;
+  database.prepare(`INSERT INTO books
+    (id,title,original_file_path,original_file_hash,encoding,import_status)
+    VALUES (?,?,?,?,?,'ready')`).run(
+    `book_${suffix}`, "书", relativePath, createHash("sha256").update(source).digest("hex"), "UTF-8",
+  );
+  const insert = database.prepare(`INSERT INTO chapters
+    (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
+    VALUES (?,?,?,?,?,?,?,?)`);
+  let offset = 0;
+  parts.forEach((part, index) => {
+    insert.run(`chapter_${suffix}_${index + 1}`, `book_${suffix}`, index, `第${index + 1}章`, offset,
+      offset + part.length, part.length, createHash("sha256").update(part).digest("hex"));
+    offset += part.length;
+  });
+  database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES (?,?,?,?,?)")
+    .run(`series_${suffix}`, `book_${suffix}`, "系列", 1, 1);
+  return connection;
+}
+
 async function coverageFixture(dataRoot: string) {
   const connection = await seed(dataRoot);
   const database = connection.database;
@@ -208,10 +234,19 @@ test("流水线创建校验连续范围、拒绝重复 active，并隔离另一�
     const runA = createSeriesPipelineRun(database, input("a"));
     const runB = createSeriesPipelineRun(database, input("b"));
     assert.equal(runA.status, "configured");
+    assert.equal(runA.chapterBatchSize, 10);
+    assert.equal(runA.chapterConcurrency, 8);
+    assert.equal(runA.configHash, createHash("sha256").update(JSON.stringify({
+      contract: "series-pipeline-v2", seriesProjectId: "series_a", episodeCount: 10,
+      targetDurationSeconds: 1200, sourceStartChapterId: "chapter_a_1", sourceEndChapterId: "chapter_a_2",
+      chapterBatchSize: 10, chapterConcurrency: 8,
+    })).digest("hex"));
     assert.equal(runB.seriesProjectId, "series_b");
     assert.throws(() => createSeriesPipelineRun(database, input("a")), (error: unknown) =>
       error instanceof SeriesPipelineError && error.statusCode === 409);
     assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), episodeCount: 0 }), /总集数/);
+    assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), chapterBatchSize: 21 }), /每批章节数/);
+    assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), chapterConcurrency: 9 }), /并发批次数/);
     assert.throws(() => createSeriesPipelineRun(database, {
       ...input("b"), sourceStartChapterId: "chapter_b_2", sourceEndChapterId: "chapter_b_1",
     }), /顺序正确/);
@@ -313,6 +348,417 @@ test("章节分析复用成功章、暂停不派发、失败局部重试并在�
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });
 
+test("章节分析 rolling 窗口维持八个批 Job 并在完成后补位", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-rolling-eight-"));
+  const parts = Array.from({ length: 9 }, (_, index) => Buffer.from(`第${index + 1}章内容。`, "utf8"));
+  const source = Buffer.concat(parts);
+  const relativePath = "books/book_rolling/source.txt";
+  await mkdir(dirname(join(dataRoot, relativePath)), { recursive: true });
+  await writeFile(join(dataRoot, relativePath), source);
+  const connection = openDatabase(dataRoot);
+  try {
+    const database = connection.database;
+    database.prepare(`INSERT INTO books
+      (id,title,original_file_path,original_file_hash,encoding,import_status)
+      VALUES ('book_rolling','书',?,?, 'UTF-8','ready')`)
+      .run(relativePath, createHash("sha256").update(source).digest("hex"));
+    const insert = database.prepare(`INSERT INTO chapters
+      (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
+      VALUES (?,'book_rolling',?,?,?,?,?,?)`);
+    let offset = 0;
+    parts.forEach((part, index) => {
+      insert.run(`chapter_rolling_${index + 1}`, index, `第${index + 1}章`, offset, offset + part.length, part.length,
+        createHash("sha256").update(part).digest("hex"));
+      offset += part.length;
+    });
+    database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_rolling','book_rolling','系列',1,1)").run();
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_rolling", episodeCount: 10, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_rolling_1", sourceEndChapterId: "chapter_rolling_9",
+      chapterBatchSize: 1, chapterConcurrency: 8,
+    });
+    await service.reconcile();
+    assert.equal(new Set(getMappedChapterJobs(database, run.id).map((mapping) => mapping.job_id)).size, 8);
+    const worker = new JobWorker(database, {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        database, dataRoot, provider,
+        async ({ chapterId, atoms }) => [{
+          type: "character", payload: { name: chapterId },
+          sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+        }],
+      ),
+    }, { workerId: "rolling-eight", leaseMs: 10_000, heartbeatMs: 1_000 });
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    const mapped = getMappedChapterJobs(database, run.id);
+    assert.equal(mapped.length, 9);
+    assert.equal(new Set(mapped.filter((mapping) => {
+      const status = getJob(database, mapping.job_id)?.status;
+      return status === "queued" || status === "running";
+    }).map((mapping) => mapping.job_id)).size, 8);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("章节批次在用户章数上限前按服务端输入字节预算动态缩小", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-dynamic-batch-"));
+  const parts = Array.from({ length: 5 }, (_, index) => Buffer.from(
+    Array.from({ length: 12 }, () => `${String.fromCharCode(0x7532 + index).repeat(3_000)}\n`).join(""),
+    "utf8",
+  ));
+  const source = Buffer.concat(parts);
+  const relativePath = "books/book_dynamic/source.txt";
+  await mkdir(dirname(join(dataRoot, relativePath)), { recursive: true });
+  await writeFile(join(dataRoot, relativePath), source);
+  const connection = openDatabase(dataRoot);
+  try {
+    const database = connection.database;
+    database.prepare(`INSERT INTO books
+      (id,title,original_file_path,original_file_hash,encoding,import_status)
+      VALUES ('book_dynamic','书',?,?, 'UTF-8','ready')`)
+      .run(relativePath, createHash("sha256").update(source).digest("hex"));
+    const insert = database.prepare(`INSERT INTO chapters
+      (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
+      VALUES (?,'book_dynamic',?,?,?,?,?,?)`);
+    let offset = 0;
+    parts.forEach((part, index) => {
+      insert.run(`chapter_dynamic_${index + 1}`, index, `第${index + 1}章`, offset, offset + part.length, 36_000,
+        createHash("sha256").update(part).digest("hex"));
+      offset += part.length;
+    });
+    database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_dynamic','book_dynamic','系列',1,1)").run();
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_dynamic", episodeCount: 10, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_dynamic_1", sourceEndChapterId: "chapter_dynamic_5",
+      chapterBatchSize: 5, chapterConcurrency: 1,
+    });
+    await service.reconcile();
+    const mappings = getMappedChapterJobs(database, run.id);
+    assert.equal(mappings.length, 4);
+    assert.equal(new Set(mappings.map((mapping) => mapping.job_id)).size, 1);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("单章最终 prompt 超过 512 KiB 时稳定失败且不创建可重试 Job", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-single-oversized-prompt-"));
+  const connection = await seedMany(dataRoot, "oversized_prompt", [Buffer.from("甲\n".repeat(20_000), "utf8")]);
+  try {
+    const database = connection.database;
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_oversized_prompt", episodeCount: 1, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_oversized_prompt_1", sourceEndChapterId: "chapter_oversized_prompt_1",
+      chapterBatchSize: 10, chapterConcurrency: 8,
+    });
+    await service.reconcile();
+    assert.equal(service.get(run.id)!.failureCode, "chapter_batch_input_too_large");
+    assert.equal(getMappedChapterJobs(database, run.id).length, 0);
+    await service.reconcile();
+    assert.equal(service.get(run.id)!.failureCode, "chapter_batch_input_too_large");
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM jobs WHERE type=?").get(
+      CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+    )?.count, 0);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("中间章节已复用时两侧 pending 章节不会跨空洞合并批次", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-contiguous-gap-"));
+  const connection = await seedMany(dataRoot, "gap", ["甲。", "乙。", "丙。"].map((text) => Buffer.from(text)));
+  try {
+    const database = connection.database;
+    database.prepare(`INSERT INTO chapter_events
+      (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+      VALUES ('event_gap_middle','chapter_gap_2',0,0,'character','{"name":"乙"}',1)`).run();
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_gap", episodeCount: 3, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_gap_1", sourceEndChapterId: "chapter_gap_3",
+      chapterBatchSize: 3, chapterConcurrency: 2,
+    });
+    await service.reconcile();
+    const mappings = getMappedChapterJobs(database, run.id);
+    assert.deepEqual(mappings.map((mapping) => mapping.subject_id), ["chapter_gap_1", "chapter_gap_3"]);
+    assert.equal(new Set(mappings.map((mapping) => mapping.job_id)).size, 2);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("批 Job 首章 checkpoint 成功后失败重试不会用非确定输出覆盖首章", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-checkpoint-drift-"));
+  const connection = await seedMany(dataRoot, "drift", ["甲进入。", "乙进入。"].map((text) => Buffer.from(text)));
+  try {
+    const database = connection.database;
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_drift", episodeCount: 2, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_drift_1", sourceEndChapterId: "chapter_drift_2",
+      chapterBatchSize: 2, chapterConcurrency: 1,
+    });
+    await service.reconcile();
+    const jobId = getMappedChapterJobs(database, run.id)[0]!.job_id;
+    const calls = new Map<string, number>();
+    const worker = new JobWorker(database, {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        database, dataRoot, provider,
+        async ({ chapterId, atoms }) => {
+          const call = (calls.get(chapterId) ?? 0) + 1;
+          calls.set(chapterId, call);
+          return [{
+            type: "character", payload: { name: `${chapterId}-${call}` },
+            sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+          }];
+        },
+      ),
+    }, { workerId: "checkpoint-drift", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
+    database.exec(`CREATE TRIGGER fail_second_batch_chapter BEFORE INSERT ON chapter_events
+      WHEN NEW.chapter_id = 'chapter_drift_2'
+      BEGIN SELECT RAISE(ABORT, '模拟第二章提交失败'); END`);
+    assert.equal(await worker.runOne(), true);
+    assert.equal(getJob(database, jobId)!.status, "queued");
+    assert.ok(database.prepare(`SELECT 1 FROM job_checkpoints
+      WHERE job_id=? AND stage='chapter-events-analyze' AND scope_key='chapter_drift_1'`).get(jobId));
+    database.exec("DROP TRIGGER fail_second_batch_chapter");
+    assert.equal(await worker.runOne(), true);
+    assert.equal(getJob(database, jobId)!.status, "succeeded");
+    const payloads = database.prepare(
+      "SELECT chapter_id,payload_json FROM chapter_events ORDER BY chapter_id",
+    ).all() as unknown as Array<{ chapter_id: string; payload_json: string }>;
+    assert.deepEqual(payloads.map((row) => JSON.parse(row.payload_json).name), [
+      "chapter_drift_1-1", "chapter_drift_2-2",
+    ]);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("批 Job 任一成员内容变化会整批失效并按当前连续内容重组完成", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-stale-batch-"));
+  const first = Buffer.from("甲进入。", "utf8");
+  const second = Buffer.from("乙进入。", "utf8");
+  const connection = await seedMany(dataRoot, "stale_batch", [first, second]);
+  try {
+    const database = connection.database;
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_stale_batch", episodeCount: 2, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_stale_batch_1", sourceEndChapterId: "chapter_stale_batch_2",
+      chapterBatchSize: 2, chapterConcurrency: 1,
+    });
+    await service.reconcile();
+    const oldJobId = getMappedChapterJobs(database, run.id)[0]!.job_id;
+    const changed = Buffer.from("丙进入。", "utf8");
+    assert.equal(changed.length, second.length);
+    await writeFile(join(dataRoot, "books/book_stale_batch/source.txt"), Buffer.concat([first, changed]));
+    database.prepare("UPDATE chapters SET content_hash=? WHERE id='chapter_stale_batch_2'")
+      .run(createHash("sha256").update(changed).digest("hex"));
+
+    service.retry(run.id);
+    await service.reconcile();
+    assert.equal(getJob(database, oldJobId)!.status, "cancelled");
+    const currentMappings = getMappedChapterJobs(database, run.id);
+    assert.deepEqual(currentMappings.map((mapping) => mapping.subject_id), [
+      "chapter_stale_batch_1", "chapter_stale_batch_2",
+    ]);
+    assert.equal(new Set(currentMappings.map((mapping) => mapping.job_id)).size, 1);
+    const currentJobId = currentMappings[0]!.job_id;
+    assert.notEqual(currentJobId, oldJobId);
+
+    const worker = new JobWorker(database, {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        database, dataRoot, provider,
+        async ({ chapterId, atoms }) => [{
+          type: "character", payload: { name: chapterId },
+          sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+        }],
+      ),
+    }, { workerId: "stale-batch", leaseMs: 10_000, heartbeatMs: 1_000 });
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    assert.equal(service.get(run.id)!.status, "building_story_bible");
+    assert.equal(service.get(run.id)!.progress.chapterAnalysis.completed, 2);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("stale 成功批在 provider 不可用期间保留无效 mapping 且共享 owner 不被取消", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-stale-provider-gap-"));
+  const first = Buffer.from("甲发现。", "utf8");
+  const second = Buffer.from("乙发现。", "utf8");
+  const connection = await seedMany(dataRoot, "stale_provider", [first, second]);
+  let providerAvailable = true;
+  try {
+    const database = connection.database;
+    database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_stale_provider_other','book_stale_provider','另一系列',2,2)").run();
+    const service = new SeriesPipelineService({
+      database, dataRoot, resolveChapterTextProvider: async () => providerAvailable ? provider : null,
+    });
+    const base = {
+      episodeCount: 2, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_stale_provider_1", sourceEndChapterId: "chapter_stale_provider_2",
+      chapterBatchSize: 2, chapterConcurrency: 1,
+    };
+    const firstRun = await service.create({ ...base, seriesProjectId: "series_stale_provider" });
+    const secondRun = await service.create({ ...base, seriesProjectId: "series_stale_provider_other" });
+    await service.reconcile();
+    const oldJobId = getMappedChapterJobs(database, firstRun.id)[0]!.job_id;
+    assert.equal(getMappedChapterJobs(database, secondRun.id)[0]!.job_id, oldJobId);
+    const worker = new JobWorker(database, {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        database, dataRoot, provider,
+        async ({ chapterId, atoms }) => [{
+          type: "character", payload: { name: chapterId },
+          sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+        }],
+      ),
+    }, { workerId: "stale-provider", leaseMs: 10_000, heartbeatMs: 1_000 });
+    assert.equal(await worker.runOne(), true);
+    assert.equal(getJob(database, oldJobId)!.status, "succeeded");
+
+    const changed = Buffer.from("丙发现。", "utf8");
+    assert.equal(changed.length, second.length);
+    await writeFile(join(dataRoot, "books/book_stale_provider/source.txt"), Buffer.concat([first, changed]));
+    database.prepare("UPDATE chapters SET content_hash=? WHERE id='chapter_stale_provider_2'")
+      .run(createHash("sha256").update(changed).digest("hex"));
+    providerAvailable = false;
+    await service.reconcile();
+    for (const run of [firstRun, secondRun]) {
+      const current = service.get(run.id)!;
+      assert.equal(current.status, "analyzing_chapters");
+      assert.equal(current.failureCode, "text_provider_unavailable");
+      assert.equal(current.progress.chapterAnalysis.completed, 1);
+      assert.deepEqual(getMappedChapterJobs(database, run.id).map((mapping) => mapping.subject_id), [
+        "chapter_stale_provider_2",
+      ]);
+      assert.equal(getMappedChapterJobs(database, run.id)[0]!.job_id, oldJobId);
+    }
+    assert.equal(getJob(database, oldJobId)!.cancelRequested, false);
+
+    providerAvailable = true;
+    service.retry(firstRun.id);
+    service.retry(secondRun.id);
+    database.exec(`CREATE TRIGGER fail_atomic_stale_replace BEFORE INSERT ON series_pipeline_jobs
+      WHEN NEW.run_id = '${firstRun.id}' AND NEW.stage = 'chapter_analysis' AND NEW.job_id <> '${oldJobId}'
+      BEGIN SELECT RAISE(ABORT, '模拟替代 mapping 写入失败'); END`);
+    await service.reconcile();
+    assert.equal(getMappedChapterJobs(database, firstRun.id)[0]!.job_id, oldJobId);
+    database.exec("DROP TRIGGER fail_atomic_stale_replace");
+    service.retry(firstRun.id);
+    await service.reconcile();
+    const replacementJobId = getMappedChapterJobs(database, firstRun.id)[0]!.job_id;
+    assert.notEqual(replacementJobId, oldJobId);
+    assert.equal(getMappedChapterJobs(database, secondRun.id)[0]!.job_id, replacementJobId);
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    assert.equal(service.get(firstRun.id)!.status, "building_story_bible");
+    assert.equal(service.get(secondRun.id)!.status, "building_story_bible");
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("concurrency 1 的独占 stale running Job 终态前占槽且终态后才原子替换", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-stale-running-slot-"));
+  const first = Buffer.from("甲追踪。", "utf8");
+  const second = Buffer.from("乙追踪。", "utf8");
+  const connection = await seedMany(dataRoot, "stale_running", [first, second]);
+  try {
+    const database = connection.database;
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const run = await service.create({
+      seriesProjectId: "series_stale_running", episodeCount: 2, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_stale_running_1", sourceEndChapterId: "chapter_stale_running_2",
+      chapterBatchSize: 2, chapterConcurrency: 1,
+    });
+    await service.reconcile();
+    const oldJobId = getMappedChapterJobs(database, run.id)[0]!.job_id;
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => { started = resolve; });
+    const oldWorker = new JobWorker(database, {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        database, dataRoot, provider,
+        ({ signal }) => new Promise((_resolve, reject) => {
+          started();
+          signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        }),
+      ),
+    }, { workerId: "stale-running-old", leaseMs: 10_000, heartbeatMs: 1_000 });
+    const running = oldWorker.runOne();
+    await hasStarted;
+    assert.equal(getJob(database, oldJobId)!.status, "running");
+
+    const changed = Buffer.from("丙追踪。", "utf8");
+    assert.equal(changed.length, second.length);
+    await writeFile(join(dataRoot, "books/book_stale_running/source.txt"), Buffer.concat([first, changed]));
+    database.prepare("UPDATE chapters SET content_hash=? WHERE id='chapter_stale_running_2'")
+      .run(createHash("sha256").update(changed).digest("hex"));
+    await service.reconcile();
+    assert.equal(getMappedChapterJobs(database, run.id)[0]!.job_id, oldJobId);
+    assert.equal(getJob(database, oldJobId)!.status, "running");
+    assert.equal(getJob(database, oldJobId)!.cancelRequested, true);
+    assert.equal(database.prepare(
+      "SELECT COUNT(*) AS count FROM jobs WHERE type=? AND id<>? AND status='queued' AND run_after<=?",
+    ).get(CHAPTER_EVENTS_ANALYZE_JOB_TYPE, oldJobId, Date.now())?.count, 0);
+    assert.equal(service.get(run.id)!.progress.chapterAnalysis.running, 2);
+    assert.equal(service.get(run.id)!.progress.chapterAnalysis.queued, 0);
+
+    await running;
+    assert.equal(getJob(database, oldJobId)!.status, "cancelled");
+    await service.reconcile();
+    const replacementMappings = getMappedChapterJobs(database, run.id);
+    const replacementJobId = replacementMappings[0]!.job_id;
+    assert.notEqual(replacementJobId, oldJobId);
+    assert.equal(new Set(replacementMappings.map((mapping) => mapping.job_id)).size, 1);
+    assert.notEqual(getJob(database, replacementJobId)!.runAfter, Number.MAX_SAFE_INTEGER);
+    assert.equal(service.get(run.id)!.progress.chapterAnalysis.running, 0);
+    assert.equal(service.get(run.id)!.progress.chapterAnalysis.queued, 2);
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("共享 stale running Job 由其他 active owner 持有时当前 run 可替换且不误取消", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-shared-stale-running-"));
+  const first = Buffer.from("甲守候。", "utf8");
+  const second = Buffer.from("乙守候。", "utf8");
+  const connection = await seedMany(dataRoot, "shared_stale", [first, second]);
+  try {
+    const database = connection.database;
+    database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_shared_stale_other','book_shared_stale','另一系列',2,2)").run();
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    const base = {
+      episodeCount: 2, targetDurationSeconds: 1200,
+      sourceStartChapterId: "chapter_shared_stale_1", sourceEndChapterId: "chapter_shared_stale_2",
+      chapterBatchSize: 2, chapterConcurrency: 1,
+    };
+    const currentRun = await service.create({ ...base, seriesProjectId: "series_shared_stale" });
+    const ownerRun = await service.create({ ...base, seriesProjectId: "series_shared_stale_other" });
+    await service.reconcile();
+    const oldJobId = getMappedChapterJobs(database, currentRun.id)[0]!.job_id;
+    assert.equal(getMappedChapterJobs(database, ownerRun.id)[0]!.job_id, oldJobId);
+    database.prepare("UPDATE series_pipeline_runs SET status='awaiting_review' WHERE id=?").run(ownerRun.id);
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => { started = resolve; });
+    const worker = new JobWorker(database, {
+      [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: createChapterEventsAnalysisJobHandler(
+        database, dataRoot, provider,
+        ({ signal }) => new Promise((_resolve, reject) => {
+          started();
+          signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        }),
+      ),
+    }, { workerId: "shared-stale-running", leaseMs: 10_000, heartbeatMs: 1_000 });
+    const running = worker.runOne();
+    await hasStarted;
+    const changed = Buffer.from("丙守候。", "utf8");
+    await writeFile(join(dataRoot, "books/book_shared_stale/source.txt"), Buffer.concat([first, changed]));
+    database.prepare("UPDATE chapters SET content_hash=? WHERE id='chapter_shared_stale_2'")
+      .run(createHash("sha256").update(changed).digest("hex"));
+
+    await service.reconcile();
+    assert.equal(getJob(database, oldJobId)!.status, "running");
+    assert.equal(getJob(database, oldJobId)!.cancelRequested, false);
+    assert.equal(getMappedChapterJobs(database, ownerRun.id)[0]!.job_id, oldJobId);
+    assert.notEqual(getMappedChapterJobs(database, currentRun.id)[0]!.job_id, oldJobId);
+
+    service.cancel(ownerRun.id);
+    await running;
+    assert.equal(getJob(database, oldJobId)!.status, "cancelled");
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
 test("章节协调按当前 v2 identity 原子替换旧 failed、succeeded、running 映射", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-stale-chapter-"));
   const connection = await seed(dataRoot, "a");
@@ -377,12 +823,8 @@ test("章节协调按当前 v2 identity 原子替换旧 failed、succeeded、run
       assert.equal(mapping.length, 1);
       if (statusByRun.get(runId) === "running") {
         assert.equal(mapping[0]!.job_id, oldJobId);
+        assert.equal(getJob(database, oldJobId)!.status, "running");
         assert.equal(getJob(database, oldJobId)!.cancelRequested, true);
-        const chapter = database.prepare(
-          "SELECT content_hash FROM chapters WHERE id='chapter_c_1'",
-        ).get() as { content_hash: string };
-        const current = chapterEventsAnalysisJobIdentity("book_c", "chapter_c_1", chapter.content_hash);
-        assert.equal(getJob(database, current.jobId)!.runAfter, Number.MAX_SAFE_INTEGER);
         database.prepare(
           `UPDATE jobs SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?`,
         ).run(Date.now(), oldJobId);
@@ -394,7 +836,10 @@ test("章节协调按当前 v2 identity 原子替换旧 failed、succeeded、run
     }
     await service.reconcile();
     const runningRunId = [...statusByRun].find(([, status]) => status === "running")![0];
-    assert.notEqual(getMappedChapterJobs(database, runningRunId)[0]!.job_id, oldJobs.get(runningRunId));
+    const runningReplacement = getMappedChapterJobs(database, runningRunId)[0]!.job_id;
+    assert.notEqual(runningReplacement, oldJobs.get(runningRunId));
+    assert.equal(getJob(database, runningReplacement)!.status, "queued");
+    assert.notEqual(getJob(database, runningReplacement)!.runAfter, Number.MAX_SAFE_INTEGER);
     assert.equal(getJob(database, oldJobs.get([...oldJobs.keys()][0]!)!)!.status, "failed");
     assert.equal(getJob(database, oldJobs.get([...oldJobs.keys()][1]!)!)!.status, "succeeded");
     assert.equal(getJob(database, oldJobs.get([...oldJobs.keys()][2]!)!)!.status, "cancelled");
@@ -646,16 +1091,11 @@ test("pause 和 cancel 任一 mapped Job 控制失败时完整回滚 run 与先�
   try {
     const database = connection.database;
     const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
-    const created = await service.create(input());
+    const created = await service.create({ ...input(), chapterBatchSize: 1, chapterConcurrency: 2 });
     await service.reconcile();
-    const firstJobId = getMappedChapterJobs(database, created.id)[0]!.job_id;
-    const secondJobId = "zz_job_pipeline_rollback";
-    createJob(database, {
-      id: secondJobId,
-      type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
-      payload: { test: true },
-    });
-    mapSeriesPipelineJob(database, created.id, "chapter_a_2", secondJobId);
+    const mappedJobIds = [...new Set(getMappedChapterJobs(database, created.id).map((mapping) => mapping.job_id))];
+    assert.equal(mappedJobIds.length, 2);
+    const [firstJobId, secondJobId] = mappedJobIds as [string, string];
 
     database.exec(
       `CREATE TRIGGER fail_second_job_pause BEFORE UPDATE OF run_after ON jobs

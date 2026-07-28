@@ -2,7 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
-import { chapterEventsAnalysisJobIdentity } from "./chapter-events-job.js";
+import {
+  chapterEventsAnalysisJobMatchesChapter,
+  chapterEventsAnalysisJobMatchesChapters,
+} from "./chapter-events-job.js";
 import { getJob, requestJobCancellation, type JobRecord } from "./job-store.js";
 
 export type SeriesPipelineStatus =
@@ -13,7 +16,8 @@ export type SeriesPipelineStatus =
 interface RunRow {
   id: string; series_project_id: string; status: SeriesPipelineStatus; resume_status: SeriesPipelineStatus | null;
   episode_count: number; target_duration_seconds: number; source_start_chapter_id: string;
-  source_end_chapter_id: string; config_hash: string; chapter_events_hash: string | null;
+  source_end_chapter_id: string; chapter_batch_size: number; chapter_concurrency: number;
+  config_hash: string; chapter_events_hash: string | null;
   story_bible_id: string | null; plan_hash: string | null; failure_code: string | null;
   failure_message: string | null; created_at: number; updated_at: number;
 }
@@ -21,7 +25,8 @@ interface RunRow {
 export interface SeriesPipelineRun {
   id: string; seriesProjectId: string; status: SeriesPipelineStatus; resumeStatus: SeriesPipelineStatus | null;
   episodeCount: number; targetDurationSeconds: number; sourceStartChapterId: string;
-  sourceEndChapterId: string; configHash: string; chapterEventsHash: string | null;
+  sourceEndChapterId: string; chapterBatchSize: number; chapterConcurrency: number;
+  configHash: string; chapterEventsHash: string | null;
   storyBibleId: string | null; planHash: string | null; failureCode: string | null;
   failureMessage: string | null; createdAt: number; updatedAt: number;
 }
@@ -29,6 +34,7 @@ export interface SeriesPipelineRun {
 export interface CreateSeriesPipelineRunInput {
   seriesProjectId: string; episodeCount: number; targetDurationSeconds: number;
   sourceStartChapterId: string; sourceEndChapterId: string;
+  chapterBatchSize?: number; chapterConcurrency?: number;
 }
 
 export interface PipelineChapter {
@@ -44,6 +50,7 @@ function runRecord(row: RunRow): SeriesPipelineRun {
     id: row.id, seriesProjectId: row.series_project_id, status: row.status, resumeStatus: row.resume_status,
     episodeCount: row.episode_count, targetDurationSeconds: row.target_duration_seconds,
     sourceStartChapterId: row.source_start_chapter_id, sourceEndChapterId: row.source_end_chapter_id,
+    chapterBatchSize: row.chapter_batch_size, chapterConcurrency: row.chapter_concurrency,
     configHash: row.config_hash, chapterEventsHash: row.chapter_events_hash, storyBibleId: row.story_bible_id,
     planHash: row.plan_hash, failureCode: row.failure_code, failureMessage: row.failure_message,
     createdAt: row.created_at, updatedAt: row.updated_at,
@@ -120,22 +127,26 @@ export function createSeriesPipelineRun(
     EPISODE_DURATION_POLICY.maximumSeconds,
     "单集时长",
   );
+  const chapterBatchSize = safeInteger(input.chapterBatchSize ?? 10, 1, 20, "每批章节数");
+  const chapterConcurrency = safeInteger(input.chapterConcurrency ?? 8, 1, 8, "并发批次数");
   if ((targetDurationSeconds - EPISODE_DURATION_POLICY.minimumSeconds) % EPISODE_DURATION_POLICY.stepSeconds !== 0) {
     throw new SeriesPipelineError(400, `单集时长必须按 ${EPISODE_DURATION_POLICY.stepSeconds} 秒递增`);
   }
   rangeRows(database, seriesProjectId, sourceStartChapterId, sourceEndChapterId);
   const configHash = createHash("sha256").update(JSON.stringify({
-    contract: "series-pipeline-v1", seriesProjectId, episodeCount, targetDurationSeconds,
-    sourceStartChapterId, sourceEndChapterId,
+    contract: "series-pipeline-v2", seriesProjectId, episodeCount, targetDurationSeconds,
+    sourceStartChapterId, sourceEndChapterId, chapterBatchSize, chapterConcurrency,
   })).digest("hex");
   const id = `pipeline_${randomUUID()}`;
   try {
     database.prepare(
       `INSERT INTO series_pipeline_runs (
          id, series_project_id, status, episode_count, target_duration_seconds,
-         source_start_chapter_id, source_end_chapter_id, config_hash, created_at, updated_at
-       ) VALUES (?, ?, 'configured', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, seriesProjectId, episodeCount, targetDurationSeconds, sourceStartChapterId, sourceEndChapterId, configHash, now, now);
+         source_start_chapter_id, source_end_chapter_id, chapter_batch_size, chapter_concurrency,
+         config_hash, created_at, updated_at
+       ) VALUES (?, ?, 'configured', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, seriesProjectId, episodeCount, targetDurationSeconds, sourceStartChapterId, sourceEndChapterId,
+      chapterBatchSize, chapterConcurrency, configHash, now, now);
   } catch (error) {
     if (String(error).includes("series_pipeline_runs.series_project_id")) {
       throw new SeriesPipelineError(409, "该系列已有未结束的全本流水线");
@@ -273,33 +284,51 @@ export function mapSeriesPipelineJob(
   jobId: string,
   now = Date.now(),
 ) {
+  return mapSeriesPipelineBatchJob(database, runId, [chapterId], jobId, now);
+}
+
+export function mapSeriesPipelineBatchJob(
+  database: DatabaseSync,
+  runId: string,
+  chapterIds: readonly string[],
+  jobId: string,
+  now = Date.now(),
+  replaceStaleJobIds: readonly string[] = [],
+) {
+  if (!chapterIds.length || new Set(chapterIds).size !== chapterIds.length) return false;
+  const replaceable = new Set(replaceStaleJobIds);
   return immediateTransaction(database, () => {
     const active = database.prepare(
       "SELECT 1 FROM series_pipeline_runs WHERE id = ? AND status = 'analyzing_chapters'",
     ).get(runId);
     if (!active) return false;
-    const previous = database.prepare(
-      `SELECT mapping.job_id, job.status FROM series_pipeline_jobs mapping
-       JOIN jobs job ON job.id = mapping.job_id
-       WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis'
-         AND mapping.subject_type = 'chapter' AND mapping.subject_id = ?`,
-    ).get(runId, chapterId) as { job_id: string; status: JobRecord["status"] } | undefined;
-    if (previous && previous.job_id !== jobId &&
-        (previous.status === "queued" || previous.status === "running")) {
-      if (!hasOtherActiveOwner(database, previous.job_id, runId)) {
-        requestJobCancellation(database, previous.job_id, now);
+    for (const chapterId of chapterIds) {
+      const previous = database.prepare(
+        `SELECT mapping.job_id, job.status FROM series_pipeline_jobs mapping
+         JOIN jobs job ON job.id = mapping.job_id
+         WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis'
+           AND mapping.subject_type = 'chapter' AND mapping.subject_id = ?`,
+      ).get(runId, chapterId) as { job_id: string; status: JobRecord["status"] } | undefined;
+      if (previous && previous.job_id !== jobId &&
+          (previous.status === "queued" || previous.status === "running") &&
+          !replaceable.has(previous.job_id)) {
+        if (!hasOtherActiveOwner(database, previous.job_id, runId)) {
+          requestJobCancellation(database, previous.job_id, now);
+        }
+        return false;
       }
-      return false;
     }
-    database.prepare(
-      `DELETE FROM series_pipeline_jobs
-       WHERE run_id = ? AND stage = 'chapter_analysis' AND subject_type = 'chapter' AND subject_id = ?`,
-    ).run(runId, chapterId);
-    database.prepare(
-      `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
-       VALUES (?, 'chapter_analysis', 'chapter', ?, ?, ?)
-       ON CONFLICT(run_id, stage, subject_type, subject_id) DO NOTHING`,
-    ).run(runId, chapterId, jobId, now);
+    for (const chapterId of chapterIds) {
+      database.prepare(
+        `DELETE FROM series_pipeline_jobs
+         WHERE run_id = ? AND stage = 'chapter_analysis' AND subject_type = 'chapter' AND subject_id = ?`,
+      ).run(runId, chapterId);
+      database.prepare(
+        `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
+         VALUES (?, 'chapter_analysis', 'chapter', ?, ?, ?)
+         ON CONFLICT(run_id, stage, subject_type, subject_id) DO NOTHING`,
+      ).run(runId, chapterId, jobId, now);
+    }
     database.prepare(
       `UPDATE jobs SET run_after = ?, updated_at = ?
        WHERE id = ? AND status = 'queued' AND run_after = ?
@@ -319,6 +348,32 @@ export function getMappedChapterJobs(database: DatabaseSync, runId: string) {
     `SELECT mapping.subject_id, mapping.job_id FROM series_pipeline_jobs mapping
      WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis' ORDER BY mapping.created_at, mapping.subject_id`,
   ).all(runId) as unknown as Array<{ subject_id: string; job_id: string }>;
+}
+
+export function retainStaleChapterAnalysisJobs(
+  database: DatabaseSync,
+  runId: string,
+  jobIds: readonly string[],
+  reusableMappings: readonly { chapterId: string; jobId: string }[] = [],
+  now = Date.now(),
+) {
+  if (!jobIds.length && !reusableMappings.length) return { blockingJobIds: [] as string[] };
+  return immediateTransaction(database, () => {
+    const blockingJobIds: string[] = [];
+    for (const jobId of new Set(jobIds)) {
+      if (!hasOtherActiveOwner(database, jobId, runId)) {
+        const job = requestJobCancellation(database, jobId, now);
+        if (job?.status === "running") blockingJobIds.push(jobId);
+      }
+    }
+    for (const mapping of reusableMappings) {
+      database.prepare(
+        `DELETE FROM series_pipeline_jobs
+         WHERE run_id = ? AND stage = 'chapter_analysis' AND subject_id = ? AND job_id = ?`,
+      ).run(runId, mapping.chapterId, mapping.jobId);
+    }
+    return { blockingJobIds };
+  });
 }
 
 export function getMappedScriptJobs(database: DatabaseSync, runId: string) {
@@ -488,17 +543,18 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
     ).get(id) as { stage: string } | undefined : undefined;
     for (const job of mappedJobs(database, id)) {
       if (job.status !== "failed" && job.status !== "cancelled") continue;
-      const chapter = database.prepare(
+      const chapters = database.prepare(
         `SELECT chapter.id, chapter.content_hash, series.book_id
          FROM series_pipeline_jobs mapping
          JOIN chapters chapter ON chapter.id = mapping.subject_id
          JOIN series_pipeline_runs run ON run.id = mapping.run_id
          JOIN series_projects series ON series.id = run.series_project_id
-         WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis' AND mapping.job_id = ? LIMIT 1`,
-      ).get(id, job.id) as { id: string; content_hash: string; book_id: string } | undefined;
-      if (chapter && chapterEventsAnalysisJobIdentity(
-        chapter.book_id, chapter.id, chapter.content_hash,
-      ).jobId !== job.id) continue;
+         WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis' AND mapping.job_id = ?`,
+      ).all(id, job.id) as unknown as Array<{ id: string; content_hash: string; book_id: string }>;
+      const currentJob = getJob(database, job.id);
+      if (chapters.length && chapters.some((chapter) => !chapterEventsAnalysisJobMatchesChapter(
+        currentJob, chapter.book_id, chapter.id, chapter.content_hash,
+      ))) continue;
       const runAfter = run.status === "paused" && !hasOtherActiveOwner(database, job.id, id)
         ? PAUSED_JOB_RUN_AFTER
         : now;
@@ -526,12 +582,25 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     "SELECT book_id FROM series_projects WHERE id = ?",
   ).get(run.seriesProjectId) as { book_id: string } | undefined;
   const allMappings = getMappedChapterJobs(database, run.id);
-  const currentMappings = book ? allMappings.filter((mapping) => {
-    const chapter = chapters.find((item) => item.id === mapping.subject_id);
-    return chapter && chapterEventsAnalysisJobIdentity(
-      book.book_id, chapter.id, chapter.contentHash,
-    ).jobId === mapping.job_id;
-  }) : [];
+  const currentJobIds = new Set<string>();
+  if (book) {
+    for (const jobId of new Set(allMappings.map((mapping) => mapping.job_id))) {
+      const mappedChapters = allMappings.filter((mapping) => mapping.job_id === jobId).map((mapping) => {
+        const chapter = chapters.find((item) => item.id === mapping.subject_id);
+        return chapter ? { chapterId: chapter.id, contentHash: chapter.contentHash } : undefined;
+      });
+      if (mappedChapters.every(Boolean) && chapterEventsAnalysisJobMatchesChapters(
+        getJob(database, jobId), book.book_id, mappedChapters as Array<{ chapterId: string; contentHash: string }>,
+      )) currentJobIds.add(jobId);
+    }
+  }
+  const blockingStaleJobIds = new Set(allMappings.map((mapping) => mapping.job_id).filter((jobId) =>
+    !currentJobIds.has(jobId) && getJob(database, jobId)?.status === "running" &&
+    !hasOtherActiveOwner(database, jobId, run.id),
+  ));
+  const currentMappings = allMappings.filter((mapping) =>
+    currentJobIds.has(mapping.job_id) || blockingStaleJobIds.has(mapping.job_id),
+  );
   const staleChapterIds = new Set(allMappings.filter(
     (mapping) => !currentMappings.includes(mapping),
   ).map((mapping) => mapping.subject_id));

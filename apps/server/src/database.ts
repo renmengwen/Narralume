@@ -678,6 +678,15 @@ const MIGRATION_15 = `
   END;
 `;
 
+const MIGRATION_16 = `
+  ALTER TABLE series_pipeline_runs
+    ADD COLUMN chapter_batch_size INTEGER NOT NULL DEFAULT 1
+      CHECK (chapter_batch_size BETWEEN 1 AND 20);
+  ALTER TABLE series_pipeline_runs
+    ADD COLUMN chapter_concurrency INTEGER NOT NULL DEFAULT 1
+      CHECK (chapter_concurrency BETWEEN 1 AND 8);
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -687,6 +696,7 @@ const MIGRATIONS = [
   MIGRATION_13,
   MIGRATION_14,
   MIGRATION_15,
+  MIGRATION_16,
 ];
 
 export interface NarralumeDatabase {

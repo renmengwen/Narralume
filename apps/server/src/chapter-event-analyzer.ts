@@ -14,6 +14,7 @@ const MAX_CHAPTER_BYTES = 128 * 1024;
 const MAX_ATOM_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_ATOMS_PER_REQUEST = 10;
+export const MAX_CHAPTER_BATCH_INPUT_BYTES = 512 * 1024;
 const EVENT_TYPES = new Set<string>(CHAPTER_EVENT_TYPES);
 
 class ChapterEvidenceReferenceError extends Error {}
@@ -42,6 +43,20 @@ export interface ChapterAnalysisInput {
 export type AnalyzeChapterEvents = (
   input: ChapterAnalysisInput,
 ) => Promise<readonly ChapterEventInput[]>;
+
+export interface ChapterBatchAnalysisInput {
+  chapters: readonly ChapterAnalysisInput[];
+  signal?: AbortSignal;
+}
+
+export interface ChapterBatchAnalysisResult {
+  chapterId: string;
+  events: readonly ChapterEventInput[];
+}
+
+export type AnalyzeChapterEventsBatch = (
+  input: ChapterBatchAnalysisInput,
+) => Promise<readonly ChapterBatchAnalysisResult[]>;
 
 interface ChapterSourceRow {
   byte_start: number;
@@ -239,6 +254,93 @@ function assignOccurrences(events: readonly ChapterEventInput[]) {
     next.set(key, occurrence + 1);
     return { ...event, occurrence } as ChapterEventInput;
   });
+}
+
+export function prepareChapterBatchPrompt(chapters: readonly ChapterAnalysisInput[]) {
+  const requestChapters = chapters.map((chapter, chapterIndex) => ({
+    chapterId: chapter.chapterId,
+    atoms: chapter.atoms.map((atom, atomIndex) => ({ ...atom, id: `c${chapterIndex + 1}e${atomIndex + 1}` })),
+  }));
+  const prompt = [
+    "你是小说多章节结构化事件分析器。只输出严格 JSON，不要输出 Markdown 或解释。",
+    "输出必须逐章覆盖全部且仅覆盖给定 chapterId；每章事件只能引用该章 evidenceId，禁止跨章引用或返回字节偏移。",
+    "事件类型仅限 character、location、prop、causality、revelation、suspense。",
+    "character/location/prop 的 payload 为 {name,detail?}；causality 为 {cause,effect}；revelation 为 {fact}；suspense 为 {question}。",
+    "输出格式：{\"chapters\":[{\"chapterId\":\"chapter-1\",\"events\":[{\"type\":\"character\",\"payload\":{\"name\":\"...\"},\"evidenceIds\":[\"c1e1\"]}]}]}。",
+    "章节原文证据：",
+    ...requestChapters.flatMap((chapter) => [
+      JSON.stringify({ chapterId: chapter.chapterId }),
+      ...chapter.atoms.map((atom) => JSON.stringify({ evidenceId: atom.id, text: atom.text })),
+    ]),
+  ].join("\n");
+  return { chapters: requestChapters, prompt, bytes: Buffer.byteLength(prompt, "utf8") };
+}
+
+export function parseChapterBatchAnalysisEvents(
+  value: unknown,
+  chapters: readonly ChapterAnalysisInput[],
+): ChapterBatchAnalysisResult[] {
+  let body: unknown;
+  try { body = JSON.parse(typeof value === "string" ? value : ""); }
+  catch { throw new Error("多章分析结果不是严格 JSON"); }
+  const groups = (body as { chapters?: unknown })?.chapters;
+  if (!Array.isArray(groups) || groups.length !== chapters.length) {
+    throw new Error("多章分析结果章节集合不完整");
+  }
+  const expected = new Map(chapters.map((chapter) => [chapter.chapterId, chapter]));
+  const seen = new Set<string>();
+  const result = groups.map((raw): ChapterBatchAnalysisResult => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("多章分析结果章节无效");
+    const group = raw as { chapterId?: unknown; events?: unknown };
+    if (typeof group.chapterId !== "string" || !expected.has(group.chapterId)) {
+      throw new Error("多章分析结果包含未知章节");
+    }
+    if (seen.has(group.chapterId)) throw new Error("多章分析结果重复包含章节");
+    seen.add(group.chapterId);
+    return {
+      chapterId: group.chapterId,
+      events: assignOccurrences(modelEvents(JSON.stringify({ events: group.events }), expected.get(group.chapterId)!.atoms)),
+    };
+  });
+  if (seen.size !== expected.size) throw new Error("多章分析结果章节集合不完整");
+  return result;
+}
+
+export function createOpenAiResponsesChapterBatchAnalyzer(
+  config: ChapterTextModelConfig,
+  fetchImpl: typeof fetch = fetch,
+): AnalyzeChapterEventsBatch {
+  let endpoint: URL;
+  try { endpoint = textModelRequest(config, "").endpoint; }
+  catch { throw new Error("章节分析模型配置无效"); }
+  if (!config.apiKey.trim() || !config.model.trim() || !config.providerId.trim() ||
+      (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
+    throw new Error("章节分析模型配置无效");
+  }
+  return async ({ chapters, signal }) => {
+    if (!chapters.length || chapters.length > 20 || new Set(chapters.map((chapter) => chapter.chapterId)).size !== chapters.length) {
+      throw new Error("多章分析输入章节集合无效");
+    }
+    const prepared = prepareChapterBatchPrompt(chapters);
+    if (prepared.bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
+      throw new Error("多章分析输入超过服务端安全上限");
+    }
+    const request = textModelRequest(config, prepared.prompt, 32768);
+    let response: Response;
+    try {
+      response = await fetchImpl(request.endpoint, {
+        method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+      });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new Error("章节分析模型请求失败");
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
+    }
+    return parseChapterBatchAnalysisEvents(responseText(await limitedJson(response)), prepared.chapters);
+  };
 }
 
 export function createOpenAiResponsesChapterAnalyzer(

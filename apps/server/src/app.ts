@@ -32,12 +32,15 @@ import {
   CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
   CHAPTER_EVENTS_JOB_TYPE,
   createChapterEventsAnalysisJobHandler,
+  createChapterEventsBatchAnalysisJobHandler,
   createChapterEventsJobHandler,
   enqueueChapterEventsAnalysisJob,
 } from "./chapter-events-job.js";
 import {
   createOpenAiResponsesChapterAnalyzer,
+  createOpenAiResponsesChapterBatchAnalyzer,
   type AnalyzeChapterEvents,
+  type AnalyzeChapterEventsBatch,
   type ChapterTextModelConfig,
 } from "./chapter-event-analyzer.js";
 import { indexBookChapters } from "./chapter-index.js";
@@ -162,6 +165,7 @@ interface BuildAppOptions {
   imageProvider?: OpenAiImageConfig | null;
   chapterTextProvider?: ChapterTextModelConfig | null;
   chapterAnalyzer?: AnalyzeChapterEvents;
+  chapterBatchAnalyzer?: AnalyzeChapterEventsBatch;
   episodeRecommender?: RecommendEpisodeSources;
   episodeScriptGenerator?: GenerateEpisodeScript;
 }
@@ -355,6 +359,18 @@ export function buildApp(options: BuildAppOptions = {}) {
     [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: async (context: JobExecutionContext) => {
       const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
       if (!provider) throw new Error("章节分析任务对应的模型配置不可用");
+      if (context.job.payload && typeof context.job.payload === "object" &&
+          !Array.isArray(context.job.payload) && Array.isArray((context.job.payload as { chapters?: unknown }).chapters)) {
+        const batchAnalyzer = options.chapterBatchAnalyzer ?? (options.chapterAnalyzer
+          ? async ({ chapters, signal }) => Promise.all(chapters.map(async (chapter) => ({
+            chapterId: chapter.chapterId,
+            events: await options.chapterAnalyzer!({ ...chapter, signal }),
+          })))
+          : createOpenAiResponsesChapterBatchAnalyzer(provider));
+        return createChapterEventsBatchAnalysisJobHandler(
+          connection.database, dataRoot, provider, batchAnalyzer,
+        )(context);
+      }
       return createChapterEventsAnalysisJobHandler(
         connection.database, dataRoot, provider,
         options.chapterAnalyzer ?? createOpenAiResponsesChapterAnalyzer(provider),
@@ -408,15 +424,30 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(FULL_BOOK_PLAN_JOB_TYPE);
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
+  let chapterWorkers: JobWorker[];
   let pipelineWorker: SeriesPipelineWorker;
   try {
-    worker = new JobWorker(connection.database, jobHandlers, {
+    const generalJobHandlers = Object.fromEntries(
+      Object.entries(jobHandlers).filter(([type]) => type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE),
+    );
+    worker = new JobWorker(connection.database, generalJobHandlers, {
       workerId: options.jobWorker?.workerId ?? `local_${randomUUID()}`,
       leaseMs: options.jobWorker?.leaseMs,
       heartbeatMs: options.jobWorker?.heartbeatMs,
       retryDelayMs: options.jobWorker?.retryDelayMs,
       onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "本地任务 Worker 运行异常")),
     });
+    chapterWorkers = Array.from({ length: 8 }, (_, index) => new JobWorker(
+      connection.database,
+      { [CHAPTER_EVENTS_ANALYZE_JOB_TYPE]: jobHandlers[CHAPTER_EVENTS_ANALYZE_JOB_TYPE]! },
+      {
+        workerId: `${options.jobWorker?.workerId ?? "local"}_chapter_${index + 1}_${randomUUID()}`,
+        leaseMs: options.jobWorker?.leaseMs,
+        heartbeatMs: options.jobWorker?.heartbeatMs,
+        retryDelayMs: options.jobWorker?.retryDelayMs,
+        onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "章节分析 Worker 运行异常")),
+      },
+    ));
     const pipelineService = new SeriesPipelineService({
       database: connection.database,
       dataRoot,
@@ -437,10 +468,12 @@ export function buildApp(options: BuildAppOptions = {}) {
     if (cleanup.pending) app.log.warn({ pending: cleanup.pending }, "存在尚未清理的整书删除文件");
     pipelineWorker.start(options.pipelinePollMs);
     if (supportedJobTypes.size > 0) worker.start(options.jobPollMs);
+    for (const chapterWorker of chapterWorkers) chapterWorker.start(options.jobPollMs);
   });
   app.addHook("onClose", async () => {
     await pipelineWorker.stop();
     await worker.stop();
+    await Promise.all(chapterWorkers.map((chapterWorker) => chapterWorker.stop()));
     connection.close();
   });
   app.addContentTypeParser(

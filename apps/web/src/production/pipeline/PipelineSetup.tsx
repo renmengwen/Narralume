@@ -23,6 +23,8 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
   const [endId, setEndId] = useState("");
   const [episodeCount, setEpisodeCount] = useState("");
   const [targetDurationSeconds, setTargetDurationSeconds] = useState<number>();
+  const [chapterBatchSize, setChapterBatchSize] = useState(10);
+  const [chapterConcurrency, setChapterConcurrency] = useState(8);
   const [validationError, setValidationError] = useState<string>();
 
   useEffect(() => {
@@ -46,6 +48,8 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
       const input = pipelineCreateInput({
         episodeCount: Number(episodeCount),
         targetDurationSeconds: targetDurationSeconds ?? Number.NaN,
+        chapterBatchSize,
+        chapterConcurrency,
         sourceStartChapterId: startId,
         sourceEndChapterId: endId,
       }, chapters, policy);
@@ -60,7 +64,7 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
     <div className="mx-auto grid max-w-6xl gap-6">
       <div className="max-w-3xl">
         <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.14em] text-[var(--accent)]">全本改写 / 设置</p>
-        <h2 id="pipeline-setup-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">确认范围、总集数与单集时长</h2>
+        <h2 id="pipeline-setup-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">确认范围、成片规格与分析速度</h2>
         <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">启动一次后，固定流水线将依次补齐章节分析、故事圣经、全书计划、忠实稿和包装稿。稿件与媒体仍由你逐集审核。</p>
       </div>
 
@@ -87,6 +91,14 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
           <label className="grid gap-2 text-sm font-semibold">单集目标时长（秒）
             <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min={policy?.minimumSeconds} max={policy?.maximumSeconds} step={policy?.stepSeconds} disabled={disabled} value={targetDurationSeconds ?? ""} onChange={(event) => setTargetDurationSeconds(Number(event.target.value))} />
             {policy ? <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 {policy.minimumSeconds}～{policy.maximumSeconds} 秒，按 {policy.stepSeconds} 秒递增。</span> : null}
+          </label>
+          <label className="grid gap-2 text-sm font-semibold">每批最多章节数
+            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="20" step="1" inputMode="numeric" disabled={disabled} value={chapterBatchSize} onChange={(event) => setChapterBatchSize(Number(event.target.value))} />
+            <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～20章；实际批次会按输入安全上限自动缩小。</span>
+          </label>
+          <label className="grid gap-2 text-sm font-semibold">并发批次数
+            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="8" step="1" inputMode="numeric" disabled={disabled} value={chapterConcurrency} onChange={(event) => setChapterConcurrency(Number(event.target.value))} />
+            <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～8批；并发越高越可能触发供应商限流。</span>
           </label>
         </div>
 

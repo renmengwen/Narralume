@@ -45,6 +45,13 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
       </div>
       {error ? <div className="border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]" role="alert">{error}</div> : null}
 
+      <dl className="grid grid-cols-4 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] max-md:grid-cols-2 max-sm:grid-cols-1" aria-label="本次全本改写冻结设置">
+        <RunFact label="总集数" value={`${run.episodeCount}集`} />
+        <RunFact label="单集时长" value={`${run.targetDurationSeconds}秒`} />
+        <RunFact label="每批最多章节" value={`${run.chapterBatchSize}章`} />
+        <RunFact label="并发批次" value={`${run.chapterConcurrency}批`} />
+      </dl>
+
       <div className="grid border border-[var(--border-subtle)]" aria-label="全本改写阶段进度">
         <ProgressRow label="章节事件分析" count={`${chapter.completed}/${chapter.total}`} detail={`复用 ${chapter.reused} · 排队 ${chapter.queued} · 执行中 ${chapter.running} · 失败 ${chapter.failed}`} />
         <ProgressRow label="故事圣经构建" count={`${run.progress.storyBible.completed}/${run.progress.storyBible.total}`} detail={stageDetail(run, "storyBible")} />
@@ -76,6 +83,13 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
       </div>
     </div>
   </section>;
+}
+
+function RunFact({ label, value }: { label: string; value: string }) {
+  return <div className="grid gap-1 border-r border-[var(--border-subtle)] px-4 py-3 last:border-r-0 max-md:[&:nth-child(2)]:border-r-0 max-sm:border-r-0">
+    <dt className="text-xs text-[var(--fg-tertiary)]">{label}</dt>
+    <dd className="m-0 font-mono text-sm font-semibold">{value}</dd>
+  </div>;
 }
 
 function ProgressRow({ label, count, detail }: { label: string; count: string; detail: string }) {

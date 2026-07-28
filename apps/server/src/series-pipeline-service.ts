@@ -1,8 +1,17 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
-import { chapterEventsAnalysisJobIdentity, enqueueChapterEventsAnalysisJob } from "./chapter-events-job.js";
+import {
+  buildChapterEvidenceAtoms,
+  MAX_CHAPTER_BATCH_INPUT_BYTES,
+  prepareChapterBatchPrompt,
+  type ChapterTextModelConfig,
+} from "./chapter-event-analyzer.js";
+import {
+  chapterEventsAnalysisJobMatchesChapter,
+  chapterEventsAnalysisJobMatchesChapters,
+  enqueueChapterEventsAnalysisBatchJob,
+} from "./chapter-events-job.js";
 import {
   enqueueEpisodeScriptGenerationJob,
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
@@ -51,11 +60,12 @@ import {
   getSeriesPipelineRun,
   listPipelineChapters,
   listRunnableSeriesPipelineRuns,
-  mapSeriesPipelineJob,
+  mapSeriesPipelineBatchJob,
   mapSeriesPipelineEpisodePlanJob,
   mapSeriesPipelineStoryBibleJob,
   mapSeriesPipelineScriptJob,
   pauseSeriesPipelineRun,
+  retainStaleChapterAnalysisJobs,
   resumeSeriesPipelineRun,
   retrySeriesPipelineRun,
   seriesPipelineView,
@@ -128,25 +138,54 @@ export class SeriesPipelineService {
 
         const chapters = listPipelineChapters(this.options.database, run);
         const bookId = this.bookId(run.seriesProjectId);
-        const currentJobId = new Map(chapters.map((chapter) => [
-          chapter.id,
-          chapterEventsAnalysisJobIdentity(bookId, chapter.id, chapter.contentHash).jobId,
-        ]));
         const allMappings = getMappedChapterJobs(this.options.database, run.id);
-        const mappings = allMappings.filter(
-          (mapping) => currentJobId.get(mapping.subject_id) === mapping.job_id,
+        const chapterById = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+        const currentJobIds = new Set<string>();
+        for (const jobId of new Set(allMappings.map((mapping) => mapping.job_id))) {
+          const mappedChapters = allMappings.filter((mapping) => mapping.job_id === jobId).map((mapping) => {
+            const chapter = chapterById.get(mapping.subject_id);
+            return chapter ? { chapterId: chapter.id, contentHash: chapter.contentHash } : undefined;
+          });
+          if (mappedChapters.every(Boolean) && chapterEventsAnalysisJobMatchesChapters(
+            getJob(this.options.database, jobId), bookId,
+            mappedChapters as Array<{ chapterId: string; contentHash: string }>,
+          )) currentJobIds.add(jobId);
+        }
+        const mappings = allMappings.filter((mapping) => currentJobIds.has(mapping.job_id));
+        const staleMappings = allMappings.filter((mapping) => !currentJobIds.has(mapping.job_id));
+        const staleChapterIds = new Set<string>();
+        const reusableStaleMappings: Array<{ chapterId: string; jobId: string }> = [];
+        for (const mapping of staleMappings) {
+          const chapter = chapterById.get(mapping.subject_id);
+          const job = getJob(this.options.database, mapping.job_id);
+          const checkpoint = this.options.database.prepare(
+            `SELECT 1 FROM job_checkpoints
+             WHERE job_id = ? AND stage = 'chapter-events-analyze' AND scope_key = ?`,
+          ).get(mapping.job_id, mapping.subject_id);
+          const reusable = Boolean(chapter?.hasEvents && checkpoint && chapterEventsAnalysisJobMatchesChapter(
+            job, bookId, chapter.id, chapter.contentHash,
+          ));
+          if (reusable) reusableStaleMappings.push({ chapterId: mapping.subject_id, jobId: mapping.job_id });
+          else staleChapterIds.add(mapping.subject_id);
+        }
+        const { blockingJobIds } = retainStaleChapterAnalysisJobs(
+          this.options.database,
+          run.id,
+          staleMappings.map((mapping) => mapping.job_id),
+          reusableStaleMappings,
         );
-        const staleChapterIds = new Set(allMappings.filter(
-          (mapping) => currentJobId.get(mapping.subject_id) !== mapping.job_id,
-        ).map((mapping) => mapping.subject_id));
-        failEmptyChapterAnalysisJobs(this.options.database, run.id, mappings.map((mapping) => mapping.job_id));
+        const blockingStaleJobIds = new Set(blockingJobIds);
+        failEmptyChapterAnalysisJobs(this.options.database, run.id, [...new Set(mappings.map((mapping) => mapping.job_id))]);
         const mappedJobs = mappings.map((mapping) => ({ mapping, job: getJob(this.options.database, mapping.job_id) }));
         const parked = mappedJobs.find((item) =>
           item.job?.status === "queued" && item.job.runAfter === Number.MAX_SAFE_INTEGER,
         );
         if (parked) {
-          mapSeriesPipelineJob(
-            this.options.database, run.id, parked.mapping.subject_id, parked.mapping.job_id,
+          mapSeriesPipelineBatchJob(
+            this.options.database,
+            run.id,
+            mappings.filter((mapping) => mapping.job_id === parked.mapping.job_id).map((mapping) => mapping.subject_id),
+            parked.mapping.job_id,
           );
         }
         const completedChapterIds = new Set(chapters.filter((chapter) => {
@@ -164,11 +203,22 @@ export class SeriesPipelineService {
           );
           continue;
         }
-        if (relevantJobs.some((item) => item.job?.status === "queued" || item.job?.status === "running")) continue;
-
         const mappedSubjects = new Set(mappings.map((mapping) => mapping.subject_id));
-        const next = chapters.find((chapter) => !completedChapterIds.has(chapter.id) && !mappedSubjects.has(chapter.id));
-        if (!next) {
+        for (const mapping of staleMappings) {
+          if (blockingStaleJobIds.has(mapping.job_id)) mappedSubjects.add(mapping.subject_id);
+        }
+        const pendingRuns: typeof chapters[] = [];
+        let pendingRun: typeof chapters = [];
+        for (const chapter of chapters) {
+          if (!completedChapterIds.has(chapter.id) && !mappedSubjects.has(chapter.id)) {
+            pendingRun.push(chapter);
+          } else if (pendingRun.length) {
+            pendingRuns.push(pendingRun);
+            pendingRun = [];
+          }
+        }
+        if (pendingRun.length) pendingRuns.push(pendingRun);
+        if (!pendingRuns.length) {
           const incomplete = relevantJobs.some((item) => item.job?.status !== "succeeded");
           if (!incomplete && chapters.every((chapter) => completedChapterIds.has(chapter.id))) {
             finishChapterAnalysis(this.options.database, run);
@@ -181,17 +231,56 @@ export class SeriesPipelineService {
           setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
           continue;
         }
-        const result = await enqueueChapterEventsAnalysisJob(
-          this.options.database,
-          this.options.dataRoot,
-          provider,
-          {
-            payload: { bookId, chapterId: next.id }, maxAttempts: 3,
-            runAfter: Number.MAX_SAFE_INTEGER,
-          },
-          () => getSeriesPipelineRun(this.options.database, run.id)?.status === "analyzing_chapters",
-        );
-        mapSeriesPipelineJob(this.options.database, run.id, next.id, result.job.id);
+        const activeJobs = new Set(relevantJobs.filter((item) =>
+          item.job?.status === "queued" || item.job?.status === "running",
+        ).map((item) => item.mapping.job_id));
+        for (const jobId of blockingStaleJobIds) activeJobs.add(jobId);
+        let slots = Math.max(0, run.chapterConcurrency - activeJobs.size);
+        let oversized = false;
+        for (const contiguous of pendingRuns) {
+          let offset = 0;
+          while (slots > 0 && offset < contiguous.length) {
+            const batch: Array<{ chapterId: string; contentHash: string }> = [];
+            const inputs: Array<{ chapterId: string; atoms: Awaited<ReturnType<typeof buildChapterEvidenceAtoms>>["atoms"] }> = [];
+            while (batch.length < run.chapterBatchSize && offset < contiguous.length) {
+              const chapter = contiguous[offset]!;
+              const source = await buildChapterEvidenceAtoms(this.options.database, this.options.dataRoot, bookId, chapter.id);
+              const nextInputs = [...inputs, { chapterId: chapter.id, atoms: source.atoms }];
+              if (prepareChapterBatchPrompt(nextInputs).bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
+                if (!batch.length) {
+                  setSeriesPipelineFailure(
+                    this.options.database, run.id, "chapter_batch_input_too_large",
+                    `章节 ${chapter.id} 的分析输入超过服务端 512 KiB 安全上限`,
+                  );
+                  oversized = true;
+                }
+                break;
+              }
+              inputs.push(nextInputs.at(-1)!);
+              batch.push({ chapterId: chapter.id, contentHash: source.contentHash });
+              offset += 1;
+            }
+            if (oversized) break;
+            const result = await enqueueChapterEventsAnalysisBatchJob(
+              this.options.database,
+              provider,
+              { payload: { bookId, chapters: batch }, maxAttempts: 3, runAfter: Number.MAX_SAFE_INTEGER },
+              () => getSeriesPipelineRun(this.options.database, run.id)?.status === "analyzing_chapters",
+            );
+            const batchChapterIds = batch.map((chapter) => chapter.chapterId);
+            if (!mapSeriesPipelineBatchJob(
+              this.options.database,
+              run.id,
+              batchChapterIds,
+              result.job.id,
+              Date.now(),
+              staleMappings.filter((mapping) => batchChapterIds.includes(mapping.subject_id))
+                .map((mapping) => mapping.job_id),
+            )) break;
+            if (result.job.status === "queued" || result.job.status === "running") slots -= 1;
+          }
+          if (oversized || slots === 0) break;
+        }
       } catch (error) {
         if (getSeriesPipelineRun(this.options.database, candidate.id)?.status === "paused") continue;
         if (candidate.status === "checking_coverage") {

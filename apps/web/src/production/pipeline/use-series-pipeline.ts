@@ -80,7 +80,7 @@ export function useSeriesPipeline({ bookId, seriesId, initialRunId, onRunIdChang
       setRun(restoredRun);
       if (restoredRun) runIdChangeRef.current(restoredRun.id);
       else if (initialRunId) runIdChangeRef.current(undefined);
-      setOperation(restoredRun ? "已恢复全本改写任务。" : "全本改写设置已就绪。请确认范围、总集数和单集时长。");
+      setOperation(restoredRun ? "已恢复全本改写任务。" : "全本改写设置已就绪。请确认范围、成片规格和分析速度。");
     }).catch((cause) => {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
       const message = `全本改写任务加载失败：${(cause as Error).message}`;
@@ -164,7 +164,7 @@ export function useSeriesPipeline({ bookId, seriesId, initialRunId, onRunIdChang
     if (!run || !pipelineIsTerminal(run) || actionRef.current) return;
     setRun(undefined);
     setError(undefined);
-    setOperation("全本改写设置已就绪。请确认范围、总集数和单集时长。");
+    setOperation("全本改写设置已就绪。请确认范围、成片规格和分析速度。");
     runIdChangeRef.current(undefined);
   }, [run]);
 

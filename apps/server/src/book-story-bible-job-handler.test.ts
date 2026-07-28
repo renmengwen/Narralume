@@ -78,11 +78,14 @@ function payload(chapterCount = 1): BookStoryBibleJobPayload {
   return { ...base, providerId: config.providerId, model: config.model, requestHash: storyBibleJobRequestHash(base) };
 }
 
-function database() {
-  return { prepare: () => ({ all: (...ids: string[]) => ids.map((id) => ({
-    id, chapter_id: id.replace("event", "chapter"), event_index: 0, occurrence: 1,
-    event_type: "plot", payload_json: JSON.stringify({ summary: "事件摘要" }),
-  })) }) } as never;
+function database(concurrency = 1) {
+  return { prepare: (sql: string) => ({
+    all: (...ids: string[]) => ids.map((id) => ({
+      id, chapter_id: id.replace("event", "chapter"), event_index: 0, occurrence: 1,
+      event_type: "plot", payload_json: JSON.stringify({ summary: "事件摘要" }),
+    })),
+    get: () => sql.includes("MIN(run.chapter_concurrency)") ? { value: concurrency } : undefined,
+  }) } as never;
 }
 
 function modelResponse(value: unknown) {
@@ -180,6 +183,40 @@ test("Story Bible 只在明确流终态后解析并持久化", async () => {
   await handler(context(payload()).value);
   assert.equal(calls, 2);
   assert.equal(writes, 2);
+});
+
+test("故事圣经区间使用当前 run 配置的并发批次数并在全部完成后最终聚合", async () => {
+  const task = payload(2);
+  let active = 0;
+  let peak = 0;
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  let finalStarted = false;
+  const handler = createBookStoryBibleJobHandler(database(2), config, {
+    fetchImpl: (async (_input, init) => {
+      const input = prompt(init);
+      if (input.includes('"kind":"interval"')) {
+        active += 1;
+        peak = Math.max(peak, active);
+        if (active === 2) release();
+        await barrier;
+        const index = input.includes("event_0") ? 0 : 1;
+        active -= 1;
+        return streamedModelResponse(content(`event_${index}`, `chapter_${index}`));
+      }
+      finalStarted = true;
+      assert.equal(active, 0);
+      return streamedModelResponse(content("event_0", "chapter_0"));
+    }) as typeof fetch,
+    createBible: ((_database: never, input: Record<string, unknown>) => ({
+      id: `${String(input.scope)}_${String(input.sourceStartChapterId)}`,
+      contentHash: "1".repeat(64),
+    })) as never,
+  });
+
+  await handler(context(task).value);
+  assert.equal(peak, 2);
+  assert.equal(finalStarted, true);
 });
 
 test("Story Bible 在 Anthropic Messages 也显式请求流式输出", async () => {

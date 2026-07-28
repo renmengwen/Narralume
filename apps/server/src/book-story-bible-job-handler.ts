@@ -194,15 +194,16 @@ async function callModelAndParse<T>(
   allowedSourceEventIds: readonly string[],
   allowedChapterIds: readonly string[],
   parse: (value: unknown) => T,
+  groupSignal?: AbortSignal,
 ) {
   const raw = await withCancellation(context,
-    (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity));
+    (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity), groupSignal);
   try {
     parseModelContent(raw, allowedSourceEventIds, allowedChapterIds);
   } catch (error) {
     if (!(error instanceof BookStoryBibleContractError)) throw error;
     const corrected = await withCancellation(context,
-      (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, error.message));
+      (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, error.message), groupSignal);
     parseModelContent(corrected, allowedSourceEventIds, allowedChapterIds);
     return parse(corrected);
   }
@@ -212,6 +213,7 @@ async function callModelAndParse<T>(
 async function withCancellation<T>(
   context: Parameters<JobHandler>[0],
   call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+  groupSignal?: AbortSignal,
 ) {
   context.throwIfCancellationRequested();
   const controller = new AbortController();
@@ -230,12 +232,25 @@ async function withCancellation<T>(
       controller.signal,
       idleController.signal,
       totalController.signal,
+      ...(groupSignal ? [groupSignal] : []),
     ]), onActivity);
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
+    if (groupSignal?.aborted) throw groupSignal.reason ?? error;
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("故事圣经模型请求超时");
     throw error;
   } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
+}
+
+function intervalConcurrency(database: DatabaseSync, jobId: string) {
+  const row = database.prepare(
+    `SELECT MIN(run.chapter_concurrency) AS value
+     FROM series_pipeline_jobs mapping
+     JOIN series_pipeline_runs run ON run.id = mapping.run_id
+     WHERE mapping.job_id = ? AND mapping.stage = 'story_bible'
+       AND run.status NOT IN ('cancelled', 'completed')`,
+  ).get(jobId) as { value?: unknown } | undefined;
+  return Number.isSafeInteger(row?.value) && Number(row!.value) > 0 ? Number(row!.value) : 1;
 }
 
 export function createBookStoryBibleJobHandler(
@@ -248,26 +263,42 @@ export function createBookStoryBibleJobHandler(
   return async (context) => {
     if (context.job.type !== BOOK_STORY_BIBLE_JOB_TYPE) throw new Error("故事圣经任务类型无效");
     const task = parsePayload(context.job.payload, config);
-    const verified = [];
-    const intervalBibles: StoredBible[] = [];
-    for (const [index, request] of task.intervals.entries()) {
-      const checkpoint = context.getCheckpoint("book-story-bible-interval", request.identityHash);
-      const input = {
-        kind: "interval", chapterIds: request.chapterIds, sourceEvents: sourceEvents(database, request),
-      };
-      const parsed = await callModelAndParse(context, config, fetchImpl, input, request.sourceEventIds, request.chapterIds,
-        (raw) => parseStoryBibleIntervalResponse(request, raw));
-      context.throwIfCancellationRequested();
-      const bible = createBible(database, {
-        bookId: task.bookId, scope: "interval", sourceStartChapterId: request.chapterIds[0]!,
-        sourceEndChapterId: request.chapterIds.at(-1)!, sourceEventIds: request.sourceEventIds,
-        providerId: task.providerId, model: task.model, jobId: context.job.id, content: parsed.content,
-      }, { forceRebuild: task.forceRebuild && !checkpoint });
-      verified.push(parsed);
-      intervalBibles.push(bible);
-      context.commitCheckpoint("book-story-bible-interval", request.identityHash, request.identityHash, () => undefined);
-      context.reportProgress((index + 1) / (task.intervals.length + 1));
-    }
+    const verified = new Array<ReturnType<typeof parseStoryBibleIntervalResponse>>(task.intervals.length);
+    const intervalBibles = new Array<StoredBible>(task.intervals.length);
+    const groupController = new AbortController();
+    let nextIndex = 0;
+    let completed = 0;
+    const worker = async () => {
+      while (nextIndex < task.intervals.length) {
+        context.throwIfCancellationRequested();
+        const index = nextIndex++;
+        const request = task.intervals[index]!;
+        try {
+          const checkpoint = context.getCheckpoint("book-story-bible-interval", request.identityHash);
+          const input = {
+            kind: "interval", chapterIds: request.chapterIds, sourceEvents: sourceEvents(database, request),
+          };
+          const parsed = await callModelAndParse(context, config, fetchImpl, input, request.sourceEventIds,
+            request.chapterIds, (raw) => parseStoryBibleIntervalResponse(request, raw), groupController.signal);
+          context.throwIfCancellationRequested();
+          const bible = createBible(database, {
+            bookId: task.bookId, scope: "interval", sourceStartChapterId: request.chapterIds[0]!,
+            sourceEndChapterId: request.chapterIds.at(-1)!, sourceEventIds: request.sourceEventIds,
+            providerId: task.providerId, model: task.model, jobId: context.job.id, content: parsed.content,
+          }, { forceRebuild: task.forceRebuild && !checkpoint });
+          verified[index] = parsed;
+          intervalBibles[index] = bible;
+          context.commitCheckpoint("book-story-bible-interval", request.identityHash, request.identityHash, () => undefined);
+          context.reportProgress(++completed / (task.intervals.length + 1));
+        } catch (error) {
+          groupController.abort(error);
+          throw error;
+        }
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(intervalConcurrency(database, context.job.id), task.intervals.length) }, worker,
+    ));
     const finalRequest = buildStoryBibleFinalRequest(task.bookId, verified, {
       providerId: task.providerId, model: task.model,
     }, task.limits);

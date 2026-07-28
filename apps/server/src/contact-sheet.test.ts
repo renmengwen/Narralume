@@ -185,20 +185,25 @@ test("视觉段、候选批准、稿件批准或时间轴变化都会使旧联�
   await t.test("候选批准 revision", () => fixture(async (store, dataRoot) => {
     await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
     appendAssetCandidateReview(store.database, "candidate", { expectedRevision: 1, action: "reject", now: 2 });
+    appendAssetCandidateReview(store.database, "candidate", { expectedRevision: 2, action: "approve", now: 3 });
+    store.database.prepare(
+      "UPDATE visual_segment_assets SET candidate_review_revision = 3",
+    ).run();
     await assert.rejects(
       verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
-      /已失效/u,
+      /与当前视觉计划不一致/u,
     );
   }));
   await t.test("稿件批准 revision", () => fixture(async (store, dataRoot) => {
     await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
     store.database.exec(`
       INSERT INTO script_approval_events (id, episode_id, revision, action, script_version_id, created_at)
-      VALUES ('withdraw', 'episode', 2, 'withdraw', 'script', 2)
+      VALUES ('reapproval', 'episode', 2, 'approve', 'script', 2);
+      UPDATE visual_segments SET approval_revision = 2;
     `);
     await assert.rejects(
       verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
-      /没有已批准包装稿/u,
+      /与当前视觉计划不一致/u,
     );
   }));
   await t.test("时间轴", () => fixture(async (store, dataRoot) => {

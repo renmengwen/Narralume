@@ -260,10 +260,29 @@ async function buildContactSheet(
   }));
   const directoryPath = join(resolve(dataRoot), "episodes", episodeId, "contact-sheets", timelineHash);
   if (!isInside(resolve(dataRoot), directoryPath)) throw new ContactSheetError(409, "联系表路径越出数据目录");
+  const visualPlanHash = sha256(Buffer.from(JSON.stringify(segments.map((segment) => ({
+    id: segment.id,
+    revision: segment.revision,
+    cueStartIndex: segment.cueStartIndex,
+    cueEndIndex: segment.cueEndIndex,
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    motionKind: segment.motionKind,
+    motionAmountPpm: segment.motionAmountPpm,
+    fadeMs: segment.fadeMs,
+    assets: segment.assets.map((asset) => ({
+      assetId: asset.assetId,
+      selectedCandidateId: asset.selectedCandidateId,
+      candidateReviewRevision: asset.candidateReviewRevision,
+    })),
+  }))), "utf8"));
   const document = {
     schemaVersion: 1,
     episodeId,
+    scriptVersionId: segments[0]!.scriptVersionId,
+    approvalRevision: segments[0]!.approvalRevision,
     timelineHash,
+    visualPlanHash,
     segments: segments.map((segment) => ({
       id: segment.id,
       segmentIndex: segment.segmentIndex,
@@ -307,22 +326,6 @@ async function buildContactSheet(
   const html = `<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>联系表</title><style>body{margin:0;padding:24px;background:#181715;color:#eee8df;font:14px system-ui,sans-serif}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}article{overflow:hidden;border:1px solid #514a40;border-radius:10px;background:#24211d}img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover}div{padding:12px}strong,span{display:block}span,p{color:#bdb4a8}</style></head><body><h1>分集联系表</h1><p>${escapeHtml(episodeId)} · ${escapeHtml(timelineHash)}</p><main>\n${cards}\n</main></body></html>\n`;
   const jsonContent = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
   const htmlContent = Buffer.from(html, "utf8");
-  const visualPlanHash = sha256(Buffer.from(JSON.stringify(segments.map((segment) => ({
-    id: segment.id,
-    revision: segment.revision,
-    cueStartIndex: segment.cueStartIndex,
-    cueEndIndex: segment.cueEndIndex,
-    startMs: segment.startMs,
-    endMs: segment.endMs,
-    motionKind: segment.motionKind,
-    motionAmountPpm: segment.motionAmountPpm,
-    fadeMs: segment.fadeMs,
-    assets: segment.assets.map((asset) => ({
-      assetId: asset.assetId,
-      selectedCandidateId: asset.selectedCandidateId,
-      candidateReviewRevision: asset.candidateReviewRevision,
-    })),
-  }))), "utf8"));
   const identity: ContactSheetIdentity = {
     contract: "contact-sheet-review-v1",
     episodeId,

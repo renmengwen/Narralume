@@ -6,7 +6,7 @@
 
 - Goal ID：`NARRALUME-P1-P7`
 - 根目标状态：`active`（2026-07-25 产品闭环复开；既有工程基线保留）
-- 根目标：持续完成 Narralume Phase 1-7，直到用户导入真实长篇后可配置改写范围、总集数与单集时长，只启动一次即可由固定自动流水线完成必要章节分析、书籍故事圣经、全书分集计划以及全部忠实稿/包装稿生成，并可继续从前端走通真实《北派盗墓笔记》单集媒体生产与“审核与导出”，按 Episode 配置时长完成通过内容、听感、画面、字幕、最终 MP4 下载与项目包恢复验收的 9:16 产品视频；20 分钟仅为某次用户配置，不得硬编码。
+- 根目标：持续完成 Narralume Phase 1-7，直到用户导入真实长篇后可在分析前一并配置改写范围、总集数、单集时长、动态批次上限与分析并发，只启动一次即可由固定自动流水线完成必要章节分析、书籍故事圣经、全书分集计划以及全部忠实稿/包装稿生成，并可继续从前端走通真实《北派盗墓笔记》单集媒体生产与“审核与导出”，按 Episode 配置时长完成通过内容、听感、画面、字幕、最终 MP4 下载与项目包恢复验收的 9:16 产品视频；20 分钟仅为某次用户配置，不得硬编码。
 - 仓库：`D:\code3\Narralume`
 - 不可变基线：`main@e75b1c33140f92703cce07c89673ec06b8393f92`
 - 集成分支：`dev`；默认只推送 `origin/dev`，未经用户明确授权不合并 `main`。
@@ -31,6 +31,8 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 2026-07-25 用户修正长篇改编合同：目标时长必须由系统配置并保存到 Episode，20 分钟只作参考；Agent 基于逐章事件摘要、目标时长和真实语速推荐连续原著范围，用户确认或调整后才冻结到结构化 `episode_sources`。不得把多章全文一次拼入模型，也不得复制 Toonflow 的短漫剧时长、字数、固定章数或付费节奏。视觉段数量由真实故事 beat、时间轴和画面驻留策略派生，旧 8～15 段只保留为 3～5 分钟首版 Gate，不得成为全局门禁。
 
+2026-07-28 用户以最新指令收窄上述“不得把多章全文一次拼入模型”：整本约 9 MiB、约 500 万字符仍禁止单次输入，但章节事件分析必须允许在工作台开始前与总集数、时长一起配置“每批最多章节数”和“并发批次数”。模型请求可包含受用户章节上限与服务端输入字节上限共同约束的连续多章，实际批次必须动态缩小；每章仍保留独立 `chapterId`、evidence allowlist、content hash、checkpoint、持久结果与失败诊断，不得串章或因单批失败破坏已完成批次。默认每批最多 10 章、8 路并发，用户可在安全范围内下调；配置冻结进 run，旧 run 按兼容默认恢复，不静默改写。
+
 2026-07-26 用户纠正“多张”为“多章/章节”：总账必须显式登记 Toonflow 式多章节汇总分析入口，而不是只在后端 PC-02B/PC-02C 合同里写跨章能力。当前页面仍偏单章分析，不能冒充已满足“多章节汇总分析 → 推荐章节范围/故事弧/长稿”的用户可见闭环。新增 `PC-02D 多章汇总分析入口`，优先复用 Toonflow 章节汇总分析方法和 Narralume 现有 `episode_sources`/script generation 合同，不新增第二套章节/稿件存储。
 
 2026-07-26 用户进一步明确 Toonflow/AI 漫剧参考边界为硬约束：参考项目是 AI 漫剧平台，单集通常几分钟；Narralume 当前产品单集约 20 分钟，是长篇说书/解说，不是短剧。只能 reference 其“多章事件汇总、章节范围确认、章节全覆盖校验、子任务调度”等通用逻辑，不能硬搬 Toonflow 的改写策略、短剧节奏、付费卡点、单集时长、字数估算、固定集数/章数、平台规格、情绪/爽点模板或其他短剧商业逻辑。
@@ -45,10 +47,10 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 
 - 当前分支：`dev`；用户已明确授权把已验收的 `codex/auto-full-book-pipeline` 合并到 `dev`，未合并 `main`。
 - 最近业务合并提交：`447f8e4412b119c4d443c023b8a8f856ac04ff76`（`feat(auto): 合并固定全本改写流水线`）；合并前先以独立文档控制提交 `4499086` 原样保护 `dev` 起点的 `docs/project-design.md` 与本 Ledger 修改，随后解决的唯一冲突是本 Ledger，最终内容采用功能分支最新动态证据。本控制提交由 Git 历史定位。
-- 工作区：业务合并提交后工作树与 index 干净；本控制提交仅更新本 Ledger 恢复入口。`/docs/` 下本地详细方案继续被 `.gitignore` 忽略，`.gitignore` 未修改；未执行 reset、restore、clean 或 stash。
+- 工作区：`dev@72b40f0`；用户刚完成的整书删除外键修复仍以未提交业务差异保留在 `apps/server/src/book-library.ts/.test.ts`，不得覆盖、暂存或混入 AUTO-05。AUTO-05 控制提交只暂存本 Ledger；`/docs/` 下本地详细方案继续被 `.gitignore` 忽略，`.gitignore` 未修改；未执行 reset、restore、clean 或 stash。
 - 最近验证：在 `dev` 的未提交 merge candidate 上串行执行 `npm run typecheck`、`npm test`、`npm run build` 与工作树/index `git diff --check`，全部 PASS；server 零失败，web 95/95，Vite 137 modules，最终 bundle 约 483.99kB/144.36kB gzip。合并前功能分支同一真实 run 的浏览器 Gate 仍为 `awaiting_review`，章节 3/3、Story Bible 1/1、规划 3/3、稿件 6/6、失败 0、批准 0。
-- 当前 Task：`AUTO-01～AUTO-04` 与对应 Requirement 均为 `complete`；PC-04/PC-05/PC-06 的已知工程接线缺口已关闭，但根 Goal 仍为 `active`，因为真实三集仍未经过用户逐集稿件批准、TTS 听感、视觉审美、联系表整集审核以及后续 render/final/MP4/package/restore 产品 Gate。
-- 下一动作：从同一真实 run 的 `awaiting_review` 恢复，由用户逐集审核包装稿；不得自动批准或修改 SQLite 绕过。完成稿件批准后继续真实双 TTS 短样试听与 voice/rate 选择、完整 timeline 人工听审、视觉候选批准、联系表整集审核，再执行 readiness → render_chunks → final_video → 受控 MP4 → 服务端项目包与隔离 restore。
+- 当前 Task：新增 `AUTO-05` / `REQ-AUTO-05`，状态 `queued`；只读来源核查已租给 `batch_reference_audit`。真实长篇旧 run `pipeline_541514f2-eb39-40ce-9361-785cd90c312f` 已安全暂停在 `analyzing_chapters`，完成4/1794、无 queued/running/failed，旧结果保留；不得用新配置静默改写该 run。
+- 下一动作：完成五仓来源核查后冻结最小接口并租出业务 Worker；实现新 run 的动态多章批次、默认8路有界并发和同区配置 UI，再做独立 Spec/Code Quality Review、隔离数据 Gate 与真实浏览器验收。不得自动继续旧 run、写默认 SQLite 绕过合同或自动批准任何稿件/媒体。
 
 ## 2026-07-25 产品闭环复开
 
@@ -71,6 +73,7 @@ Task 状态：`queued → leased → implementing → frozen_for_review → veri
 | PC-02C 跨章骨架与长稿 | `complete` | 基于 PC-02B 冻结 sources，按故事 beat 与 evidence 按需取原文，生成可审核 faithful/package | 第三版综合复审、根三门/diff、真实 API/UI/卸载回归全部 PASS；业务 `eec9857` |
 | PC-02D 多章汇总分析入口 | `complete` | 参考 Toonflow 多章节汇总分析；复用 Narralume 章节事件、Episode、`episode_sources`、script generation 合同 | 页面从单章分析补充多章/章节汇总分析入口：逐章摘要、范围推荐、确认冻结、多章来源回读与长稿触发；业务 `10505b7`，真实北派浏览器/API 验收 PASS |
 | AUTO-01 系列 run、全本设置与批量章节分析 | `complete` | 持久保存改写范围、总集数、单集时长和有限状态；新增“全本改写设置”与真实全本进度基础；复用现有 Job/`chapter_events_analyze` 自动补齐必要章节 | 同一真实 run 配置3集×300秒并完成3/3章节分析；暂停、重试、重启恢复与真实进度均已通过，未重跑未变化章节 |
+| AUTO-05 动态多章批次与有界并发分析 | `queued` | 在 AUTO-01 现有 run/Job/checkpoint 上扩展；分析前同区配置每批最多章节数与并发批次数；批次按输入预算动态缩小，默认10章/批、8路并发 | 新 run 冻结四类生产配置与章节范围；真实长篇不再单章串行，批内证据不串章，暂停/取消/失败/重启/旧run兼容与复用均通过；不得新建第二队列或关闭SQLite外键 |
 | AUTO-02 书籍级故事圣经 | `complete` | 基于已持久章节事件分层汇总人物、关系、地点、时间线、伏笔和术语；每条事实可追溯来源事件 | 同一run完成Story Bible 1/1并耐久恢复；有界流式约3分20秒真实越过上游524与本地旧时限，identity排除provider/model且partial不持久化 |
 | AUTO-03 分层全书规划与原子冻结 | `complete` | 先按连续区间分配 Episode 配额，再在区间内细分，合并后恰好 N 集；程序硬校验真实来源、顺序、章节覆盖并集和事件/字节范围，原子写 Episodes/`episode_sources` | 同一run第1 attempt约182秒完成3/3；恰好3集×300秒、章节1→2→3连续、sourceEventId无跨集重复、边界不交叉、planHash存在且0自动批准 |
 | AUTO-04 批量稿件与系列 Episode 工作台 | `complete` | 按集顺序复用 `episode_scripts_generate`；Episode `recap/nextHook` 保持规划版本，成功稿件 Job result 保存 `scriptHandoff` 供下一集优先读取，缺失时回退计划字段，不要求上一集先批准；统一 Episode 列表与上一集/下一集导航替换 Episode/稿件/音频/视觉四处裸数字输入 | 同一run严格1→2→3生成faithful/package各3份共6/6；handoff逐集精确消费，父链正确，批准0；后端冷重启从`checking_coverage`严格复核并进入`awaiting_review`，失败0 |
@@ -122,6 +125,7 @@ PC-02 当前 checkpoint：
 
 | Task | Owner | Worktree / branch / base | 允许路径 | 状态所有权 | 排他资源 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
+| AUTO-05 动态多章批次与有界并发来源核查 | `batch_reference_audit` | `dev@72b40f0` | 按 DramaClaw→Toonflow→LumenX→LocalMiniDrama→MuseDock 只读搜索长篇分批、有限并发、恢复、限流；报告仓库/commit/文件/行号与 copy/port/reference-only，不改文件 | Coordinator | 不读取密钥、不访问默认 SQLite/端口/Git index；业务租约待来源冻结后分配 | `leased` |
 | AUTO-01 系列 run、全本设置与批量章节分析（server tranche） | `auto01_server_worker` | `codex/auto-full-book-pipeline@0fd3431` | 原 12 路径内只修已登记 4 个 P1；可补 `chapter-events-job.test.ts` 定向回归。排除 Ledger、全部 web、AUTO-02/03/04、PC-04/05/06、FFmpeg、final/export、其他 asset/project-package/recovery 行为、package/lockfile | Coordinator | 不使用默认数据根/3101/5174/Git index；web Writer 仅写 web | `changes_requested` |
 | AUTO-01 系列 run、全本设置与真实进度（web tranche） | `auto01_web_prep` 重新租出 | `codex/auto-full-book-pipeline@9f0c4e2` | 原九路径内只修综合 Review 的一个 P1：按 URL 恢复的 run 必须属于当前 series，否则回退 current 并修正 URL；排除 Ledger、styles.css、package/lock、全部 server、Episode/script/audio/visual/export | Coordinator | 不使用 5174/Git index；旧 web candidate `a2f7ee8` 已失效 | `changes_requested` |
 | AUTO-02 故事圣经严格合同（pure contract tranche） | `auto02_source_scout` 已释放 | 业务 `dbc375e` | 只新增 `apps/server/src/book-story-bible-contract.ts` 与 `.test.ts`；实现结构化事实合同、严格 trust-boundary 校验、`sourceEventIds` allowlist/去重/上限和规范化输出。排除 Ledger、database/app/pipeline/Job/store、全部 web、package/lock | Coordinator | 聚焦 4/4、server typecheck、diff check PASS；未使用 SQLite/端口/Git index，未接入 AUTO-01 runtime | `implemented` |
@@ -184,6 +188,7 @@ PC-02 当前 checkpoint：
 | AUTO-02 书籍级故事圣经 | `complete` | AUTO-01、P2 章节事件合同 | Writer 已释放 | 严格合同、Store、Job、pipeline与流式提交均已登记 | 同上 | 新增耐久核心双Review PASS；复用流式接线最小自审PASS | 同左 | Story Bible 1/1；约3分20秒真实流式与冷恢复PASS | 已提交 | identity排除provider/model；partial不落库 |
 | AUTO-03 分层全书规划与原子冻结 | `complete` | AUTO-02、PC-02B/02C、Episode/`episode_sources` Store | Writer 已释放 | validator、原子冻结、runtime、prompt-v2与流式提交均已登记 | 同上 | 原子冻结双Review PASS；复用接线最小综合Review/自审PASS | 同左 | 3/3、恰好3集×300秒、连续来源、planHash与0批准PASS | 已提交 | 同一真实run第1 attempt约182秒成功并原子冻结 |
 | AUTO-04 批量稿件与系列 Episode 工作台 | `complete` | AUTO-03、现有 `episode_scripts_generate`/版本/批准合同、`7532c44` 工作台基线 | Writer 已释放 | server编排、Episode导航/API、三集Gate、覆盖检查终态与真实稿件修复均已登记 | OpenDesign工作台证据已登记 | 复用型编排/UI综合Review PASS；覆盖终态Coordinator最小自审PASS | 同左 | 22/22覆盖终态聚焦；根三门；真实3集6/6、handoff链、父链、0批准、冷恢复进入`awaiting_review` PASS | `1b1b5fe`、`1f332e0` | 自动生产已完成并等待逐集人工审核；不自动批准 |
+| AUTO-05 动态多章批次与有界并发分析 | `queued` | AUTO-01、现有章节 evidence/hash/checkpoint/Job 恢复合同；最新用户动态批次与8路并发指令 | 来源 `batch_reference_audit` 只读租约；业务 Writer 待分配 | - | - | 新增 migration/多章模型 trust boundary 与并发恢复属于高风险，冻结 candidate 后独立 Spec Review | 独立 Code Quality Review | 待聚焦/全量测试、typecheck/build、隔离恢复 Gate、真实浏览器与受控长篇 smoke | - | 旧 run 保持paused兼容；不得新建第二队列、丢失章节级证据或让批次配置运行中漂移 |
 | PC-06 审核、导出接线与北派最终复验 | `implementing` | PC-04 productionReady 视觉段、PC-05 人工听感通过；现有 `render_chunks`/`final_video`/Job/项目包核心；`7532c44` export 占位页 | `pc06_web_contract_evidence_worker`：仅 `apps/web/src/production/export/export-logic.ts`、`ExportStage.tsx`、`apps/web/test/export-stage.test.ts`；排除 server、Ledger、其他 web、package/lock、端口/index | - | - | 低风险真实合同/UI证据接线由 Coordinator 最小自审 | 同左 | 待聚焦测试、web typecheck/build、diff-check | - | 主体 export/受控读取/项目包核心已完成；修复 readiness 直接对象合同并显示真实 Job ID、最终 SHA-256；联系表人工复核与真实北派主观/媒体 Gate 仍待完成 |
 | PC-02D 多章汇总分析入口 | `complete` | PC-02B/PC-02C 后端跨章合同；Toonflow GitHub 多章节汇总分析参考 | `pc02d_multichapter_entry`、`pc02d_browser_acceptance` 已释放 | 业务 `10505b7`；参考 `HBAI-Ltd/Toonflow-app@bc61ec7` 的 `data/skills/script_agent_decision.md`、`data/skills/script_agent_supervision.md` | - | 复用型 UI/API 接线；来源登记 + 最小测试 + Coordinator 自审 | 同左 | 单个 `episodeIndex` 可展示多章推荐、确认冻结 sources 并进入长稿；真实北派 Episode 1 显示覆盖 82 章，稿件阶段恢复 faithful/package，console 0；根三门 PASS | `10505b7` | 完成边界仅为“单集多章入口”，不包含系列总集数、批量章节分析、书籍故事圣经、全书计划、批量稿件或统一 Episode 列表；这些由 AUTO-01～04 承担 |
 | PC-05 真实 TTS 与听音 | `implementing` | CFG-01/02；现有 TTS-CAL、timeline/cue/字幕/Job；MuseDock MiniMax/MiMo；`node-edge-tts` 官方合同 | `pc05_worker_2`、长稿/北派验收 workers 均已释放；Coordinator 保留人工听感门 | 业务 `333317a`；review 修复 `63d78b7`；标点根修复 `52a8c2c` | - | 复用/官方包接入不做严格独立 Review；保留最小 provider 测试、Coordinator 自审与真实短样/全片 Gate | 同左 | Edge provider、旧短稿、隔离长稿和北派真实长稿技术链均通过。默认数据根北派 Episode 1 已入库并 approved，sources 连续覆盖章节 1..82；干净 packaged v2、rate1 校准与 timeline `3c600aec…` 成功，976,580ms、262 segments/cues、Edge/Yunjian/rate1，SRT/ASS/WAV、HTTP 和 restart 后同 hash 恢复 PASS；代表性 10 段 HEAD 均 200。MiniMax/MiMo `hasApiKey=false`，真实调用安全 skip | `333317a`、`63d78b7`、`52a8c2c` | 旧“北派 Episode 404/sources 未冻结”缺口已关闭；剩余唯一产品门是人工听感、专名和口吻验收，自动化探针不能代替主观批准 |
@@ -245,6 +250,7 @@ PC-02 当前 checkpoint：
 | REQ-AUTO-02 | `complete` | 从章节事件分层构建带来源、输入 hash 和版本的书籍级故事圣经；复用 identity 不含 provider/model，切换文本模型不会自动重建；普通请求复用同 identity 最新有效版本，事件输入 hash/合同版本变化或用户显式请求时追加新版本且保留旧版本，局部输入变化只重建受影响区间及上层；不引入 Agent memory/向量库 | AUTO-02 |
 | REQ-AUTO-03 | `complete` | 通过区间配额和区间内细分的受限分层请求生成恰好用户指定数量的全书计划；程序拒绝伪造、跨书、空集、倒序、sourceEventId 重复和章节覆盖缺口，允许边界章节共享但事件/字节范围不得交叉；全部 Episode/`episode_sources` 原子冻结 | AUTO-03 |
 | REQ-AUTO-04 | `complete` | 无需逐章/逐集启动即可按顺序生成全部忠实稿和包装稿；下一集复用全局故事圣经及上一集成功稿件 Job 的 `scriptHandoff`，缺失时回退冻结计划 `recap/nextHook`，不得覆盖计划字段或要求上一集先批准；系列工作台以 Episode 列表及上一集/下一集为主导航，显示“第 N 集/共 N 集”、来源范围、状态、失败重试和恢复入口，已完成集可提前审核；章节事件退为高级修复入口，Episode/稿件/音频/视觉不再分别要求裸数字序号；复用现有单集编辑器且不自动批准 | AUTO-04 |
+| REQ-AUTO-05 | `queued` | 用户在分析前与章节范围、总集数、单集时长同区配置“每批最多章节数”和“并发批次数”；默认10章/批、8路并发，服务端按安全输入预算动态缩小批次并冻结配置。单个模型请求可分析连续多章，但输出必须按chapterId分组且evidenceId不得跨章；每章content hash/checkpoint/复用结果独立。调度只复用现有jobs并维持有限滚动窗口；暂停不再派发、取消可中断、批次失败可局部重试、重启可恢复、旧run兼容；UI显示真实批次/章节完成、排队、执行与失败，不伪造百分比 | AUTO-05 |
 | REQ-EXPORT-01 | `queued` | “审核与导出”不再是占位页：按真实包装稿批准、timeline、字幕、视觉连续覆盖、每段 approved candidate 和联系表 `productionReady` 驱动 `render_chunks` 与 `final_video`；支持中文四态、防重复、取消、失败 Job 局部重试、刷新/重启恢复，并显示真实 duration/bytes/SHA-256/Job ID；最终 manifest/MP4 只按数据库与 canonical manifest 受控回读，拒绝任意路径、失效或损坏结果；用户可下载当前 MP4，并可选在服务端受控目录创建可恢复项目包；MP4 与目录项目包保持两个输出，不自动批准任何上游产物 | PC-06 |
 
 ## 验证与 Review 证据索引
@@ -549,6 +555,7 @@ PC-02 当前 checkpoint：
 - 2026-07-27：章节事件 identity 只含书/章/sourceHash/分析合同/Prompt-解析合同，provider/model 仅作溯源；全书规划必须分层，来源章节范围并集连续覆盖选定范围，sourceEventId 不重复，边界章节共享时字节范围不交叉；Episode 计划交接与成功稿件 `scriptHandoff` 分权，自动批量不依赖批准稿；active run 修改事件前必须暂停。既有 Phase 3 证据保持历史完成，AUTO-01～04 单独验收新增闭环。
 - 2026-07-28：故事圣经区间和最终版本的复用 identity 均排除 provider/model；模型、Job 和时间只作溯源。事件输入 hash/合同版本变化或用户显式请求才生成新版本，单纯切换文本模型继续复用。
 - 2026-07-28：“审核与导出”复用现有 render/final/Job/project package 核心，动态状态归 `PC-06`，不新建 AUTO-05。最终 MP4 必须按当前 Episode 与 canonical manifest 受控读取；项目包首版仅在服务端受控目录创建，不接受客户端任意路径。只有明确需要浏览器下载单文件项目包时，才另行定义归档格式和流式下载合同。
+- 2026-07-28：用户新增 AUTO-05 动态多章批次与有界并发分析；此前“不新增 AUTO-05”仅约束审核与导出不得另建重复 Task，不阻止本次独立章节分析性能合同。全本约500万字符禁止一次输入；新run默认最多10章/批、8批并发，用户在分析前与范围/集数/时长同区配置，服务端按输入预算动态缩批，每章证据/hash/checkpoint独立。旧单章run保持兼容且不得静默改写；真实1794章旧run已paused于4/1794。
 - Node 22 内置 `node:sqlite` 当前可用但仍输出实验性警告；首版不因此新增 ORM。
 - 项目包恢复的 no-replace 合同当前为 Windows-only；普通文件 symlink 负向测试因账户权限 `EPERM` SKIP，但 Junction 与硬链接拒绝真实 PASS。
 - 固定 P7 Gate 数据根依靠 Ledger 单写者排他，没有另加跨进程脚本锁；Windows 超长产物路径应使用 `\\?\` 前缀或 Node/FFprobe/FFmpeg，普通 PowerShell 可能产生不存在的假阴性。

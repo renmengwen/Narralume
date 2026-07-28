@@ -104,6 +104,51 @@ async function fixture(run: (store: NarralumeDatabase, dataRoot: string) => void
   }
 }
 
+async function openingFixture(run: (store: NarralumeDatabase) => void | Promise<void>) {
+  await fixture(async (store) => {
+    const db = store.database;
+    db.prepare("UPDATE audio_segments SET duration_ms = 3000 WHERE timeline_hash = ?").run(TIMELINE);
+    db.prepare("UPDATE subtitle_cues SET start_ms = cue_index * 3000, end_ms = (cue_index + 1) * 3000 WHERE timeline_hash = ?")
+      .run(TIMELINE);
+    db.prepare(
+      `INSERT INTO audio_segments (
+         timeline_hash, segment_index, episode_id, script_version_id, text, provider_id, voice, rate,
+         input_hash, relative_path, file_hash, bytes, duration_ms, created_at
+       ) VALUES (?, 4, 'episode', 'script', '旁白4', 'test', 'voice', 0, ?, 'audio/4.wav', ?, 100, 3000, 1)`,
+    ).run(TIMELINE, "9".repeat(64), "a".repeat(64));
+    db.prepare(
+      `INSERT INTO subtitle_cues (
+         timeline_hash, cue_index, segment_index, episode_id, script_version_id, start_ms, end_ms, text
+       ) VALUES (?, 4, 4, 'episode', 'script', 12000, 15000, '旁白4')`,
+    ).run(TIMELINE);
+    appendAssetCandidateReview(db, "candidate_b", { expectedRevision: 0, action: "approve", now: 2 });
+    for (const suffix of ["c", "d", "e"]) {
+      db.prepare(
+        `INSERT INTO assets (
+           id, series_project_id, asset_type, asset_role, canonical_name, normalized_name, created_at
+         ) VALUES (?, 'series', 'scene', 'master', ?, ?, 1)`,
+      ).run(`asset_${suffix}`, `场景${suffix}`, `场景${suffix}`);
+      db.prepare(
+        `INSERT INTO asset_candidates (
+           id, asset_id, source_kind, source_identity_hash, source_json, file_hash,
+           mime, width, height, bytes, relative_path, created_at
+         ) VALUES (?, ?, 'upload', ?, '{"kind":"upload","originalName":"a.png"}', ?,
+           'image/png', 32, 32, 100, ?, 1)`,
+      ).run(`candidate_${suffix}`, `asset_${suffix}`, suffix.repeat(64), suffix.repeat(64), `assets/${suffix}.png`);
+      appendAssetCandidateReview(db, `candidate_${suffix}`, { expectedRevision: 0, action: "approve", now: 2 });
+    }
+    await run(store);
+  });
+}
+
+function putOpeningPlan(store: NarralumeDatabase, candidateSuffixes: string[]) {
+  candidateSuffixes.forEach((suffix, index) => putVisualSegment(store.database, "episode", index, input({
+    cueStartIndex: index,
+    cueEndIndex: index === candidateSuffixes.length - 1 ? 4 : index,
+    assets: [{ assetId: `asset_${suffix}`, selectedCandidateId: `candidate_${suffix}` }],
+  })));
+}
+
 test("视觉段从字幕闭区间派生时间并幂等完全替换资产关系", () => fixture((store) => {
   const first = putVisualSegment(store.database, "episode", 0, input(), 10);
   assert.equal(first.startMs, 0);
@@ -224,10 +269,11 @@ test("视觉段拒绝坏 cue、坏时间轴、旧稿时间轴和区间重叠", (
 test("完整视觉计划覆盖首尾且候选后续 reject 会保留关系并失效", () => fixture((store) => {
   const first = putVisualSegment(store.database, "episode", 0, input());
   assert.throws(() => assertVisualPlanReady(store.database, "episode", TIMELINE), /末尾/);
+  appendAssetCandidateReview(store.database, "candidate_b", { expectedRevision: 0, action: "approve", now: 2 });
   putVisualSegment(store.database, "episode", 1, input({
     cueStartIndex: 2,
     cueEndIndex: 3,
-    assets: [{ assetId: "asset_a", selectedCandidateId: "candidate_a" }],
+    assets: [{ assetId: "asset_b", selectedCandidateId: "candidate_b" }],
   }));
   assert.equal(assertVisualPlanReady(store.database, "episode", TIMELINE).length, 2);
   appendAssetCandidateReview(store.database, "candidate_a", { expectedRevision: 1, action: "reject", now: 3 });
@@ -242,6 +288,29 @@ test("完整视觉计划覆盖首尾且候选后续 reject 会保留关系并失
   assert.equal(refreshed.assets[0]!.candidateReviewRevision, 3);
   assert.equal(refreshed.productionReady, true);
 }));
+
+test("生产就绪要求开头段数合规且候选图互不相同，并按短时间轴缩减", async () => {
+  await openingFixture((store) => {
+    putOpeningPlan(store, ["a", "b"]);
+    assert.throws(() => assertVisualPlanReady(store.database, "episode", TIMELINE), /开头画面变化/);
+  });
+  await openingFixture((store) => {
+    putOpeningPlan(store, ["a", "b", "c", "d", "e"]);
+    assert.throws(() => assertVisualPlanReady(store.database, "episode", TIMELINE), /开头画面变化/);
+  });
+  await openingFixture((store) => {
+    putOpeningPlan(store, ["a", "a", "a"]);
+    assert.throws(() => assertVisualPlanReady(store.database, "episode", TIMELINE), /互不相同/);
+  });
+  await openingFixture((store) => {
+    putOpeningPlan(store, ["a", "b", "c"]);
+    assert.equal(assertVisualPlanReady(store.database, "episode", TIMELINE).length, 3);
+  });
+  await fixture((store) => {
+    putVisualSegment(store.database, "episode", 0, input({ cueEndIndex: 3 }));
+    assert.equal(assertVisualPlanReady(store.database, "episode", TIMELINE).length, 1);
+  });
+});
 
 test("视觉计划拒绝分段空洞、批准稿变化并在重启后保持", () => fixture(async (store, dataRoot) => {
   putVisualSegment(store.database, "episode", 0, input({ cueStartIndex: 0, cueEndIndex: 0 }));

@@ -99,8 +99,14 @@ export function visualPlanStatus(timeline: TtsTimeline | undefined, segments: Vi
   const continuous = ordered.length > 0 && ordered[0]!.cueStartIndex === 0 &&
     ordered.every((segment, index) => index === 0 || segment.cueStartIndex === ordered[index - 1]!.cueEndIndex + 1) &&
     ordered.at(-1)!.cueEndIndex === cueCount - 1;
-  const productionReady = continuous && ordered.every((segment) => segment.productionReady);
-  return { continuous, productionReady, suggestion: visualPlanSuggestion(timeline, ordered) };
+  const suggestion = visualPlanSuggestion(timeline, ordered);
+  const openingSegments = ordered.filter((segment) => segment.startMs < Math.min(timeline?.durationMs ?? 0, 15_000) && segment.endMs > 0);
+  const openingCandidates = openingSegments.flatMap((segment) =>
+    segment.assets.find((asset) => asset.selectedCandidateId)?.selectedCandidateId ?? []);
+  const openingReady = openingSegments.length >= suggestion.openingMin && openingSegments.length <= suggestion.openingMax &&
+    openingCandidates.length === openingSegments.length && new Set(openingCandidates).size === openingCandidates.length;
+  const productionReady = continuous && openingReady && ordered.every((segment) => segment.productionReady);
+  return { continuous, productionReady, suggestion };
 }
 
 function visualPlanSuggestion(timeline: TtsTimeline | undefined, ordered: VisualSegment[]) {

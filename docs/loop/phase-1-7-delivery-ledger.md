@@ -592,7 +592,7 @@ PC-02 当前 checkpoint：
 | UI / OpenDesign | 按 `narralume-product` 保留现有暖中性进度界面，只将“暂停后续任务”改为“暂停当前任务”，提供中文 loading 并沿用单 action busy 防重复提交；独立 verifier 发现 pause 返回后、Worker 取消收尾前曾过早开放继续按钮，现由 API 在 `running + cancel_requested + pause sentinel` 过渡态返回 `canResume=false`，终态后轮询自动恢复；不新增组件、样式或模型 token 增量展示。 |
 | 验证证据 | Server `404 PASS / 0 FAIL / 1 Windows 权限 SKIP`；Web `98 PASS / 0 FAIL`；两端 typecheck/build 与 `git diff --check` 全部 PASS；暂停过渡态聚焦测试 `1 PASS / 0 FAIL`，修复后 Server 再次 `404 PASS / 0 FAIL / 1 SKIP`、typecheck/build PASS。业务提交 `99dc279 fix(auto): 恢复故事圣经进度并中断暂停任务`、`a8a60b4 fix(auto): 暂停收尾时禁用继续操作`。 |
 | 其他 AI 调用审计 | 章节事件单/批已随本提交闭合。分集来源推荐是单次模型调用，不存在部分单元恢复。全书分集规划虽然有 interval checkpoint，但尚无持久 interval 输出；忠实稿/包装稿的 skeleton、faithful beat、packaged 也尚无中间 checkpoint，失败重试仍会从头调用模型。两者需先定义耐久中间结果合同，不在本次无 migration 的最小修复中伪装完成。 |
-| 恢复入口 | 只启动 3101 后端并确认 `/api/health` HTTP 200、5174 PID 不变；run 应继续保持 paused。通过正式 resume API 恢复后，预期先投影约 `46/91`，只请求剩余区间并在全部 interval 完成后执行一次 final。 |
+| 恢复入口 / 真实运行 | 3101 后端 watch 已只重载后端，`/api/health` HTTP 200；5174 始终保持 PID `36368`。重载后 run 仍为 paused，持久进度实际为 `51/91`，旧 Job 因停止进程记录 `lease_expired`。通过正式 JSON API 在 paused 状态执行 retry，再 resume 成功恢复为 `building_story_bible`；4 秒后仍直接投影 `51/91`、失败 0、同一 Job 建立 8 条上游 HTTPS 连接，证明未回到 `0/91` 且按该书冻结的 `chapterConcurrency=8` 运行剩余区间。全部 interval 完成后只执行一次 final。 |
 
 ## 决策与剩余风险
 

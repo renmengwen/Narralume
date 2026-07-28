@@ -66,6 +66,16 @@ function modelResponse(value: unknown) {
   return new Response(JSON.stringify({ output_text: typeof value === "string" ? value : JSON.stringify(value) }));
 }
 
+function streamedModelResponse(value: unknown) {
+  const delta = JSON.stringify({
+    type: "response.output_text.delta",
+    delta: typeof value === "string" ? value : JSON.stringify(value),
+  });
+  return new Response(`data: ${delta}\n\ndata: {"type":"response.completed"}\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 test("证据 ID 首答非法时只纠错一次并接受严格合法答复", async () => {
   const modelAtoms = atoms.map((atom, index) => ({ ...atom, id: `evidence_${"a".repeat(64)}_${index}` }));
   const replies = [
@@ -75,7 +85,7 @@ test("证据 ID 首答非法时只纠错一次并接受严格合法答复", asyn
   const requests: string[] = [];
   const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async (_input, init) => {
     requests.push(String(init?.body));
-    return modelResponse(replies.shift());
+    return streamedModelResponse(replies.shift());
   }) as typeof fetch);
 
   assert.deepEqual(await analyzer({ chapterId: "chapter", atoms: modelAtoms }), [{
@@ -86,6 +96,7 @@ test("证据 ID 首答非法时只纠错一次并接受严格合法答复", asyn
   }]);
   assert.equal(requests.length, 2);
   for (const request of requests) {
+    assert.equal((JSON.parse(request) as { stream?: unknown }).stream, true);
     assert.doesNotMatch(request, /evidence_/);
     assert.match(request, /e1/);
     assert.match(request, /e2/);
@@ -174,9 +185,11 @@ test("多章单请求严格校验章节全集并拒绝跨章 evidence", async ()
   ] }), chapters), /未知证据 ID/);
 
   let calls = 0;
-  const analyzer = createOpenAiResponsesChapterBatchAnalyzer(config, (async () => {
+  let requestBody: { stream?: unknown } | undefined;
+  const analyzer = createOpenAiResponsesChapterBatchAnalyzer(config, (async (_input, init) => {
     calls += 1;
-    return modelResponse({ chapters: [
+    requestBody = JSON.parse(String(init?.body)) as { stream?: unknown };
+    return streamedModelResponse({ chapters: [
       { chapterId: "chapter-a", events: [{ type: "character", payload: { name: "吴邪" }, evidenceIds: ["c1e1"] }] },
       { chapterId: "chapter-b", events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["c2e1"] }] },
     ] });
@@ -186,6 +199,7 @@ test("多章单请求严格校验章节全集并拒绝跨章 evidence", async ()
     { chapterId: "chapter-b", atoms: [atoms[1]!] },
   ] });
   assert.equal(calls, 1);
+  assert.equal(requestBody?.stream, true);
   assert.deepEqual(result.map((item) => item.chapterId), ["chapter-a", "chapter-b"]);
 });
 

@@ -5,6 +5,7 @@ import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfi
 import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import type { JobHandler } from "./job-worker.js";
+import { streamedText } from "./text-model-stream.js";
 
 export const EPISODE_RECOMMENDATION_JOB_TYPE = "episode_sources_recommend";
 
@@ -192,14 +193,17 @@ export function createOpenAiEpisodeRecommender(config: ChapterTextModelConfig, f
       JSON.stringify(chapters),
       '输出：{"chapterIds":[],"eventIds":[],"estimatedCharacterCount":1200,"advice":"保留"}',
     ].join("\n");
-    const request = textModelRequest(config, input);
+    const request = textModelRequest(config, input, 8192, true);
     const response = await fetchImpl(request.endpoint, {
       method: "POST", signal, redirect: "error",
       headers: request.headers,
       body: request.body,
     });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`选材推荐模型请求失败（HTTP ${response.status}）`); }
-    try { return JSON.parse(responseText(await limitedJson(response))) as Awaited<ReturnType<RecommendEpisodeSources>>; }
+    const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+      ? await streamedText(response, config.protocol ?? "openai-response", { signal })
+      : responseText(await limitedJson(response));
+    try { return JSON.parse(text) as Awaited<ReturnType<RecommendEpisodeSources>>; }
     catch { throw new Error("选材推荐模型返回了无效 JSON"); }
   };
 }

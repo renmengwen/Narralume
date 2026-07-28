@@ -9,6 +9,7 @@ import {
   type ChapterEventInput,
   type ChapterEventType,
 } from "./chapter-event-store.js";
+import { streamedText } from "./text-model-stream.js";
 
 const MAX_CHAPTER_BYTES = 128 * 1024;
 const MAX_ATOM_BYTES = 16 * 1024;
@@ -325,7 +326,7 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
     if (prepared.bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
       throw new Error("多章分析输入超过服务端安全上限");
     }
-    const request = textModelRequest(config, prepared.prompt, 32768);
+    const request = textModelRequest(config, prepared.prompt, 32768, true);
     let response: Response;
     try {
       response = await fetchImpl(request.endpoint, {
@@ -339,7 +340,10 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
       await response.body?.cancel();
       throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
     }
-    return parseChapterBatchAnalysisEvents(responseText(await limitedJson(response)), prepared.chapters);
+    const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+      ? await streamedText(response, config.protocol ?? "openai-response", { signal })
+      : responseText(await limitedJson(response));
+    return parseChapterBatchAnalysisEvents(text, prepared.chapters);
   };
 }
 
@@ -357,7 +361,7 @@ export function createOpenAiResponsesChapterAnalyzer(
   async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal) {
     const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
     async function requestEvents(input: string) {
-      const request = textModelRequest(config, input);
+      const request = textModelRequest(config, input, 8192, true);
       let response: Response;
       try {
         response = await fetchImpl(request.endpoint, {
@@ -375,7 +379,10 @@ export function createOpenAiResponsesChapterAnalyzer(
         await response.body?.cancel();
         throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
       }
-      return modelEvents(responseText(await limitedJson(response)), requestAtoms);
+      const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? await streamedText(response, config.protocol ?? "openai-response", { signal })
+        : responseText(await limitedJson(response));
+      return modelEvents(text, requestAtoms);
     }
     try {
       return await requestEvents(prompt(requestAtoms));

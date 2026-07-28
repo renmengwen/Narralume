@@ -7,6 +7,7 @@ import test from "node:test";
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { openDatabase } from "./database.js";
 import {
+  createOpenAiEpisodeRecommender,
   createEpisodeRecommendationJobHandler,
   enqueueEpisodeRecommendationJob,
   EPISODE_RECOMMENDATION_JOB_TYPE,
@@ -21,6 +22,25 @@ const config: ChapterTextModelConfig = {
   model: "test-model",
   providerId: "test-provider",
 };
+
+test("分集来源推荐显式请求流式输出并逐块读取 SSE", async () => {
+  const expected = {
+    chapterIds: ["chapter_1"], eventIds: ["event_1"], estimatedCharacterCount: 1200, advice: "\u4fdd\u7559",
+  } as const;
+  let requestBody: { stream?: unknown } | undefined;
+  const recommend = createOpenAiEpisodeRecommender(config, (async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as { stream?: unknown };
+    const delta = JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(expected) });
+    return new Response(`data: ${delta}\n\ndata: {"type":"response.completed"}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch);
+
+  assert.deepEqual(await recommend({
+    targetDurationSeconds: 1200, endingPreference: null, chapters: [],
+  }), expected);
+  assert.equal(requestBody?.stream, true);
+});
 
 async function fixture(missingSecond = false) {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-recommend-"));

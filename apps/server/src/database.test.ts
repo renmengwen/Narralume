@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 13);
+    assert.equal(migration?.version, 15);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (14)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (16)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -138,6 +138,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v2-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
@@ -163,7 +164,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 13);
+    assert.equal(migration?.version, 15);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
@@ -176,6 +177,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v5-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
@@ -201,7 +203,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      13,
+      15,
     );
     upgraded.database.prepare(
       `INSERT INTO script_versions (
@@ -233,6 +235,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v7-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
@@ -262,7 +265,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      13,
+      15,
     );
     const audioTables = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'audio_%' ORDER BY name")
@@ -338,6 +341,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v4-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
@@ -354,7 +358,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      13,
+      15,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
@@ -391,6 +395,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v8-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 9").run();
@@ -409,7 +414,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      13,
+      15,
     );
     const tables = upgraded.database.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('assets', 'asset_aliases') ORDER BY name",
@@ -544,6 +549,7 @@ test("既有 migration v10 数据库可升级视觉段与显式资产关系", as
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v10-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP INDEX asset_candidates_id_asset");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 11").run();
@@ -552,7 +558,7 @@ test("既有 migration v10 数据库可升级视觉段与显式资产关系", as
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      13,
+      15,
     );
     const tables = upgraded.database.prepare(
       `SELECT name FROM sqlite_master
@@ -577,6 +583,7 @@ test("既有 migration v11 数据库保留数据升级 render_chunks 并执行�
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v11-upgrade-"));
   try {
     const current = openDatabase(dataRoot);
+    current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.prepare(
       `INSERT INTO books (id, title, original_file_path, original_file_hash, encoding, import_status)
        VALUES ('book_v11', '旧数据', 'books/book_v11/source.txt', ?, 'UTF-8', 'ready')`,
@@ -599,7 +606,7 @@ test("既有 migration v11 数据库保留数据升级 render_chunks 并执行�
 
     const upgraded = openDatabase(dataRoot);
     const database = upgraded.database;
-    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 13);
+    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 15);
     assert.equal(database.prepare("SELECT title FROM books WHERE id = 'book_v11'").get()?.title, "旧数据");
     assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='render_chunks'").get()?.name, "render_chunks");
     const insert = database.prepare(
@@ -688,7 +695,10 @@ test("既有 migration v12 数据库升级时保留 Episode 与全部下游外�
           JOIN assets asset ON asset.id=NEW.asset_id WHERE segment.id=NEW.visual_segment_id
           AND asset.series_project_id=episode.series_project_id);
       END;
-      DELETE FROM schema_migrations WHERE version=13;
+      DROP TABLE book_story_bibles;
+      DROP TABLE series_pipeline_jobs;
+      DROP TABLE series_pipeline_runs;
+      DELETE FROM schema_migrations WHERE version>=13;
       PRAGMA foreign_keys=ON;`);
     old.close();
 
@@ -704,6 +714,51 @@ test("既有 migration v12 数据库升级时保留 Episode 与全部下游外�
     database.prepare("DELETE FROM episodes WHERE id='episode_v12'").run();
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_versions").get()?.count, 0);
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM script_approval_events").get()?.count, 0);
+    upgraded.close();
+  } finally { await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("既有 migration v13 数据库升级流水线表并执行 active、约束和外键", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-database-v13-upgrade-"));
+  try {
+    const current = openDatabase(dataRoot);
+    const database = current.database;
+    database.prepare(`INSERT INTO books (id,title,original_file_path,original_file_hash,encoding,import_status)
+      VALUES ('book_pipeline','书','books/book/source.txt',?,'UTF-8','ready')`).run("a".repeat(64));
+    database.prepare(`INSERT INTO chapters
+      (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
+      VALUES ('chapter_1','book_pipeline',0,'第一章',0,1,1,?)`).run("b".repeat(64));
+    database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_pipeline','book_pipeline','系列',1,1)").run();
+    database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs; DELETE FROM schema_migrations WHERE version>=14");
+    current.close();
+
+    const upgraded = openDatabase(dataRoot);
+    const db = upgraded.database;
+    assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 15);
+    const insert = db.prepare(`INSERT INTO series_pipeline_runs
+      (id,series_project_id,status,episode_count,target_duration_seconds,source_start_chapter_id,
+       source_end_chapter_id,config_hash,created_at,updated_at)
+      VALUES (?,?,'configured',10,1200,'chapter_1','chapter_1',?,1,1)`);
+    insert.run("run_1", "series_pipeline", "c".repeat(64));
+    assert.throws(() => insert.run("run_2", "series_pipeline", "d".repeat(64)), /UNIQUE constraint failed/);
+    assert.throws(
+      () => db.prepare(`INSERT INTO series_pipeline_runs
+        (id,series_project_id,status,episode_count,target_duration_seconds,source_start_chapter_id,
+         source_end_chapter_id,config_hash,created_at,updated_at)
+        VALUES ('bad_count','series_pipeline','cancelled',0,1200,'chapter_1','chapter_1',?,1,1)`).run("e".repeat(64)),
+      /CHECK constraint failed/,
+    );
+    db.prepare("INSERT INTO jobs (id,type,payload_json,status,run_after,created_at,updated_at) VALUES ('job_1','chapter_events_analyze','{}','queued',1,1,1)").run();
+    db.prepare(`INSERT INTO series_pipeline_jobs (run_id,stage,subject_type,subject_id,job_id,created_at)
+      VALUES ('run_1','chapter_analysis','chapter','chapter_1','job_1',1)`).run();
+    assert.throws(
+      () => db.prepare(`INSERT INTO series_pipeline_jobs (run_id,stage,subject_type,subject_id,job_id,created_at)
+        VALUES ('run_1','chapter_analysis','chapter','chapter_missing','job_missing',1)`).run(),
+      /FOREIGN KEY constraint failed/,
+    );
+    db.prepare("DELETE FROM series_projects WHERE id='series_pipeline'").run();
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM series_pipeline_runs").get()?.count, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM series_pipeline_jobs").get()?.count, 0);
     upgraded.close();
   } finally { await rm(dataRoot, { recursive: true, force: true }); }
 });

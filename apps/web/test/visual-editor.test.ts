@@ -7,11 +7,11 @@ import type { VisualAsset, VisualSegment } from "../src/production/visual/types.
 
 const HASH = "a".repeat(64);
 const timeline = { timelineHash: HASH, durationMs: 3000, cues: [0, 1, 2].map((index) => ({ index, segmentIndex: index, startMs: index * 1000, endMs: (index + 1) * 1000, text: `cue ${index}` })) } as TtsTimeline;
-const segment = (index: number, ready = true): VisualSegment => ({
+const segment = (index: number, ready = true, candidateId = `candidate_${index}`): VisualSegment => ({
   id: `visual_${index}`, episodeId: "episode", segmentIndex: index, timelineHash: HASH,
   cueStartIndex: index, cueEndIndex: index, startMs: index * 1000, endMs: (index + 1) * 1000,
   motionKind: "none", motionAmountPpm: 0, fadeMs: 300, revision: 2, productionReady: ready,
-  assets: [{ assetId: "asset", selectedCandidateId: "candidate", candidateReviewRevision: 1 }],
+  assets: [{ assetId: "asset", selectedCandidateId: candidateId, candidateReviewRevision: 1 }],
 });
 
 test("视觉段草稿从服务端 revision 恢复且新段只取第一个未覆盖 cue", () => {
@@ -47,8 +47,9 @@ test("视觉段提交只允许一张已选候选并保留其他显式资产", ()
 
 test("视觉计划不再用 8 至 15 个固定段数做导出门禁", () => {
   const three = [segment(0), segment(1), segment(2)];
-  assert.equal(visualPlanStatus(timeline, three).productionReady, true);
-  assert.equal(visualPlanStatus(timeline, three.map((item, index) => index === 1 ? { ...item, productionReady: false } : item)).productionReady, false);
+  const shortPlan = [{ ...segment(0), cueEndIndex: 2, endMs: 3_000 }];
+  assert.equal(visualPlanStatus(timeline, shortPlan).productionReady, true);
+  assert.equal(visualPlanStatus(timeline, shortPlan.map((item) => ({ ...item, productionReady: false }))).productionReady, false);
   assert.equal(visualPlanStatus({ ...timeline, cues: [...timeline.cues, { index: 3, segmentIndex: 3, startMs: 3000, endMs: 4000, text: "cue 3" }] }, three).continuous, false);
 
   const longTimeline = { ...timeline, durationMs: 90000, cues: Array.from({ length: 18 }, (_, index) => ({ index, segmentIndex: index, startMs: index * 3750, endMs: (index + 1) * 3750, text: `cue ${index}` })) } as TtsTimeline;
@@ -58,6 +59,32 @@ test("视觉计划不再用 8 至 15 个固定段数做导出门禁", () => {
   assert.equal(longStatus.suggestion.targetCount, 18);
   assert.equal(longStatus.suggestion.openingMin, 3);
   assert.equal(longStatus.suggestion.openingMax, 4);
+});
+
+test("视觉计划把开头段数和不同候选图纳入生产就绪门禁", () => {
+  const openingTimeline = {
+    ...timeline,
+    durationMs: 15_000,
+    cues: Array.from({ length: 5 }, (_, index) => ({
+      index, segmentIndex: index, startMs: index * 3_000, endMs: (index + 1) * 3_000, text: `cue ${index}`,
+    })),
+  } as TtsTimeline;
+  const openingSegment = (index: number, candidateId = `candidate_${index}`) => ({
+    ...segment(index, true, candidateId), startMs: index * 3_000, endMs: (index + 1) * 3_000,
+  });
+  assert.equal(visualPlanStatus(openingTimeline, [
+    { ...openingSegment(0), cueEndIndex: 2, endMs: 9_000 },
+    { ...openingSegment(1), cueStartIndex: 3, cueEndIndex: 4, startMs: 9_000, endMs: 15_000 },
+  ]).productionReady, false);
+  assert.equal(visualPlanStatus(openingTimeline, Array.from({ length: 5 }, (_, index) => openingSegment(index))).productionReady, false);
+  assert.equal(visualPlanStatus(openingTimeline, [0, 1, 2].map((index) => openingSegment(index, "same"))
+    .map((item, index) => index === 2 ? { ...item, cueEndIndex: 4, endMs: 15_000 } : item)).productionReady, false);
+  assert.equal(visualPlanStatus(openingTimeline, [
+    openingSegment(0), openingSegment(1), { ...openingSegment(2), cueEndIndex: 4, endMs: 15_000 },
+  ]).productionReady, true);
+  assert.equal(visualPlanStatus(timeline, [
+    { ...segment(0), cueEndIndex: 2, endMs: 3_000 },
+  ]).productionReady, true);
 });
 
 test("冲突响应可刷新 expectedRevision 且不改草稿字段", () => {

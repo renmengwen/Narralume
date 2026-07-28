@@ -6,7 +6,11 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { appendAssetCandidateReview } from "./asset-candidate-store.js";
-import { exportContactSheet, resolveVerifiedCandidateFile } from "./contact-sheet.js";
+import {
+  exportContactSheet,
+  resolveVerifiedCandidateFile,
+  verifyCurrentContactSheetArtifact,
+} from "./contact-sheet.js";
 import { openDatabase, type NarralumeDatabase } from "./database.js";
 import { putVisualSegment } from "./visual-segment-store.js";
 
@@ -124,6 +128,95 @@ test("联系表确定性导出并在重启后保持相同字节", () => fixture(
   });
   reopened.close();
 }));
+
+test("当前联系表可按确定身份复验且任一文件篡改都会拒绝", () => fixture(async (store, dataRoot) => {
+  const exported = await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
+  const first = await verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE);
+  const second = await verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE);
+  assert.deepEqual(second, first);
+  assert.deepEqual(first.identity, {
+    contract: "contact-sheet-review-v1",
+    episodeId: "episode",
+    scriptVersionId: "script",
+    approvalRevision: 1,
+    timelineHash: TIMELINE,
+    visualPlanHash: first.identity.visualPlanHash,
+    jsonHash: exported.jsonHash,
+    htmlHash: exported.htmlHash,
+  });
+  assert.match(first.identityHash, /^[0-9a-f]{64}$/u);
+
+  await writeFile(exported.jsonPath, "{");
+  await assert.rejects(
+    verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+    /JSON 无效/u,
+  );
+  await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
+  await writeFile(exported.htmlPath, "tampered");
+  await assert.rejects(
+    verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+    /与当前视觉计划不一致/u,
+  );
+  await rm(exported.htmlPath);
+  await assert.rejects(
+    verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+    /缺失或已失效/u,
+  );
+}));
+
+test("视觉段、候选批准、稿件批准或时间轴变化都会使旧联系表失效", async (t) => {
+  await t.test("视觉段 revision", () => fixture(async (store, dataRoot) => {
+    await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
+    putVisualSegment(store.database, "episode", 0, {
+      timelineHash: TIMELINE,
+      cueStartIndex: 0,
+      cueEndIndex: 0,
+      motionKind: "zoom-in",
+      motionAmountPpm: 100,
+      fadeMs: 0,
+      expectedRevision: 1,
+      assets: [{ assetId: "asset", selectedCandidateId: "candidate" }],
+    }, 2);
+    await assert.rejects(
+      verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+      /与当前视觉计划不一致/u,
+    );
+  }));
+  await t.test("候选批准 revision", () => fixture(async (store, dataRoot) => {
+    await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
+    appendAssetCandidateReview(store.database, "candidate", { expectedRevision: 1, action: "reject", now: 2 });
+    appendAssetCandidateReview(store.database, "candidate", { expectedRevision: 2, action: "approve", now: 3 });
+    store.database.prepare(
+      "UPDATE visual_segment_assets SET candidate_review_revision = 3",
+    ).run();
+    await assert.rejects(
+      verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+      /与当前视觉计划不一致/u,
+    );
+  }));
+  await t.test("稿件批准 revision", () => fixture(async (store, dataRoot) => {
+    await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
+    store.database.exec(`
+      INSERT INTO script_approval_events (id, episode_id, revision, action, script_version_id, created_at)
+      VALUES ('reapproval', 'episode', 2, 'approve', 'script', 2);
+      UPDATE visual_segments SET approval_revision = 2;
+    `);
+    await assert.rejects(
+      verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+      /与当前视觉计划不一致/u,
+    );
+  }));
+  await t.test("时间轴", () => fixture(async (store, dataRoot) => {
+    await exportContactSheet(store.database, dataRoot, "episode", TIMELINE);
+    store.database.prepare(
+      "UPDATE subtitle_cues SET end_ms = 999 WHERE episode_id = 'episode' AND timeline_hash = ?",
+    ).run(TIMELINE);
+    await assert.rejects(
+      verifyCurrentContactSheetArtifact(store.database, dataRoot, "episode", TIMELINE),
+      /已失效/u,
+    );
+  }));
+});
 
 test("候选图校验与发送复用同一份已验证字节", () => fixture(async (store, dataRoot, seeded) => {
   const verified = await resolveVerifiedCandidateFile(store.database, dataRoot, "candidate");

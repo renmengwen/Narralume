@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { buildApp } from "./app.js";
-import { CHAPTER_EVENTS_ANALYZE_JOB_TYPE, CHAPTER_EVENTS_JOB_TYPE } from "./chapter-events-job.js";
+import {
+  CHAPTER_ANALYSIS_TIMEOUT_MS,
+  CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+  CHAPTER_EVENTS_JOB_TYPE,
+} from "./chapter-events-job.js";
+import { openDatabase } from "./database.js";
+import { createJob } from "./job-store.js";
 
 const textProvider = {
   baseUrl: "https://unused.example/v1",
@@ -13,6 +20,10 @@ const textProvider = {
   model: "test-text",
   providerId: "test-provider",
 };
+
+test("章节分析使用真实 Gate 的三分钟整章超时", () => {
+  assert.equal(CHAPTER_ANALYSIS_TIMEOUT_MS, 180_000);
+});
 
 async function waitForJob(app: ReturnType<typeof buildApp>, jobId: string) {
   const deadline = Date.now() + 2_000;
@@ -157,6 +168,84 @@ test("运行中的自动分析任务响应持久取消请求", async () => {
     assert.equal((await waitForJob(app, jobId)).status, "cancelled");
   } finally {
     await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("自动分析复用身份不包含 provider 和 model 且保留首次执行溯源", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-chapter-analysis-provenance-"));
+  const source = Buffer.from("第一章\n甲进入庭院。", "utf8");
+  const firstProvider = { ...textProvider, providerId: "provider-a", model: "model-a" };
+  const secondProvider = { ...textProvider, providerId: "provider-b", model: "model-b" };
+  let firstApp = buildApp({
+    dataRoot,
+    logger: false,
+    chapterTextProvider: firstProvider,
+    chapterAnalyzer: async ({ atoms }) => [{
+      type: "character",
+      payload: { name: "甲" },
+      sources: [{ byteStart: atoms[0]!.byteStart, byteEnd: atoms[0]!.byteEnd }],
+    }],
+    jobPollMs: 5,
+  });
+  try {
+    const imported = await firstApp.inject({
+      method: "POST", url: "/api/books/import", headers: { "content-type": "text/plain" }, payload: source,
+    });
+    const bookId = imported.json().book.id as string;
+    const chapters = await firstApp.inject({ method: "GET", url: `/api/books/${bookId}/chapters` });
+    const chapterId = chapters.json().items[0].id as string;
+    const seed = openDatabase(dataRoot);
+    const contentHash = (seed.database.prepare("SELECT content_hash FROM chapters WHERE id = ?").get(chapterId) as { content_hash: string }).content_hash;
+    const oldIdentity = {
+      bookId,
+      chapterId,
+      contentHash,
+      analysisContractVersion: "chapter-events-analysis-v1",
+      promptContractVersion: "chapter-events-prompt-v1",
+      parserContractVersion: "chapter-events-parser-v1",
+    };
+    const oldRequestHash = createHash("sha256").update(JSON.stringify(oldIdentity)).digest("hex");
+    const oldJob = createJob(seed.database, {
+      id: `job_chapter_analyze_${oldRequestHash}`,
+      type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
+      payload: { ...oldIdentity, providerId: firstProvider.providerId, model: firstProvider.model, requestHash: oldRequestHash },
+      runAfter: Number.MAX_SAFE_INTEGER,
+    });
+    seed.close();
+    const created = await firstApp.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } },
+    });
+    assert.equal(created.statusCode, 201);
+    assert.notEqual(created.json().job.id, oldJob.id);
+    const firstJob = await waitForJob(firstApp, created.json().job.id as string);
+    assert.equal(firstJob.status, "succeeded");
+    assert.equal(firstJob.payload.providerId, "provider-a");
+    assert.equal(firstJob.payload.model, "model-a");
+    assert.equal(firstJob.payload.analysisContractVersion, "chapter-events-analysis-v1");
+    assert.equal(firstJob.payload.promptContractVersion, "chapter-events-prompt-v2");
+    assert.equal(firstJob.payload.parserContractVersion, "chapter-events-parser-v1");
+    await firstApp.close();
+
+    const secondApp = buildApp({
+      dataRoot,
+      logger: false,
+      chapterTextProvider: secondProvider,
+      chapterAnalyzer: async () => { throw new Error("复用成功任务时不应重新分析"); },
+      jobPollMs: 5,
+    });
+    firstApp = secondApp;
+    const reused = await secondApp.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload: { bookId, chapterId } },
+    });
+    assert.equal(reused.statusCode, 200);
+    assert.equal(reused.json().job.id, firstJob.id);
+    assert.equal(reused.json().job.payload.providerId, "provider-a");
+    assert.equal(reused.json().job.payload.model, "model-a");
+  } finally {
+    await firstApp.close();
     await rm(dataRoot, { recursive: true, force: true });
   }
 });

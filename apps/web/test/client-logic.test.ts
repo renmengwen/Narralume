@@ -38,6 +38,7 @@ import {
   productionWorkspaceFromSearch,
   productionWorkspacePath,
   resolveProductionStage,
+  resolveExportStageIdentity,
   stageDependencyLabel,
   updateWorkspaceStatusLayer,
 } from "../src/production-logic.ts";
@@ -50,12 +51,14 @@ import {
   type EpisodeDraft,
 } from "../src/production/episode/episode-editor.ts";
 import { useCommittedEpisodeIdentity } from "../src/production/episode/use-episode-workspace.ts";
+import { EpisodeNavigation } from "../src/production/episode-navigation/EpisodeNavigation.tsx";
+import { episodeNavigationTarget } from "../src/production/episode-navigation/episode-navigation-client.ts";
 import {
   applyIfCurrentScriptRoute,
   useCommittedScriptWorkspaceRefs,
   useScriptWorkspace,
 } from "../src/production/scripts/use-script-workspace.ts";
-import type { EpisodeRecommendation } from "../src/production/types.ts";
+import type { Episode, EpisodeRecommendation } from "../src/production/types.ts";
 import {
   allowedSourceIndexes,
   approvalPutPayload,
@@ -71,6 +74,7 @@ import {
 } from "../src/production/scripts/script-editor.ts";
 import { visualCandidateState } from "../src/production/visual/visual-editor.ts";
 import { AudioStage } from "../src/production/audio/AudioStage.tsx";
+import { ProductionExportStage } from "../src/ProductionWorkspace.tsx";
 
 test("保存的主题优先于系统偏好", () => {
   assert.equal(resolveTheme("light", true), "light");
@@ -113,6 +117,7 @@ test("生产工作台恢复阶段、章节和任务且拒绝坏阶段", () => {
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: "job_1",
+    pipelineRunId: "pipeline_1",
   });
   assert.deepEqual(productionWorkspaceFromSearch(path), {
     bookId: "book/北派",
@@ -122,18 +127,20 @@ test("生产工作台恢复阶段、章节和任务且拒绝坏阶段", () => {
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: "job_1",
+    pipelineRunId: "pipeline_1",
   });
   assert.equal(resolveProductionStage("unknown"), "events");
 });
 
 test("生产工作台地址更新可显式清除旧任务且保留未修改字段", () => {
-  const current = { stage: "assets" as const, chapterId: "chapter_1", episodeIndex: 1, assetId: "asset_1", jobId: "job_1" };
+  const current = { stage: "assets" as const, chapterId: "chapter_1", episodeIndex: 1, assetId: "asset_1", jobId: "job_1", pipelineRunId: "pipeline_1" };
   assert.deepEqual(mergeProductionWorkspaceLocation(current, { jobId: undefined }), {
     stage: "assets",
     chapterId: "chapter_1",
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: undefined,
+    pipelineRunId: "pipeline_1",
   });
   assert.deepEqual(mergeProductionWorkspaceLocation(current, { stage: "audio" }), {
     stage: "audio",
@@ -141,7 +148,52 @@ test("生产工作台地址更新可显式清除旧任务且保留未修改字�
     episodeIndex: 1,
     assetId: "asset_1",
     jobId: "job_1",
+    pipelineRunId: "pipeline_1",
   });
+  assert.equal(mergeProductionWorkspaceLocation(current, { pipelineRunId: undefined }).pipelineRunId, undefined);
+});
+
+test("分集导航只使用真实列表并在边界禁用上一集或下一集", () => {
+  const episode = (index: number, title: string): Episode => ({
+    id: `episode_${index}`, seriesProjectId: "series_1", index, title, storyArc: "故事弧",
+    targetDurationSeconds: 1200, recap: null, nextHook: null, createdAt: 1, updatedAt: 1, sources: [],
+  });
+  const episodes = [episode(1, "起点"), episode(2, "转折")];
+  assert.equal(episodeNavigationTarget(episodes, 1, -1), undefined);
+  assert.equal(episodeNavigationTarget(episodes, 1, 1), 2);
+  assert.equal(episodeNavigationTarget(episodes, 2, 1), undefined);
+  const html = renderToString(createElement(EpisodeNavigation, { current: 1, episodes, state: "ready", disabled: false, onChange() {} }));
+  assert.match(html, /起点/);
+  assert.match(html, /第 1 集，共 2 集/);
+  assert.match(html, /上一集<\/button>/);
+  assert.match(html, /min-h-11/);
+});
+
+test("审核与导出绑定真实 Episode、时间轴和普通 Job URL", () => {
+  const timeline = "a".repeat(64);
+  assert.deepEqual(resolveExportStageIdentity("episode_7", timeline), { episodeId: "episode_7", timelineHash: timeline });
+  const path = productionWorkspacePath({ bookId: "book", seriesId: "series", stage: "export", episodeIndex: 7, timelineHash: timeline, jobId: "job_export", pipelineRunId: "pipeline_run" });
+  const restored = productionWorkspaceFromSearch(path);
+  assert.equal(restored?.jobId, "job_export");
+  assert.equal(restored?.pipelineRunId, "pipeline_run");
+  const html = renderToString(createElement(ProductionExportStage, { episodeId: "episode_7", timelineHash: timeline, jobId: "job_export", onJobIdChange: () => undefined }));
+  assert.match(html, /审核与导出/);
+  assert.match(html, /episode_7/);
+  assert.match(html, new RegExp(timeline));
+  assert.doesNotMatch(html, /该阶段将直接接通/);
+});
+
+test("审核与导出缺少 Episode 或时间轴时只有中文阻断且无动作", () => {
+  assert.match(resolveExportStageIdentity(undefined, "a".repeat(64)).blocker!, /当前分集/);
+  assert.match(resolveExportStageIdentity("episode_1", undefined).blocker!, /时间轴/);
+  for (const props of [
+    { episodeId: undefined, timelineHash: "a".repeat(64) },
+    { episodeId: "episode_1", timelineHash: undefined },
+  ]) {
+    const html = renderToString(createElement(ProductionExportStage, { ...props, onJobIdChange: () => undefined }));
+    assert.match(html, /审核与导出暂不可用/);
+    assert.doesNotMatch(html, /<button|<a /);
+  }
 });
 
 test("阶段导航显示静态依赖而不是虚假等待状态", () => {

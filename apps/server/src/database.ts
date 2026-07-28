@@ -538,6 +538,146 @@ const MIGRATION_13 = `
   END;
 `;
 
+const MIGRATION_14 = `
+  CREATE TABLE series_pipeline_runs (
+    id TEXT PRIMARY KEY,
+    series_project_id TEXT NOT NULL REFERENCES series_projects(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN (
+      'configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes',
+      'validating_plan', 'freezing_plan', 'generating_scripts', 'checking_coverage',
+      'awaiting_review', 'paused', 'failed', 'cancelled', 'completed'
+    )),
+    resume_status TEXT CHECK (resume_status IS NULL OR resume_status IN (
+      'configured', 'analyzing_chapters', 'building_story_bible', 'planning_episodes',
+      'validating_plan', 'freezing_plan', 'generating_scripts', 'checking_coverage',
+      'awaiting_review', 'failed'
+    )),
+    episode_count INTEGER NOT NULL CHECK (episode_count BETWEEN 1 AND 1000),
+    target_duration_seconds INTEGER NOT NULL CHECK (target_duration_seconds BETWEEN 60 AND 3600),
+    source_start_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    source_end_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    config_hash TEXT NOT NULL CHECK (
+      length(config_hash) = 64 AND config_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    chapter_events_hash TEXT CHECK (
+      chapter_events_hash IS NULL OR (
+        length(chapter_events_hash) = 64 AND chapter_events_hash NOT GLOB '*[^0-9a-f]*'
+      )
+    ),
+    story_bible_id TEXT,
+    plan_hash TEXT CHECK (
+      plan_hash IS NULL OR (length(plan_hash) = 64 AND plan_hash NOT GLOB '*[^0-9a-f]*')
+    ),
+    failure_code TEXT CHECK (failure_code IS NULL OR length(failure_code) BETWEEN 1 AND 128),
+    failure_message TEXT CHECK (failure_message IS NULL OR length(failure_message) BETWEEN 1 AND 2000),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+    CHECK ((status = 'paused') = (resume_status IS NOT NULL))
+  ) STRICT;
+
+  CREATE UNIQUE INDEX series_pipeline_runs_one_current
+    ON series_pipeline_runs(series_project_id)
+    WHERE status NOT IN ('cancelled', 'completed');
+
+  CREATE INDEX series_pipeline_runs_status
+    ON series_pipeline_runs(status, updated_at, id);
+
+  CREATE TABLE series_pipeline_jobs (
+    run_id TEXT NOT NULL REFERENCES series_pipeline_runs(id) ON DELETE CASCADE,
+    stage TEXT NOT NULL CHECK (stage IN ('chapter_analysis', 'story_bible', 'episode_plan', 'script_generation')),
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('chapter', 'bible_chunk', 'plan', 'episode')),
+    subject_id TEXT NOT NULL CHECK (length(subject_id) BETWEEN 1 AND 200),
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (run_id, stage, subject_type, subject_id)
+  ) STRICT;
+
+  CREATE INDEX series_pipeline_jobs_job
+    ON series_pipeline_jobs(job_id);
+`;
+
+const MIGRATION_15 = `
+  CREATE TABLE book_story_bibles (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL CHECK (scope IN ('interval', 'final')),
+    source_start_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    source_end_chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    source_event_ids_json TEXT NOT NULL CHECK (
+      length(source_event_ids_json) BETWEEN 3 AND 1048576
+    ),
+    source_events_hash TEXT NOT NULL CHECK (
+      length(source_events_hash) = 64 AND source_events_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    parent_bible_ids_json TEXT NOT NULL CHECK (
+      length(parent_bible_ids_json) BETWEEN 2 AND 1048576
+    ),
+    input_hash TEXT NOT NULL CHECK (
+      length(input_hash) = 64 AND input_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    contract_version TEXT NOT NULL CHECK (length(contract_version) BETWEEN 1 AND 100),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 200),
+    model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 200),
+    job_id TEXT REFERENCES jobs(id),
+    content_json TEXT NOT NULL CHECK (length(content_json) BETWEEN 2 AND 8388608),
+    content_hash TEXT NOT NULL CHECK (
+      length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    invalidated_at INTEGER CHECK (invalidated_at IS NULL OR invalidated_at >= created_at),
+    UNIQUE (
+      book_id, scope, source_start_chapter_id, source_end_chapter_id,
+      source_events_hash, input_hash, contract_version, revision
+    )
+  ) STRICT;
+
+  CREATE INDEX book_story_bibles_reuse
+    ON book_story_bibles (
+      book_id, scope, source_start_chapter_id, source_end_chapter_id,
+      source_events_hash, input_hash, contract_version, invalidated_at, revision DESC
+    );
+
+  CREATE TRIGGER book_story_bibles_range_guard
+  BEFORE INSERT ON book_story_bibles
+  BEGIN
+    SELECT RAISE(ABORT, 'book story bible range must belong to book and be ordered')
+    WHERE NOT EXISTS (
+      SELECT 1 FROM chapters start
+      JOIN chapters finish ON finish.book_id = start.book_id
+      WHERE start.id = NEW.source_start_chapter_id
+        AND finish.id = NEW.source_end_chapter_id
+        AND start.book_id = NEW.book_id
+        AND start.chapter_index <= finish.chapter_index
+    );
+  END;
+
+  CREATE TRIGGER book_story_bibles_immutable
+  BEFORE UPDATE ON book_story_bibles
+  WHEN NEW.id IS NOT OLD.id
+    OR NEW.book_id IS NOT OLD.book_id
+    OR NEW.scope IS NOT OLD.scope
+    OR NEW.source_start_chapter_id IS NOT OLD.source_start_chapter_id
+    OR NEW.source_end_chapter_id IS NOT OLD.source_end_chapter_id
+    OR NEW.source_event_ids_json IS NOT OLD.source_event_ids_json
+    OR NEW.source_events_hash IS NOT OLD.source_events_hash
+    OR NEW.parent_bible_ids_json IS NOT OLD.parent_bible_ids_json
+    OR NEW.input_hash IS NOT OLD.input_hash
+    OR NEW.contract_version IS NOT OLD.contract_version
+    OR NEW.revision IS NOT OLD.revision
+    OR NEW.provider_id IS NOT OLD.provider_id
+    OR NEW.model IS NOT OLD.model
+    OR NEW.job_id IS NOT OLD.job_id
+    OR NEW.content_json IS NOT OLD.content_json
+    OR NEW.content_hash IS NOT OLD.content_hash
+    OR NEW.created_at IS NOT OLD.created_at
+    OR OLD.invalidated_at IS NOT NULL
+    OR NEW.invalidated_at IS NULL
+  BEGIN
+    SELECT RAISE(ABORT, 'book story bible versions are immutable');
+  END;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -545,6 +685,8 @@ const MIGRATIONS = [
   MIGRATION_11,
   MIGRATION_12,
   MIGRATION_13,
+  MIGRATION_14,
+  MIGRATION_15,
 ];
 
 export interface NarralumeDatabase {

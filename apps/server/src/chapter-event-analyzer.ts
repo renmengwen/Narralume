@@ -16,6 +16,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_ATOMS_PER_REQUEST = 10;
 const EVENT_TYPES = new Set<string>(CHAPTER_EVENT_TYPES);
 
+class ChapterEvidenceReferenceError extends Error {}
+
 export interface ChapterEvidenceAtom {
   id: string;
   byteStart: number;
@@ -131,7 +133,7 @@ function prompt(atoms: readonly ChapterEvidenceAtom[]) {
     "只能引用下面提供的 evidenceId；禁止返回字节偏移。没有可靠事件时返回空 events。",
     "事件类型仅限 character、location、prop、causality、revelation、suspense。",
     "character/location/prop 的 payload 为 {name,detail?}；causality 为 {cause,effect}；revelation 为 {fact}；suspense 为 {question}。",
-    "输出格式：{\"events\":[{\"type\":\"character\",\"payload\":{\"name\":\"...\"},\"evidenceIds\":[\"evidence_...\"]}]}。",
+    "输出格式：{\"events\":[{\"type\":\"character\",\"payload\":{\"name\":\"...\"},\"evidenceIds\":[\"e1\"]}]}。",
     "原文证据段：",
     ...atoms.map((atom) => JSON.stringify({ evidenceId: atom.id, text: atom.text })),
   ].join("\n");
@@ -182,7 +184,7 @@ export function responseText(body: unknown) {
   throw new Error("章节分析模型返回结果缺少文本内容");
 }
 
-export function textModelRequest(config: ChapterTextModelConfig, input: string, maxTokens = 8192) {
+export function textModelRequest(config: ChapterTextModelConfig, input: string, maxTokens = 8192, stream = false) {
   const anthropic = config.protocol === "anthropic-message";
   const endpoint = new URL(anthropic ? "messages" : "responses", `${config.baseUrl.replace(/\/+$/, "")}/`);
   const headers: Record<string, string> = anthropic
@@ -192,8 +194,8 @@ export function textModelRequest(config: ChapterTextModelConfig, input: string, 
     endpoint,
     headers,
     body: JSON.stringify(anthropic
-      ? { model: config.model, max_tokens: maxTokens, messages: [{ role: "user", content: input }] }
-      : { model: config.model, input }),
+      ? { model: config.model, max_tokens: maxTokens, messages: [{ role: "user", content: input }], ...(stream ? { stream: true } : {}) }
+      : { model: config.model, input, ...(stream ? { stream: true } : {}) }),
   };
 }
 
@@ -209,13 +211,13 @@ function modelEvents(value: unknown, atoms: readonly ChapterEvidenceAtom[]): Cha
     const item = raw as { type?: unknown; payload?: unknown; evidenceIds?: unknown };
     if (typeof item.type !== "string" || !EVENT_TYPES.has(item.type)) throw new Error("章节分析结果事件类型无效");
     if (!Array.isArray(item.evidenceIds) || item.evidenceIds.length < 1 || item.evidenceIds.length > 20) {
-      throw new Error("章节分析结果必须引用 1～20 条证据");
+      throw new ChapterEvidenceReferenceError("章节分析结果必须引用 1～20 条证据");
     }
     const ids = item.evidenceIds.map((id) => {
-      if (typeof id !== "string" || !evidence.has(id)) throw new Error("章节分析结果引用了未知证据 ID");
+      if (typeof id !== "string" || !evidence.has(id)) throw new ChapterEvidenceReferenceError("章节分析结果引用了未知证据 ID");
       return id;
     });
-    if (new Set(ids).size !== ids.length) throw new Error("章节分析结果重复引用相同证据");
+    if (new Set(ids).size !== ids.length) throw new ChapterEvidenceReferenceError("章节分析结果重复引用相同证据");
     const type = item.type as ChapterEventType;
     return {
       type,
@@ -225,6 +227,17 @@ function modelEvents(value: unknown, atoms: readonly ChapterEvidenceAtom[]): Cha
         return { byteStart: atom.byteStart, byteEnd: atom.byteEnd };
       }),
     } as ChapterEventInput;
+  });
+}
+
+function assignOccurrences(events: readonly ChapterEventInput[]) {
+  const next = new Map<string, number>();
+  return events.map((event): ChapterEventInput => {
+    const ranges = event.sources.map((source) => `${source.byteStart}:${source.byteEnd}`).join("|");
+    const key = `${event.type}\0${ranges}`;
+    const occurrence = next.get(key) ?? 0;
+    next.set(key, occurrence + 1);
+    return { ...event, occurrence } as ChapterEventInput;
   });
 }
 
@@ -240,25 +253,40 @@ export function createOpenAiResponsesChapterAnalyzer(
     throw new Error("章节分析模型配置无效");
   }
   async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal) {
-    const request = textModelRequest(config, prompt(atoms));
-    let response: Response;
+    const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
+    async function requestEvents(input: string) {
+      const request = textModelRequest(config, input);
+      let response: Response;
+      try {
+        response = await fetchImpl(request.endpoint, {
+          method: "POST",
+          headers: request.headers,
+          body: request.body,
+          signal,
+          redirect: "error",
+        });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        throw new Error("章节分析模型请求失败");
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
+      }
+      return modelEvents(responseText(await limitedJson(response)), requestAtoms);
+    }
     try {
-      response = await fetchImpl(request.endpoint, {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-        signal,
-        redirect: "error",
-      });
+      return await requestEvents(prompt(requestAtoms));
     } catch (error) {
-      if (signal?.aborted) throw error;
-      throw new Error("章节分析模型请求失败");
+      if (!(error instanceof ChapterEvidenceReferenceError) || signal?.aborted) throw error;
+      return requestEvents([
+        "上一答的 evidenceIds 非法。请重新输出本批次完整、严格 JSON，不要输出 Markdown 或解释。",
+        "每个事件必须引用 1～20 个互不重复的 evidenceId，且只能逐字使用以下允许 ID：",
+        ...requestAtoms.map((atom) => atom.id),
+        "原任务和全部结构约束如下：",
+        prompt(requestAtoms),
+      ].join("\n"));
     }
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
-    }
-    return modelEvents(responseText(await limitedJson(response)), atoms);
   }
   return async ({ atoms, signal }) => {
     const events: ChapterEventInput[] = [];
@@ -272,7 +300,7 @@ export function createOpenAiResponsesChapterAnalyzer(
       }
       if (events.length > 200) throw new Error("章节分析结果事件数量超过 200 条");
     }
-    return events;
+    return assignOccurrences(events);
   };
 }
 

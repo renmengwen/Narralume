@@ -21,6 +21,7 @@ import { BookImportError, importBookText } from "./book-import.js";
 import { BookLibraryError, cleanupPendingBookDeletions, listBooks, listChapters, readChapterText } from "./book-library.js";
 import { registerBookRoutes } from "./book-routes.js";
 import { registerChapterRoutes } from "./chapter-routes.js";
+import { registerExportRoutes } from "./export-routes.js";
 import {
   ChapterEventError,
   listChapterEvents,
@@ -46,6 +47,7 @@ import {
   createSeriesProject,
   EpisodeStoreError,
   getEpisode,
+  listEpisodes,
   listSeriesProjects,
   replaceEpisode,
   type EpisodeInput,
@@ -96,6 +98,13 @@ import {
   TTS_CALIBRATION_JOB_TYPE,
 } from "./tts-calibration-job.js";
 import {
+  createTtsListeningReviewJobHandler,
+  enqueueTtsListeningReview,
+  getTtsListeningReviewWorkspace,
+  TtsListeningReviewError,
+  TTS_LISTENING_REVIEW_JOB_TYPE,
+} from "./tts-listening-review.js";
+import {
   getTtsTimeline,
   listTtsTimelines,
   readVerifiedTtsSegment,
@@ -116,17 +125,39 @@ import {
   resolveVerifiedCandidateFile,
 } from "./contact-sheet.js";
 import {
+  CONTACT_SHEET_REVIEW_JOB_TYPE,
+  ContactSheetReviewError,
+  createContactSheetReviewHandler,
+  enqueueContactSheetReview,
+  getContactSheetReviewWorkspace,
+} from "./contact-sheet-review.js";
+import {
   listVisualSegments,
   putVisualSegment,
   type PutVisualSegmentInput,
   VisualSegmentStoreError,
 } from "./visual-segment-store.js";
+import { registerSeriesPipelineRoutes } from "./series-pipeline-routes.js";
+import { SeriesPipelineService, SeriesPipelineWorker } from "./series-pipeline-service.js";
+import {
+  BOOK_STORY_BIBLE_JOB_TYPE,
+  createBookStoryBibleJobHandler,
+} from "./book-story-bible-job-handler.js";
+import {
+  FULL_BOOK_PLAN_JOB_TYPE,
+  createFullBookPlanJobHandler,
+} from "./full-book-plan-job-handler.js";
+import {
+  assertSeriesPipelineAllowsChapterEventMutation,
+  SeriesPipelineError,
+} from "./series-pipeline-store.js";
 
 interface BuildAppOptions {
   dataRoot?: string;
   logger?: boolean;
   jobHandlers?: Readonly<Record<string, JobHandler>>;
   jobPollMs?: number;
+  pipelinePollMs?: number;
   jobWorker?: Partial<JobWorkerOptions>;
   imageProvider?: OpenAiImageConfig | null;
   chapterTextProvider?: ChapterTextModelConfig | null;
@@ -145,6 +176,13 @@ interface CreateJobBody {
 
 interface ReplaceChapterEventsBody {
   events?: unknown;
+}
+
+interface TtsListeningReviewBody {
+  action?: unknown;
+  checkedSegmentIndexes?: unknown;
+  checkedProperNouns?: unknown;
+  notes?: unknown;
 }
 
 interface CreateSeriesBody { title?: unknown }
@@ -190,6 +228,11 @@ interface PutVisualSegmentBody {
   assets?: unknown;
 }
 interface ExportContactSheetBody { timelineHash?: unknown }
+interface ContactSheetReviewBody {
+  action?: unknown;
+  expectedIdentityHash?: unknown;
+  notes?: unknown;
+}
 
 function imageProviderFromEnvironment(): OpenAiImageConfig | null {
   const config = {
@@ -332,8 +375,20 @@ export function buildApp(options: BuildAppOptions = {}) {
         options.episodeScriptGenerator ?? createOpenAiEpisodeScriptGenerator(provider),
       )(context);
     },
+    [BOOK_STORY_BIBLE_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("故事圣经任务对应的模型配置不可用");
+      return createBookStoryBibleJobHandler(connection.database, provider)(context);
+    },
+    [FULL_BOOK_PLAN_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("全书规划任务对应的模型配置不可用");
+      return createFullBookPlanJobHandler(provider)(context);
+    },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
+    [TTS_LISTENING_REVIEW_JOB_TYPE]: createTtsListeningReviewJobHandler(connection.database),
+    [CONTACT_SHEET_REVIEW_JOB_TYPE]: createContactSheetReviewHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
     [FINAL_VIDEO_JOB_TYPE]: createFinalVideoJobHandler(connection.database, dataRoot),
@@ -349,8 +404,11 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
   supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
   supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
+  supportedJobTypes.add(BOOK_STORY_BIBLE_JOB_TYPE);
+  supportedJobTypes.add(FULL_BOOK_PLAN_JOB_TYPE);
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
+  let pipelineWorker: SeriesPipelineWorker;
   try {
     worker = new JobWorker(connection.database, jobHandlers, {
       workerId: options.jobWorker?.workerId ?? `local_${randomUUID()}`,
@@ -359,6 +417,16 @@ export function buildApp(options: BuildAppOptions = {}) {
       retryDelayMs: options.jobWorker?.retryDelayMs,
       onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "本地任务 Worker 运行异常")),
     });
+    const pipelineService = new SeriesPipelineService({
+      database: connection.database,
+      dataRoot,
+      resolveChapterTextProvider: () => resolveChapterTextProvider(),
+    });
+    pipelineWorker = new SeriesPipelineWorker(
+      pipelineService,
+      options.jobWorker?.onError ?? ((error) => app.log.error(error, "全本流水线 Worker 运行异常")),
+    );
+    void app.register(registerSeriesPipelineRoutes, { service: pipelineService, worker: pipelineWorker });
   } catch (error) {
     connection.close();
     throw error;
@@ -367,9 +435,11 @@ export function buildApp(options: BuildAppOptions = {}) {
   app.addHook("onReady", async () => {
     const cleanup = await cleanupPendingBookDeletions(connection.database, dataRoot);
     if (cleanup.pending) app.log.warn({ pending: cleanup.pending }, "存在尚未清理的整书删除文件");
+    pipelineWorker.start(options.pipelinePollMs);
     if (supportedJobTypes.size > 0) worker.start(options.jobPollMs);
   });
   app.addHook("onClose", async () => {
+    await pipelineWorker.stop();
     await worker.stop();
     connection.close();
   });
@@ -386,6 +456,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   void app.register(registerModelConfigRoutes, { dataRoot });
   void app.register(registerBookRoutes, { database: connection.database, dataRoot });
   void app.register(registerChapterRoutes, { database: connection.database });
+  void app.register(registerExportRoutes, { database: connection.database, dataRoot });
 
   app.get("/api/episode-policy", async () => ({ ok: true, duration: EPISODE_DURATION_POLICY }));
 
@@ -640,6 +711,20 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
   );
 
+  app.get<{ Params: { seriesId: string } }>(
+    "/api/series/:seriesId/episodes",
+    async (request, reply) => {
+      try {
+        return { episodes: listEpisodes(connection.database, request.params.seriesId) };
+      } catch (error) {
+        if (error instanceof EpisodeStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
   app.put<{
     Params: { episodeId: string; segmentIndex: string };
     Body: PutVisualSegmentBody;
@@ -706,6 +791,62 @@ export function buildApp(options: BuildAppOptions = {}) {
       return { ok: true, message: "联系表已导出", contactSheet };
     } catch (error) {
       if (error instanceof ContactSheetError || error instanceof VisualSegmentStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get<{
+    Params: { episodeId: string };
+    Querystring: { timelineHash?: string };
+  }>("/api/episodes/:episodeId/contact-sheet/review", async (request, reply) => {
+    const timelineHash = request.query.timelineHash;
+    if (Object.keys(request.query).some((key) => key !== "timelineHash") ||
+        typeof timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(timelineHash)) {
+      return reply.code(400).send({ ok: false, message: "联系表审核只能指定有效的时间轴哈希" });
+    }
+    try {
+      const workspace = await getContactSheetReviewWorkspace(
+        connection.database, dataRoot, request.params.episodeId, timelineHash,
+      );
+      return { ok: true, workspace };
+    } catch (error) {
+      if (error instanceof ContactSheetReviewError || error instanceof ContactSheetError ||
+          error instanceof VisualSegmentStoreError || error instanceof ScriptApprovalStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post<{
+    Params: { episodeId: string };
+    Querystring: { timelineHash?: string };
+    Body: ContactSheetReviewBody;
+  }>("/api/episodes/:episodeId/contact-sheet/review", async (request, reply) => {
+    const timelineHash = request.query.timelineHash;
+    const body = request.body;
+    if (Object.keys(request.query).some((key) => key !== "timelineHash") ||
+        typeof timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(timelineHash)) {
+      return reply.code(400).send({ ok: false, message: "联系表审核只能指定有效的时间轴哈希" });
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).some((key) => !["action", "expectedIdentityHash", "notes"].includes(key))) {
+      return reply.code(400).send({ ok: false, message: "联系表审核请求只能包含操作、预期身份哈希和备注" });
+    }
+    try {
+      const job = await enqueueContactSheetReview(connection.database, dataRoot, {
+        episodeId: request.params.episodeId,
+        timelineHash,
+        action: body.action as "approve" | "reject",
+        expectedIdentityHash: body.expectedIdentityHash as string,
+        notes: body.notes as string | null | undefined,
+      });
+      return reply.code(201).send({ ok: true, message: "联系表审核任务已创建", job });
+    } catch (error) {
+      if (error instanceof ContactSheetReviewError || error instanceof ContactSheetError ||
+          error instanceof VisualSegmentStoreError || error instanceof ScriptApprovalStoreError) {
         return reply.code(error.statusCode).send({ ok: false, message: error.message });
       }
       throw error;
@@ -830,6 +971,54 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
   );
 
+  app.get<{ Params: { episodeId: string; timelineHash: string } }>(
+    "/api/episodes/:episodeId/tts-timelines/:timelineHash/listening-review",
+    async (request, reply) => {
+      try {
+        const workspace = getTtsListeningReviewWorkspace(
+          connection.database, request.params.episodeId, request.params.timelineHash,
+        );
+        return { ok: true, workspace };
+      } catch (error) {
+        if (error instanceof TtsListeningReviewError || error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{
+    Params: { episodeId: string; timelineHash: string };
+    Body: TtsListeningReviewBody;
+  }>(
+    "/api/episodes/:episodeId/tts-timelines/:timelineHash/listening-review",
+    async (request, reply) => {
+      const body = request.body;
+      if (!body || typeof body !== "object" || Array.isArray(body) ||
+          Object.keys(body).some((key) => !["action", "checkedSegmentIndexes", "checkedProperNouns", "notes"].includes(key)) ||
+          (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string")) {
+        return reply.code(400).send({ ok: false, message: "听审请求只能包含操作、核对片段、核对专名和备注" });
+      }
+      try {
+        const job = enqueueTtsListeningReview(connection.database, {
+          episodeId: request.params.episodeId,
+          timelineHash: request.params.timelineHash,
+          action: body.action as "approve" | "reject",
+          checkedSegmentIndexes: body.checkedSegmentIndexes as number[],
+          checkedProperNouns: body.checkedProperNouns as string[],
+          notes: body.notes as string | null | undefined,
+        });
+        return reply.code(201).send({ ok: true, message: "听审任务已创建并持久化", job });
+      } catch (error) {
+        if (error instanceof TtsListeningReviewError || error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
   app.get<{ Params: { episodeId: string; timelineHash: string; segmentIndex: string } }>(
     "/api/episodes/:episodeId/tts-timelines/:timelineHash/audio/:segmentIndex",
     async (request, reply) => {
@@ -884,6 +1073,12 @@ export function buildApp(options: BuildAppOptions = {}) {
     const type = body.type.trim();
     if (!supportedJobTypes.has(type)) {
       return reply.code(400).send({ ok: false, message: `不支持的任务类型：${type || "（空）"}` });
+    }
+    if (type === TTS_LISTENING_REVIEW_JOB_TYPE) {
+      return reply.code(400).send({ ok: false, message: "人工听审任务只能通过当前语音时间轴的听审入口创建" });
+    }
+    if (type === CONTACT_SHEET_REVIEW_JOB_TYPE) {
+      return reply.code(400).send({ ok: false, message: "人工联系表审核任务只能通过当前联系表审核入口创建" });
     }
     let requestImageProvider: OpenAiImageConfig | null = null;
     let requestTextProvider: ChapterTextModelConfig | null = null;
@@ -1009,6 +1204,17 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
     if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE) {
       try {
+        const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+          ? body.payload as { bookId?: unknown; chapterId?: unknown }
+          : {};
+        if (typeof payload.bookId === "string" && typeof payload.chapterId === "string") {
+          assertSeriesPipelineAllowsChapterEventMutation(
+            connection.database,
+            payload.bookId.trim(),
+            payload.chapterId.trim(),
+            { allowPausedPipelineJobs: true },
+          );
+        }
         const result = await enqueueChapterEventsAnalysisJob(connection.database, dataRoot, requestTextProvider!, {
           payload: body.payload ?? {}, priority, maxAttempts, runAfter,
         });
@@ -1018,7 +1224,7 @@ export function buildApp(options: BuildAppOptions = {}) {
           job: result.job,
         });
       } catch (error) {
-        if (error instanceof ChapterEventError) {
+        if (error instanceof ChapterEventError || error instanceof SeriesPipelineError) {
           return reply.code(error.statusCode).send({ ok: false, message: error.message });
         }
         return reply.code(400).send({
@@ -1154,6 +1360,11 @@ export function buildApp(options: BuildAppOptions = {}) {
     Body: ReplaceChapterEventsBody;
   }>("/api/books/:bookId/chapters/:chapterId/events", async (request, reply) => {
     try {
+      assertSeriesPipelineAllowsChapterEventMutation(
+        connection.database,
+        request.params.bookId,
+        request.params.chapterId,
+      );
       const events = await replaceChapterEvents(
         connection.database,
         dataRoot,
@@ -1163,7 +1374,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       );
       return { ok: true, message: "章节事件已保存", items: events, total: events.length };
     } catch (error) {
-      if (error instanceof ChapterEventError) {
+      if (error instanceof ChapterEventError || error instanceof SeriesPipelineError) {
         return reply.code(error.statusCode).send({ ok: false, message: error.message });
       }
       throw error;

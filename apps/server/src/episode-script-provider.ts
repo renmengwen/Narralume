@@ -1,18 +1,30 @@
 import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import type { GenerateEpisodeScript } from "./episode-script-generation-job.js";
+import { streamedText } from "./text-model-stream.js";
 
 export function createOpenAiEpisodeScriptGenerator(
   config: ChapterTextModelConfig,
   fetchImpl: typeof fetch = fetch,
 ): GenerateEpisodeScript {
   return async (input) => {
+    const allowlist = input.stage === "skeleton"
+      ? input.sources.map(({ sourceIndex, sourceEventId }) => ({ sourceIndex, sourceEventId }))
+      : null;
     const instructions = input.stage === "skeleton"
-      ? "生成按原文顺序排列的故事 beats。只能引用输入 sourceIndex，不得发明或重复来源。输出严格 JSON：{\"beats\":[{\"intent\":\"...\",\"sourceIndexes\":[0],\"targetDurationSeconds\":60}]}"
+      ? `${input.correctionError
+        ? `上一次完整 JSON 被骨架合同拒绝：${input.correctionError}。只纠正一次并重新输出完整 JSON。`
+        : "生成按原文顺序排列的故事 beats。"}
+唯一输出 schema：{"beats":[{"intent":"非空字符串","sourceIndexes":[0],"targetDurationSeconds":60}]}。顶层只能包含 beats；每个 beat 只能包含 intent、sourceIndexes 和可选的 targetDurationSeconds；输出中只能出现 sourceIndexes，不得输出 sourceEventId 或其他包装字段。
+冻结 sourceIndex→sourceEventId allowlist：${JSON.stringify(allowlist)}。
+每个 allowlist sourceIndex 必须在全部 beats 中全局恰好出现一次；sourceIndexes 必须按 allowlist 严格递增；不得遗漏、重复、伪造或越界。只输出 JSON。`
       : input.stage === "faithful"
         ? "只根据本 beat 提供的原文写忠实叙事段落，不添加事实。输出严格 JSON：{\"text\":\"...\"}"
         : "在不改变事实的前提下包装忠实稿，控制在字符预算内。每段只能引用输入已有 sourceIndexes。输出严格 JSON：{\"paragraphs\":[{\"text\":\"...\",\"sourceIndexes\":[0]}]}";
-    const { signal, ...safeInput } = input;
-    const request = textModelRequest(config, `${instructions}\n${JSON.stringify(safeInput)}`);
+    const { signal, onActivity } = input;
+    const safeInput = input.stage === "skeleton"
+      ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError, ...rest }) => rest)(input)
+      : (({ signal: _signal, onActivity: _onActivity, ...rest }) => rest)(input);
+    const request = textModelRequest(config, `${instructions}\n${JSON.stringify(safeInput)}`, 8192, true);
     const response = await fetchImpl(request.endpoint, {
       method: "POST",
       signal,
@@ -24,10 +36,12 @@ export function createOpenAiEpisodeScriptGenerator(
       await response.body?.cancel();
       throw new Error(`长稿生成模型请求失败（HTTP ${response.status}）`);
     }
+    const raw = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+      ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+      : responseText(await limitedJson(response));
     try {
-      return JSON.parse(responseText(await limitedJson(response))) as Awaited<ReturnType<GenerateEpisodeScript>>;
-    } catch (error) {
-      if (error instanceof Error && /大小限制/u.test(error.message)) throw error;
+      return JSON.parse(raw) as Awaited<ReturnType<GenerateEpisodeScript>>;
+    } catch {
       throw new Error("长稿生成模型返回了无效 JSON");
     }
   };

@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { openDatabase } from "./database.js";
 import {
-  createSeriesProject, EpisodeStoreError, getEpisode, listSeriesProjects, replaceEpisode,
+  createSeriesProject, EpisodeStoreError, getEpisode, listEpisodes, listSeriesProjects, replaceEpisode,
 } from "./episode-store.js";
 
 async function fixture() {
@@ -220,6 +220,35 @@ test("跨书事件在事务前被拒绝且旧分集保持不变", async () => {
     const saved = await getEpisode(context.connection.database, context.dataRoot, project.id, 1);
     assert.equal(saved.title, "旧标题");
     assert.deepEqual(saved.sources.map((source) => source.sourceEventId), ["event_1"]);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("分集列表按序号稳定返回并区分空系列与不存在系列", async () => {
+  const context = await fixture();
+  try {
+    const database = context.connection.database;
+    const project = createSeriesProject(database, { bookId: "book_episode", title: "列表" }, 10);
+    assert.deepEqual(listEpisodes(database, project.id), []);
+    replaceEpisode(database, project.id, {
+      index: 2, title: "第二集", storyArc: "后续", targetDurationSeconds: 240,
+      sourceEventIds: ["event_2"],
+    }, 20);
+    replaceEpisode(database, project.id, {
+      index: 1, title: "第一集", storyArc: "开端", targetDurationSeconds: 240,
+      sourceEventIds: ["event_1"],
+    }, 30);
+    assert.deepEqual(listEpisodes(database, project.id).map((episode) => episode.index), [1, 2]);
+    assert.throws(
+      () => listEpisodes(database, "missing"),
+      (error: unknown) => error instanceof EpisodeStoreError && error.statusCode === 404,
+    );
+    assert.throws(
+      () => listEpisodes(database, " "),
+      (error: unknown) => error instanceof EpisodeStoreError && error.statusCode === 400,
+    );
   } finally {
     context.connection.close();
     await rm(context.dataRoot, { recursive: true, force: true });

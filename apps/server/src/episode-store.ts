@@ -90,6 +90,18 @@ export function listSeriesProjects(database: DatabaseSync, bookId: string) {
   ).all(bookId) as unknown as ProjectRow[]).map(projectResult);
 }
 
+export function listEpisodes(database: DatabaseSync, seriesProjectId: string) {
+  const id = requiredText(seriesProjectId, "系列项目 ID");
+  if (!database.prepare("SELECT id FROM series_projects WHERE id = ?").get(id)) {
+    throw new EpisodeStoreError(404, "系列项目不存在");
+  }
+  return (database.prepare(
+    `SELECT id, series_project_id, episode_index, title, story_arc, target_duration_seconds,
+            recap, next_hook, created_at, updated_at
+     FROM episodes WHERE series_project_id = ? ORDER BY episode_index, id`,
+  ).all(id) as unknown as EpisodeRow[]).map(episodeResult);
+}
+
 export function replaceEpisode(
   database: DatabaseSync, seriesProjectId: string, input: EpisodeInput, now = Date.now(),
 ) {
@@ -164,7 +176,8 @@ export function replaceEpisode(
   if (existing && existing.title === title && existing.story_arc === storyArc &&
       existing.target_duration_seconds === input.targetDurationSeconds && existing.recap === recap &&
       existing.next_hook === nextHook && sourcesMatch) return episodeResult(existing);
-  database.exec("BEGIN IMMEDIATE");
+  const nested = database.isTransaction;
+  database.exec(nested ? "SAVEPOINT replace_episode" : "BEGIN IMMEDIATE");
   try {
     database.prepare(
       `INSERT INTO episodes (
@@ -191,9 +204,12 @@ export function replaceEpisode(
     if (existing && (existing.target_duration_seconds !== input.targetDurationSeconds || !sourcesMatch)) {
       withdrawScriptApprovalForEpisodeChange(database, id, now);
     }
-    database.exec("COMMIT");
+    database.exec(nested ? "RELEASE SAVEPOINT replace_episode" : "COMMIT");
   } catch (error) {
-    try { database.exec("ROLLBACK"); } catch { /* 保留原始写入错误。 */ }
+    try {
+      if (nested) database.exec("ROLLBACK TO SAVEPOINT replace_episode; RELEASE SAVEPOINT replace_episode");
+      else database.exec("ROLLBACK");
+    } catch { /* 保留原始写入错误。 */ }
     throw error;
   }
   return episodeResult(database.prepare(

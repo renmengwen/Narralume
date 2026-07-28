@@ -384,5 +384,21 @@ export function assertVisualPlanReady(
   if (segments[segments.length - 1]!.cueEndIndex !== cues.length - 1) {
     throw new VisualSegmentStoreError(409, "视觉计划没有覆盖时间轴末尾");
   }
+  const timeline = database.prepare(
+    "SELECT SUM(duration_ms) AS duration_ms FROM audio_segments WHERE episode_id = ? AND timeline_hash = ?",
+  ).get(episodeId, timelineHash) as { duration_ms: number };
+  const openingMs = Math.min(timeline.duration_ms, 15_000);
+  const openingCueCount = cues.filter((cue) => cue.start_ms < openingMs).length;
+  const openingMin = Math.min(openingCueCount, Math.max(1, Math.ceil(openingMs / 5_000)));
+  const openingMax = Math.min(openingCueCount, Math.max(openingMin, Math.ceil(openingMs / 3_750)));
+  const openingSegments = segments.filter((segment) => segment.startMs < openingMs && segment.endMs > 0);
+  if (openingSegments.length < openingMin || openingSegments.length > openingMax) {
+    throw new VisualSegmentStoreError(409, `开头画面变化应为 ${openingMin}～${openingMax} 段`);
+  }
+  const openingCandidates = openingSegments.map((segment) =>
+    segment.assets.find((asset) => asset.selectedCandidateId !== null)!.selectedCandidateId!);
+  if (new Set(openingCandidates).size !== openingCandidates.length) {
+    throw new VisualSegmentStoreError(409, "开头视觉段必须选择互不相同的当前已批准候选图");
+  }
   return segments;
 }

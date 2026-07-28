@@ -9,6 +9,7 @@ import { assertVisualPlanReady } from "./visual-segment-store.js";
 
 const HASH = /^[0-9a-f]{64}$/u;
 const MAX_CANDIDATE_BYTES = 30 * 1024 * 1024;
+const MAX_CONTACT_SHEET_BYTES = 10 * 1024 * 1024;
 const EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -64,6 +65,22 @@ export interface ContactSheetExportResult {
   htmlPath: string;
   jsonHash: string;
   htmlHash: string;
+}
+
+export interface ContactSheetIdentity {
+  contract: "contact-sheet-review-v1";
+  episodeId: string;
+  scriptVersionId: string;
+  approvalRevision: number;
+  timelineHash: string;
+  visualPlanHash: string;
+  jsonHash: string;
+  htmlHash: string;
+}
+
+export interface VerifiedContactSheetArtifact extends ContactSheetExportResult {
+  identity: ContactSheetIdentity;
+  identityHash: string;
 }
 
 export class ContactSheetError extends Error {
@@ -212,13 +229,12 @@ function sha256(content: Buffer) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-export async function exportContactSheet(
+async function buildContactSheet(
   database: DatabaseSync,
   dataRoot: string,
   episodeId: string,
   timelineHash: string,
-  options: ContactSheetExportOptions = {},
-): Promise<ContactSheetExportResult> {
+) {
   if (!database.prepare("SELECT id FROM episodes WHERE id = ?").get(episodeId)) {
     throw new ContactSheetError(404, "分集不存在");
   }
@@ -280,7 +296,6 @@ export async function exportContactSheet(
       }),
     })),
   };
-
   const cards = document.segments.map((segment) => {
     const selected = segment.assets.find((asset) => asset.selectedCandidate)?.selectedCandidate;
     const imagePath = selected
@@ -292,8 +307,113 @@ export async function exportContactSheet(
   const html = `<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>联系表</title><style>body{margin:0;padding:24px;background:#181715;color:#eee8df;font:14px system-ui,sans-serif}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}article{overflow:hidden;border:1px solid #514a40;border-radius:10px;background:#24211d}img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover}div{padding:12px}strong,span{display:block}span,p{color:#bdb4a8}</style></head><body><h1>分集联系表</h1><p>${escapeHtml(episodeId)} · ${escapeHtml(timelineHash)}</p><main>\n${cards}\n</main></body></html>\n`;
   const jsonContent = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
   const htmlContent = Buffer.from(html, "utf8");
-  const jsonPath = join(directoryPath, "contact-sheet.json");
-  const htmlPath = join(directoryPath, "contact-sheet.html");
+  const visualPlanHash = sha256(Buffer.from(JSON.stringify(segments.map((segment) => ({
+    id: segment.id,
+    revision: segment.revision,
+    cueStartIndex: segment.cueStartIndex,
+    cueEndIndex: segment.cueEndIndex,
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    motionKind: segment.motionKind,
+    motionAmountPpm: segment.motionAmountPpm,
+    fadeMs: segment.fadeMs,
+    assets: segment.assets.map((asset) => ({
+      assetId: asset.assetId,
+      selectedCandidateId: asset.selectedCandidateId,
+      candidateReviewRevision: asset.candidateReviewRevision,
+    })),
+  }))), "utf8"));
+  const identity: ContactSheetIdentity = {
+    contract: "contact-sheet-review-v1",
+    episodeId,
+    scriptVersionId: segments[0]!.scriptVersionId,
+    approvalRevision: segments[0]!.approvalRevision,
+    timelineHash,
+    visualPlanHash,
+    jsonHash: sha256(jsonContent),
+    htmlHash: sha256(htmlContent),
+  };
+  return {
+    directoryPath,
+    jsonPath: join(directoryPath, "contact-sheet.json"),
+    htmlPath: join(directoryPath, "contact-sheet.html"),
+    jsonContent,
+    htmlContent,
+    identity,
+    identityHash: sha256(Buffer.from(JSON.stringify(identity), "utf8")),
+  };
+}
+
+async function readControlledContactSheetFile(dataRoot: string, path: string) {
+  const root = resolve(dataRoot);
+  if (!isInside(root, path)) throw new ContactSheetError(409, "联系表路径越出数据目录");
+  try {
+    const [rootRealPath, fileRealPath, info] = await Promise.all([realpath(root), realpath(path), lstat(path)]);
+    if (!isInside(rootRealPath, fileRealPath) || !info.isFile() || info.isSymbolicLink() || info.size > MAX_CONTACT_SHEET_BYTES) {
+      throw new ContactSheetError(409, "联系表必须是数据目录内大小受限的普通文件");
+    }
+    const handle = await open(path, constants.O_RDONLY);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.size > MAX_CONTACT_SHEET_BYTES) {
+        throw new ContactSheetError(409, "联系表必须是数据目录内大小受限的普通文件");
+      }
+      const bounded = Buffer.allocUnsafe(MAX_CONTACT_SHEET_BYTES + 1);
+      let bytesRead = 0;
+      while (bytesRead < bounded.length) {
+        const result = await handle.read(bounded, bytesRead, bounded.length - bytesRead, bytesRead);
+        if (result.bytesRead === 0) break;
+        bytesRead += result.bytesRead;
+      }
+      if (bytesRead > MAX_CONTACT_SHEET_BYTES) throw new ContactSheetError(409, "联系表文件过大");
+      return bounded.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error instanceof ContactSheetError) throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ContactSheetError(409, "联系表缺失或已失效");
+    throw error;
+  }
+}
+
+export async function verifyCurrentContactSheetArtifact(
+  database: DatabaseSync,
+  dataRoot: string,
+  episodeId: string,
+  timelineHash: string,
+): Promise<VerifiedContactSheetArtifact> {
+  const expected = await buildContactSheet(database, dataRoot, episodeId, timelineHash);
+  const [jsonContent, htmlContent] = await Promise.all([
+    readControlledContactSheetFile(dataRoot, expected.jsonPath),
+    readControlledContactSheetFile(dataRoot, expected.htmlPath),
+  ]);
+  try { JSON.parse(jsonContent.toString("utf8")); } catch { throw new ContactSheetError(409, "联系表 JSON 无效"); }
+  if (!jsonContent.equals(expected.jsonContent) || !htmlContent.equals(expected.htmlContent)) {
+    throw new ContactSheetError(409, "联系表内容与当前视觉计划不一致");
+  }
+  return {
+    episodeId,
+    timelineHash,
+    directoryPath: expected.directoryPath,
+    jsonPath: expected.jsonPath,
+    htmlPath: expected.htmlPath,
+    jsonHash: expected.identity.jsonHash,
+    htmlHash: expected.identity.htmlHash,
+    identity: expected.identity,
+    identityHash: expected.identityHash,
+  };
+}
+
+export async function exportContactSheet(
+  database: DatabaseSync,
+  dataRoot: string,
+  episodeId: string,
+  timelineHash: string,
+  options: ContactSheetExportOptions = {},
+): Promise<ContactSheetExportResult> {
+  const artifact = await buildContactSheet(database, dataRoot, episodeId, timelineHash);
+  const { directoryPath, jsonPath, htmlPath, jsonContent, htmlContent } = artifact;
   const parentPath = dirname(directoryPath);
   const stagingPath = join(parentPath, `.${basename(directoryPath)}.${process.pid}.${randomUUID()}.tmp`);
   await mkdir(parentPath, { recursive: true });
@@ -323,7 +443,7 @@ export async function exportContactSheet(
     directoryPath,
     jsonPath,
     htmlPath,
-    jsonHash: sha256(jsonContent),
-    htmlHash: sha256(htmlContent),
+    jsonHash: artifact.identity.jsonHash,
+    htmlHash: artifact.identity.htmlHash,
   };
 }

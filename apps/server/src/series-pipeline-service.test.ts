@@ -1270,6 +1270,9 @@ test("故事圣经按事件 identity 复用模型切换，失败局部重试并�
     const firstJob = getJob(database, mapping.job_id)!;
     assert.equal(firstJob.type, BOOK_STORY_BIBLE_JOB_TYPE);
     assert.equal((firstJob.payload as { providerId: string }).providerId, provider.providerId);
+    const storyStepTotal = (firstJob.payload as { intervals: unknown[] }).intervals.length + 1;
+    database.prepare("UPDATE jobs SET progress=? WHERE id=?").run(1 / storyStepTotal, firstJob.id);
+    assert.deepEqual(service.get(run.id)!.progress.storyBible.steps, { completed: 1, total: storyStepTotal });
 
     const switched = { ...provider, providerId: "provider-switched", model: "model-switched" };
     service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => switched });

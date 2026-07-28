@@ -636,6 +636,13 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
   const currentScript = scriptJobs.find((item) => item.job.status === "running" || item.job.status === "queued");
   const storyMapping = getMappedStoryBibleJob(database, run.id);
   const storyJob = storyMapping ? getJob(database, storyMapping.job_id) : undefined;
+  const storyIntervals = storyJob?.payload && typeof storyJob.payload === "object" &&
+    Array.isArray((storyJob.payload as { intervals?: unknown }).intervals)
+    ? (storyJob.payload as { intervals: unknown[] }).intervals.length : undefined;
+  const storySteps = storyJob && storyIntervals !== undefined ? {
+    completed: Math.min(storyIntervals + 1, Math.max(0, Math.round(storyJob.progress * (storyIntervals + 1)))),
+    total: storyIntervals + 1,
+  } : null;
   const storyFailure = storyJob && (storyJob.status === "failed" || storyJob.status === "cancelled") ? [{
     stage: "story_bible", subjectType: "bible_chunk", subjectId: storyMapping!.subject_id,
     jobId: storyJob.id, code: storyJob.status === "cancelled" ? "job_cancelled" : storyJob.errorCode,
@@ -660,7 +667,7 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
         running: relevantJobs.filter((item) => item.job.status === "running").length,
         failed: failures.length,
       },
-      storyBible: { completed: run.storyBibleId ? 1 : 0, total: 1 },
+      storyBible: { completed: run.storyBibleId ? 1 : 0, total: 1, steps: storySteps },
       episodePlan: { completed: run.planHash ? run.episodeCount : 0, total: run.episodeCount },
       scripts: { completed: scriptJobs.filter((item) => item.job.status === "succeeded").length * 2, total: run.episodeCount * 2 },
     },

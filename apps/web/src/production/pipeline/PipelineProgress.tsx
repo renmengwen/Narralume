@@ -21,6 +21,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
     return chapter ? `第 ${chapter.chapter_index + 1} 章 · ${chapter.title}` : id;
   };
   const chapter = run.progress.chapterAnalysis;
+  const story = run.progress.storyBible;
   const presentation = pipelineStatusPresentation(run.status);
   const primaryAction = run.actions.canResume ? "resume" : run.actions.canRetry ? "retry" : undefined;
   const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败章节";
@@ -54,7 +55,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
 
       <div className="grid border border-[var(--border-subtle)]" aria-label="全本改写阶段进度">
         <ProgressRow label="章节事件分析" count={`${chapter.completed}/${chapter.total}`} detail={`复用 ${chapter.reused} · 排队 ${chapter.queued} · 执行中 ${chapter.running} · 失败 ${chapter.failed}`} />
-        <ProgressRow label="故事圣经构建" count={`${run.progress.storyBible.completed}/${run.progress.storyBible.total}`} detail={stageDetail(run, "storyBible")} />
+        <ProgressRow label="故事圣经构建" count={story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} />
         <ProgressRow label="全书分集规划" count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
         <ProgressRow label="忠实稿与包装稿" count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
       </div>
@@ -103,7 +104,11 @@ function stageDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan"
   if (run.status === "cancelled") return "已取消；不再派发任务";
   if (run.status === "failed" || run.failureMessage) return "存在失败项，请检查后重试";
   const presentation = pipelineStatusPresentation(run.status);
-  if (presentation.activeStage === stage) return "当前阶段；单次模型请求不显示虚构百分比";
+  if (presentation.activeStage === stage) {
+    const steps = stage === "storyBible" ? run.progress.storyBible.steps : null;
+    return steps ? `当前阶段；已完成 ${steps.completed}/${steps.total} 个构建步骤`
+      : "当前阶段；单次模型请求不显示虚构百分比";
+  }
   if (stage === "scripts" && presentation.stageDetail) return presentation.stageDetail;
   const progress = run.progress[stage];
   return progress.total > 0 && progress.completed === progress.total ? "阶段已完成" : "等待上游阶段完成";

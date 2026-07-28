@@ -44,7 +44,7 @@ function run(change: Partial<SeriesPipelineRun> = {}): SeriesPipelineRun {
     failureMessage: null,
     progress: {
       chapterAnalysis: { completed: 1, total: 3, reused: 1, queued: 1, running: 1, failed: 0 },
-      storyBible: { completed: 0, total: 1 },
+      storyBible: { completed: 0, total: 1, steps: null },
       episodePlan: { completed: 0, total: 10 },
       scripts: { completed: 0, total: 20 },
     },
@@ -152,10 +152,27 @@ test("运行页如实展示后端冻结的旧任务单批单并发设置", () =>
   assert.doesNotMatch(html, />10章|>8批/);
 });
 
+test("故事圣经构建展示后端返回的真实步骤进度", () => {
+  const current = run({
+    status: "building_story_bible",
+    progress: {
+      ...run().progress,
+      storyBible: { completed: 0, total: 1, steps: { completed: 1, total: 91 } },
+    },
+    current: { stage: "story_bible", subjectType: "bible_chunk", subjectId: "chunk_1", jobId: "job_bible" },
+  });
+  const html = renderToString(createElement(PipelineProgress, {
+    run: current, chapters, operation: "正在构建故事圣经。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(html, /1\/91/);
+  assert.match(html, /已完成 1\/91 个构建步骤/);
+  assert.doesNotMatch(html, /单次模型请求不显示虚构百分比/);
+});
+
 test("覆盖检查保持处理中语义，自动生产完成后明确等待逐集审核", () => {
   const completeProgress = {
     chapterAnalysis: { completed: 3, total: 3, reused: 0, queued: 0, running: 0, failed: 0 },
-    storyBible: { completed: 1, total: 1 },
+    storyBible: { completed: 1, total: 1, steps: null },
     episodePlan: { completed: 3, total: 3 },
     scripts: { completed: 6, total: 6 },
   };

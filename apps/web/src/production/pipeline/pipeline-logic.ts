@@ -21,7 +21,7 @@ export interface SeriesPipelineRun {
   failureMessage: string | null;
   progress: {
     chapterAnalysis: { completed: number; total: number; reused: number; queued: number; running: number; failed: number };
-    storyBible: { completed: number; total: number };
+    storyBible: { completed: number; total: number; steps: { completed: number; total: number } | null };
     episodePlan: { completed: number; total: number };
     scripts: { completed: number; total: number };
   };

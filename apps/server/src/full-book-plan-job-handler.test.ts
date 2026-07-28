@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FULL_BOOK_PLAN_IDLE_TIMEOUT_MS,
   FULL_BOOK_PLAN_JOB_TYPE,
+  FULL_BOOK_PLAN_TIMEOUT_MS,
+  FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS,
   createFullBookPlanJobHandler,
   fullBookPlanJobRequestHash,
   type FullBookPlanJobPayload,
@@ -22,6 +25,12 @@ const limits: FullBookPlanBuildLimits = {
   maxChaptersPerInterval: 1, maxEventsPerInterval: 1, maxInputBytesPerInterval: 1_000,
   maxFinalIntervals: 2, maxFinalInputBytes: 100_000,
 };
+
+test("全书规划使用有限首事件、空闲与总时限", () => {
+  assert.equal(FULL_BOOK_PLAN_TIMEOUT_MS, 180_000);
+  assert.equal(FULL_BOOK_PLAN_IDLE_TIMEOUT_MS, 180_000);
+  assert.equal(FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS, 900_000);
+});
 
 function payload(): FullBookPlanJobPayload {
   const storyBible = { id: "bible_a", contentHash: "b".repeat(64) };
@@ -44,6 +53,13 @@ function plan(events: string[]) {
     index: index + 1, title: `第 ${index + 1} 集`, storyArc: "忠实覆盖原文事件",
     sourceEventIds: [event], recap: null, nextHook: null,
   })) };
+}
+
+function streamedPlanResponse(value: unknown) {
+  const delta = JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(value) });
+  return new Response(`data: ${delta}\n\ndata: {"type":"response.completed"}\n\n`, {
+    status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" },
+  });
 }
 
 function context(task: FullBookPlanJobPayload) {
@@ -69,10 +85,12 @@ function context(task: FullBookPlanJobPayload) {
 test("依次执行 interval 和独立 final，产出恰好 N 集的服务端验证计划", async () => {
   const task = payload();
   const calls: string[] = [];
+  const streamFlags: unknown[] = [];
   const responses = [plan(["event_0"]), plan(["event_1"]), plan(["event_0", "event_1"])];
   let index = 0;
   const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as { input: string };
+    streamFlags.push((request as { stream?: unknown }).stream);
     const prompt = request.input.split("\n").at(-1)!;
     calls.push((JSON.parse(prompt) as { kind: string }).kind);
     return new Response(JSON.stringify({ output_text: JSON.stringify(responses[index++]) }), { status: 200 });
@@ -82,11 +100,38 @@ test("依次执行 interval 和独立 final，产出恰好 N 集的服务端验�
     plan: { episodes: unknown[] }; validation: { episodeCount: number; intervalQuotas: unknown[] };
   };
   assert.deepEqual(calls, ["interval", "interval", "final"]);
+  assert.deepEqual(streamFlags, [true, true, true]);
   assert.equal(result.plan.episodes.length, 2);
   assert.equal(result.validation.episodeCount, 2);
   assert.equal(result.validation.intervalQuotas.length, 2);
   assert.deepEqual(execution.progress, [1 / 3, 2 / 3, 1]);
   assert.equal(execution.checkpoints.length, 3);
+});
+
+test("全书规划只在流式成功终态后解析", async () => {
+  const responses = [plan(["event_0"]), plan(["event_1"]), plan(["event_0", "event_1"])];
+  let calls = 0;
+  const fetchImpl = (async () => streamedPlanResponse(responses[calls++])) as typeof fetch;
+  const result = await createFullBookPlanJobHandler(config, { fetchImpl })(context(payload()).value) as {
+    plan: { episodes: unknown[] };
+  };
+  assert.equal(calls, 3);
+  assert.equal(result.plan.episodes.length, 2);
+});
+
+test("流式响应无成功终态时不纠错", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response('data: {"type":"response.output_text.delta","delta":"{}"}\n\n', {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch;
+  await assert.rejects(
+    () => createFullBookPlanJobHandler(config, { fetchImpl })(context(payload()).value),
+    /没有明确成功终态/,
+  );
+  assert.equal(calls, 1);
 });
 
 test("冻结 identity 被篡改时在模型调用前失败", async () => {

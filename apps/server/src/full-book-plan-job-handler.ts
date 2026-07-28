@@ -17,8 +17,12 @@ import {
 } from "./full-book-plan-job.js";
 import { FullBookPlanContractError } from "./full-book-plan-contract.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { streamedText } from "./text-model-stream.js";
 
 export const FULL_BOOK_PLAN_JOB_TYPE = "full_book_plan_build";
+export const FULL_BOOK_PLAN_TIMEOUT_MS = 180_000;
+export const FULL_BOOK_PLAN_IDLE_TIMEOUT_MS = 180_000;
+export const FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS = 900_000;
 
 export interface FullBookPlanJobPayload {
   contractVersion: typeof FULL_BOOK_PLAN_JOB_CONTRACT_VERSION;
@@ -155,11 +159,12 @@ async function callModel(
   fetchImpl: typeof fetch,
   input: unknown,
   signal: AbortSignal,
+  onActivity: () => void,
   correction?: string,
 ) {
   const request = textModelRequest(config, [
     modelPrompt(input, correction),
-  ].join("\n"));
+  ].join("\n"), 8192, true);
   const response = await fetchImpl(request.endpoint, {
     method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
   });
@@ -167,7 +172,10 @@ async function callModel(
     await response.body?.cancel();
     throw new Error(`全书规划模型请求失败（HTTP ${response.status}）`);
   }
-  try { return JSON.parse(responseText(await limitedJson(response))) as unknown; }
+  const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+    ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+    : responseText(await limitedJson(response));
+  try { return JSON.parse(text) as unknown; }
   catch (error) {
     if (error instanceof Error && /大小限制/u.test(error.message)) throw error;
     throw new Error("全书规划模型返回了无效 JSON");
@@ -176,30 +184,49 @@ async function callModel(
 
 async function callAndParse<T>(
   context: Parameters<JobHandler>[0],
-  call: (signal: AbortSignal, correction?: string) => Promise<unknown>,
+  call: (signal: AbortSignal, correction: string | undefined, onActivity: () => void) => Promise<unknown>,
   parse: (value: unknown) => T,
 ) {
-  const raw = await withCancellation(context, (signal) => call(signal));
+  const raw = await withCancellation(context, (signal, onActivity) => call(signal, undefined, onActivity));
   try {
     return parse(raw);
   } catch (error) {
     if (!(error instanceof FullBookPlanContractError)) throw error;
-    const corrected = await withCancellation(context, (signal) => call(signal, error.message));
+    const corrected = await withCancellation(context,
+      (signal, onActivity) => call(signal, error.message, onActivity));
     return parse(corrected);
   }
 }
 
-async function withCancellation<T>(context: Parameters<JobHandler>[0], call: (signal: AbortSignal) => Promise<T>) {
+async function withCancellation<T>(
+  context: Parameters<JobHandler>[0],
+  call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+) {
   context.throwIfCancellationRequested();
   const controller = new AbortController();
+  const idleController = new AbortController();
+  const totalController = new AbortController();
   const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
+  let idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")),
+    FULL_BOOK_PLAN_TIMEOUT_MS);
+  const total = setTimeout(() => totalController.abort(new DOMException("total timeout", "TimeoutError")),
+    FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS);
+  const onActivity = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")),
+      FULL_BOOK_PLAN_IDLE_TIMEOUT_MS);
+  };
   try {
-    return await call(AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]));
+    return await call(AbortSignal.any([
+      controller.signal,
+      idleController.signal,
+      totalController.signal,
+    ]), onActivity);
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("全书规划模型请求超时");
     throw error;
-  } finally { clearInterval(poll); }
+  } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
 }
 
 export function createFullBookPlanJobHandler(
@@ -215,7 +242,7 @@ export function createFullBookPlanJobHandler(
       const input = { kind: "interval" as const, request };
       const parse = fullBookPlanIntervalResponseParser(request);
       const parsed = await callAndParse(context,
-        (signal, correction) => callModel(config, fetchImpl, input, signal, correction), parse);
+        (signal, correction, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, correction), parse);
       context.throwIfCancellationRequested();
       verified.push(parsed);
       context.commitCheckpoint("full-book-plan-interval", request.identityHash, request.identityHash, () => undefined);
@@ -228,7 +255,7 @@ export function createFullBookPlanJobHandler(
     const finalInput = { kind: "final" as const, request: finalRequest };
     const parseFinal = fullBookPlanFinalResponseParser(finalRequest);
     const final = await callAndParse(context,
-      (signal, correction) => callModel(config, fetchImpl, finalInput, signal, correction), parseFinal);
+      (signal, correction, onActivity) => callModel(config, fetchImpl, finalInput, signal, onActivity, correction), parseFinal);
     context.throwIfCancellationRequested();
     context.commitCheckpoint("full-book-plan-final", finalRequest.identityHash, finalRequest.identityHash, () => undefined);
     context.reportProgress(1);

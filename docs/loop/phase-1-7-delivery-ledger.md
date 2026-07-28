@@ -569,6 +569,18 @@ PC-02 当前 checkpoint：
 | 业务提交 | `d5f46b0 perf(ai): 按配置并发构建故事圣经区间` |
 | 剩余风险 / 恢复 | 暂停不会无损跳过旧 interval checkpoint；用户已接受当前少量进度重跑。当前 Job 已继续执行，不保证复用重启前已完成区间；需要回退时先通过正式 pause API 暂停后续任务，再 revert `d5f46b0`，不涉及数据迁移。 |
 
+## 2026-07-28 故事圣经构建步骤进度展示
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AI-STORY-BIBLE-PROGRESS-01` / 页面展示故事圣经 interval 与 final 的真实完成进度，例如 `1/91`。 |
+| 状态 | `complete` |
+| 设计系统 | OpenDesign `narralume-product`：复用现有阶段进度行、暖中性紧凑状态样式和中文状态文案；不新增卡片、装饰性仪表盘、虚构百分比或模型 token 增量展示。 |
+| 实现边界 | 流水线 API 从当前映射 Job 的冻结 payload 计算 `steps.total = intervals.length + 1`，由 Job 持久 `progress` 投影 `steps.completed`；Web 轮询原接口并在“故事圣经构建”行显示真实 `completed/total`。保留原有阶段级 `0/1`、`1/1` 合同，不新增数据库字段或依赖。 |
+| 验证证据 | Server 聚焦 `31 PASS / 0 FAIL`、Web 聚焦 `10 PASS / 0 FAIL`；完整 Server 测试退出码 0、完整 Web `98 PASS / 0 FAIL`；两端 typecheck/build 与 `git diff --check` 全部 PASS。正式 API 已返回 `storyBible.steps.total=91`。 |
+| 业务提交 | `c1c97d4 feat(auto): 展示故事圣经构建步骤进度` |
+| 运行状态 / 风险 | 后端源码 watch 热更新使真实 Story Bible Job 进入 attempt 3/3 并从 `0/91` 重跑；当前仍为 running、租约持续续期、无错误。本 Task 完成后不再修改后端或重启服务，避免再次打断在途请求。 |
+
 ## 决策与剩余风险
 
 - 2026-07-24：只移植 MuseDock Delivery Loop 方法，未复制业务代码或增加运行时依赖。

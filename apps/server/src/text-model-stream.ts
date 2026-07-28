@@ -1,4 +1,7 @@
-const MAX_STREAM_BYTES = 1024 * 1024;
+const MAX_STREAM_TEXT_BYTES = 1024 * 1024;
+const MAX_STREAM_EVENT_BYTES = 1024 * 1024;
+const MAX_STREAM_LINE_BUFFER_BYTES = 1024 * 1024;
+const MAX_STREAM_TRANSPORT_BYTES = 8 * 1024 * 1024;
 
 type TextModelProtocol = "openai-response" | "anthropic-message";
 
@@ -30,7 +33,7 @@ export async function streamedText(
   options: StreamTextOptions = {},
 ) {
   const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_STREAM_BYTES) {
+  if (Number.isFinite(declared) && declared > MAX_STREAM_TRANSPORT_BYTES) {
     await response.body?.cancel();
     throw streamError("原始响应超过大小限制");
   }
@@ -46,7 +49,7 @@ export async function streamedText(
 
   const append = (value: string) => {
     text += value;
-    if (text.length > MAX_STREAM_BYTES) throw streamError("文本超过大小限制");
+    if (text.length > MAX_STREAM_TEXT_BYTES) throw streamError("文本超过大小限制");
   };
   const dispatch = () => {
     if (dataLines.length === 0) {
@@ -94,7 +97,7 @@ export async function streamedText(
     if (field === "event") eventName = fieldValue;
     else if (field === "data") {
       dataLines.push(fieldValue);
-      if (dataLines.join("\n").length > MAX_STREAM_BYTES) throw streamError("事件超过大小限制");
+      if (dataLines.join("\n").length > MAX_STREAM_EVENT_BYTES) throw streamError("事件超过大小限制");
     }
   };
   const consumeLines = (eof = false) => {
@@ -108,7 +111,7 @@ export async function streamedText(
       start = cursor + 1;
     }
     buffer = buffer.slice(start);
-    if (buffer.length > MAX_STREAM_BYTES) throw streamError("行缓冲超过大小限制");
+    if (buffer.length > MAX_STREAM_LINE_BUFFER_BYTES) throw streamError("行缓冲超过大小限制");
     if (eof && buffer) {
       line(buffer);
       buffer = "";
@@ -126,7 +129,7 @@ export async function streamedText(
         break;
       }
       rawBytes += value.byteLength;
-      if (rawBytes > MAX_STREAM_BYTES) throw streamError("原始响应超过大小限制");
+      if (rawBytes > MAX_STREAM_TRANSPORT_BYTES) throw streamError("原始响应超过大小限制");
       if (value.byteLength > 0) options.onActivity?.();
       try { buffer += decoder.decode(value, { stream: true }); }
       catch { throw streamError("UTF-8 编码无效"); }

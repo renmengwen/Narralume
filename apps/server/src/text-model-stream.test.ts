@@ -42,6 +42,26 @@ test("Anthropic SSE 聚合初始文本和 text_delta，并要求 message_stop", 
   assert.equal(await streamedText(response([body]), "anthropic-message"), "{}");
 });
 
+test("原始 SSE 超过 1MiB 但正文很小时可成功", async () => {
+  const ignoredComment = `:${"x".repeat(512 * 1024)}\n`;
+  const body = [
+    ignoredComment,
+    ignoredComment,
+    ignoredComment,
+    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{}\"}\n\n",
+    "data: {\"type\":\"response.completed\"}\n\n",
+  ];
+  assert.equal(await streamedText(response(body), "openai-response"), "{}");
+});
+
+test("原始 SSE 超过 8MiB 仍失败", async () => {
+  const ignoredComment = `:${"x".repeat(512 * 1024)}\n`;
+  await assert.rejects(
+    () => streamedText(response(Array.from({ length: 17 }, () => ignoredComment)), "openai-response"),
+    /原始响应超过大小限制/,
+  );
+});
+
 test("流式失败终态、截断、无效事件和超限均失败", async (t) => {
   const cases: Array<[string, Response, RegExp]> = [
     ["failed", response(["data: {\"type\":\"response.failed\"}\n\n"]), /失败终态/],
@@ -51,7 +71,7 @@ test("流式失败终态、截断、无效事件和超限均失败", async (t) =
     ["DONE without terminal", response(["data: [DONE]\n\n"]), /没有明确成功终态/],
     ["anthropic error", response(["data: {\"type\":\"error\"}\n\n"]), /失败终态/],
     ["invalid event", response(["data: {not-json}\n\n"]), /事件不是有效 JSON/],
-    ["raw limit", response([new Uint8Array(1024 * 1024 + 1)]), /大小限制/],
+    ["line buffer limit", response([new Uint8Array(1024 * 1024 + 1)]), /大小限制/],
   ];
   for (const [name, value, expected] of cases) await t.test(name, async () => {
     await assert.rejects(() => streamedText(value, name === "anthropic error" ? "anthropic-message" : "openai-response"), expected);

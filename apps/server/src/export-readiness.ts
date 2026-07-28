@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { getContactSheetReviewWorkspace } from "./contact-sheet-review.js";
 import { openVerifiedFinalExport } from "./final-video.js";
 import type { JobStatus } from "./job-store.js";
 import { loadRenderPlanSnapshot, type RenderPlanSnapshot } from "./render-chunk-job.js";
@@ -32,7 +33,7 @@ export interface ExportReadinessResult {
     scriptVersionId: string;
     approvalRevision: number;
     renderIdentityHash: string;
-    contactSheetReady: true;
+    contactSheetReady: boolean;
   };
   renderChunks: { ready: boolean; completed: number; total: number };
   jobs: { renderChunks: ExportReadinessJob | null; finalVideo: ExportReadinessJob | null };
@@ -96,6 +97,30 @@ function listeningReviewBlocker(database: DatabaseSync, episodeId: string, timel
   return hasOldIdentity
     ? { code: "tts_listening_review_stale", message: "人工听审身份已变化，请按当前语音重新听审" }
     : { code: "tts_listening_review_missing", message: "当前语音尚未完成人工听审" };
+}
+
+async function contactSheetReviewBlocker(
+  database: DatabaseSync,
+  dataRoot: string,
+  episodeId: string,
+  timelineHash: string,
+) {
+  let workspace;
+  try {
+    workspace = await getContactSheetReviewWorkspace(database, dataRoot, episodeId, timelineHash);
+  } catch (error) {
+    return {
+      code: "contact_sheet_unavailable",
+      message: error instanceof Error ? error.message : "当前联系表无法进行人工审核",
+    };
+  }
+  if (workspace.latestReview?.action === "approve") return null;
+  if (workspace.latestReview?.action === "reject") {
+    return { code: "contact_sheet_review_rejected", message: "当前联系表的人工审核未通过" };
+  }
+  return workspace.hasStaleReview
+    ? { code: "contact_sheet_review_stale", message: "联系表身份已变化，请按当前视觉计划重新审核" }
+    : { code: "contact_sheet_review_missing", message: "当前联系表尚未完成人工审核" };
 }
 
 function exactResult(row: JobRow, snapshot: RenderPlanSnapshot) {
@@ -206,7 +231,13 @@ export async function deriveExportReadiness(input: {
   const renderJob = latestJob(input.database, "render_chunks", snapshot);
   const finalJob = latestJob(input.database, "final_video", snapshot);
   const candidate = finalResult(input.database, snapshot);
-  const listeningBlocker = listeningReviewBlocker(input.database, snapshot.episodeId, snapshot.timelineHash);
+  const [listeningBlocker, contactSheetBlocker] = await Promise.all([
+    Promise.resolve().then(() => listeningReviewBlocker(input.database, snapshot.episodeId, snapshot.timelineHash)),
+    contactSheetReviewBlocker(input.database, input.dataRoot, snapshot.episodeId, snapshot.timelineHash),
+  ]);
+  const blockers = [listeningBlocker, contactSheetBlocker].filter(
+    (blocker): blocker is { code: string; message: string } => blocker !== null,
+  );
   let finalExport: ExportReadinessResult["finalExport"] = null;
   if (candidate) {
     try {
@@ -223,13 +254,13 @@ export async function deriveExportReadiness(input: {
   return {
     episodeId: snapshot.episodeId,
     timelineHash: snapshot.timelineHash,
-    productionReady: listeningBlocker === null,
-    blockers: listeningBlocker === null ? [] : [listeningBlocker],
+    productionReady: blockers.length === 0,
+    blockers,
     identity: {
       scriptVersionId: snapshot.scriptVersionId,
       approvalRevision: snapshot.approvalRevision,
       renderIdentityHash: renderIdentityHash(snapshot),
-      contactSheetReady: true,
+      contactSheetReady: contactSheetBlocker === null,
     },
     renderChunks: { ready: snapshot.chunks.length > 0 && completed === snapshot.chunks.length,
       completed, total: snapshot.chunks.length },

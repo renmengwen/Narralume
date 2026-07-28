@@ -13,6 +13,7 @@ import { IMAGE_CANDIDATE_JOB_TYPE } from "./image-candidate-job.js";
 import { writeModelConfig } from "./model-config.js";
 import { changeScriptApproval } from "./script-approval-store.js";
 import { TTS_LISTENING_REVIEW_JOB_TYPE } from "./tts-listening-review.js";
+import { CONTACT_SHEET_REVIEW_JOB_TYPE } from "./contact-sheet-review.js";
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -825,7 +826,7 @@ test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错
     seed.close();
   }
 
-  const app = buildApp({ dataRoot, logger: false });
+  let app = buildApp({ dataRoot, logger: false, jobPollMs: 10_000 });
   const imageHash = createHash("sha256").update(image).digest("hex");
   const storedImagePath = join(dataRoot, "assets", "candidates", imageHash.slice(0, 2), `${imageHash}.png`);
   let replacedAtSend = false;
@@ -891,12 +892,58 @@ test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错
     assert.equal(listed.json().items[0].startMs, 0);
     assert.equal(listed.json().items[0].endMs, 2000);
 
+    const missingExport = await app.inject({
+      method: "GET", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+    });
+    assert.equal(missingExport.statusCode, 409, missingExport.body);
+
     const exported = await app.inject({
       method: "POST", url: "/api/episodes/visual_episode/contact-sheet", payload: { timelineHash },
     });
     assert.equal(exported.statusCode, 200, exported.body);
     assert.equal(exported.json().message, "联系表已导出");
     assert.equal(exported.json().contactSheet.timelineHash, timelineHash);
+
+    const reviewWorkspace = await app.inject({
+      method: "GET", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+    });
+    assert.equal(reviewWorkspace.statusCode, 200, reviewWorkspace.body);
+    const workspace = reviewWorkspace.json().workspace as {
+      identityHash: string;
+      contactSheet: Record<string, unknown>;
+      latestReview: { action: string } | null;
+    };
+    assert.deepEqual(Object.keys(workspace.contactSheet).sort(), [
+      "directoryPath", "episodeId", "htmlHash", "htmlPath", "jsonHash", "jsonPath", "timelineHash",
+    ]);
+    assert.equal(workspace.latestReview, null);
+    assert.equal((await app.inject({
+      method: "GET", url: "/api/episodes/visual_episode/contact-sheet/review?timelineHash=bad",
+    })).statusCode, 400);
+    assert.equal((await app.inject({
+      method: "POST", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+      payload: { action: "approve", expectedIdentityHash: workspace.identityHash, identity: {} },
+    })).statusCode, 400);
+    assert.equal((await app.inject({
+      method: "POST", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+      payload: { action: "approve", expectedIdentityHash: "bad" },
+    })).statusCode, 400);
+    assert.equal((await app.inject({
+      method: "POST", url: `/api/episodes/missing/contact-sheet/review?timelineHash=${timelineHash}`,
+      payload: { action: "approve", expectedIdentityHash: workspace.identityHash },
+    })).statusCode, 404);
+    assert.equal((await app.inject({
+      method: "POST", url: "/api/jobs",
+      payload: { type: CONTACT_SHEET_REVIEW_JOB_TYPE, payload: { identity: { episodeId: "forged" } } },
+    })).statusCode, 400);
+
+    const rejected = await app.inject({
+      method: "POST", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+      payload: { action: "reject", expectedIdentityHash: workspace.identityHash, notes: "镜头衔接需调整" },
+    });
+    assert.equal(rejected.statusCode, 201, rejected.body);
+    const rejectJobId = rejected.json().job.id as string;
+
     const candidateImage = await app.inject({ method: "GET", url: `/api/candidates/${candidateId}/image` });
     assert.equal(candidateImage.statusCode, 200, candidateImage.body);
     assert.equal(replacedAtSend, true);
@@ -933,6 +980,46 @@ test("视觉段 API 派生时间并保留显式资产选择、幂等与中文错
     });
     assert.equal(missing.statusCode, 404);
     assert.match(missing.json().message, /分集不存在/);
+
+    await writeFile(storedImagePath, image);
+    await app.close();
+    app = buildApp({ dataRoot, logger: false, jobPollMs: 5 });
+    await app.ready();
+    const rejectProbe = openDatabase(dataRoot);
+    try {
+      await waitUntil(() => getJob(rejectProbe.database, rejectJobId)?.status === "succeeded");
+    } finally {
+      rejectProbe.close();
+    }
+    const recoveredReject = await app.inject({
+      method: "GET", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+    });
+    assert.equal(recoveredReject.statusCode, 200, recoveredReject.body);
+    assert.equal(recoveredReject.json().workspace.latestReview.action, "reject");
+
+    const approvedReview = await app.inject({
+      method: "POST", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+      payload: { action: "approve", expectedIdentityHash: workspace.identityHash, notes: "整集联系表已核对" },
+    });
+    assert.equal(approvedReview.statusCode, 201, approvedReview.body);
+    const duplicateReview = await app.inject({
+      method: "POST", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+      payload: { action: "approve", expectedIdentityHash: workspace.identityHash, notes: "整集联系表已核对" },
+    });
+    assert.equal(duplicateReview.statusCode, 201, duplicateReview.body);
+    assert.equal(duplicateReview.json().job.id, approvedReview.json().job.id);
+    const approveJobId = approvedReview.json().job.id as string;
+    const approveProbe = openDatabase(dataRoot);
+    try {
+      await waitUntil(() => getJob(approveProbe.database, approveJobId)?.status === "succeeded");
+    } finally {
+      approveProbe.close();
+    }
+    const recoveredApprove = await app.inject({
+      method: "GET", url: `/api/episodes/visual_episode/contact-sheet/review?timelineHash=${timelineHash}`,
+    });
+    assert.equal(recoveredApprove.statusCode, 200, recoveredApprove.body);
+    assert.equal(recoveredApprove.json().workspace.latestReview.jobId, approveJobId);
   } finally {
     await app.close();
     await rm(dataRoot, { recursive: true, force: true });

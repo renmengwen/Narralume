@@ -125,6 +125,13 @@ import {
   resolveVerifiedCandidateFile,
 } from "./contact-sheet.js";
 import {
+  CONTACT_SHEET_REVIEW_JOB_TYPE,
+  ContactSheetReviewError,
+  createContactSheetReviewHandler,
+  enqueueContactSheetReview,
+  getContactSheetReviewWorkspace,
+} from "./contact-sheet-review.js";
+import {
   listVisualSegments,
   putVisualSegment,
   type PutVisualSegmentInput,
@@ -221,6 +228,11 @@ interface PutVisualSegmentBody {
   assets?: unknown;
 }
 interface ExportContactSheetBody { timelineHash?: unknown }
+interface ContactSheetReviewBody {
+  action?: unknown;
+  expectedIdentityHash?: unknown;
+  notes?: unknown;
+}
 
 function imageProviderFromEnvironment(): OpenAiImageConfig | null {
   const config = {
@@ -376,6 +388,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
     [TTS_LISTENING_REVIEW_JOB_TYPE]: createTtsListeningReviewJobHandler(connection.database),
+    [CONTACT_SHEET_REVIEW_JOB_TYPE]: createContactSheetReviewHandler(connection.database, dataRoot),
     [PLACEHOLDER_VIDEO_JOB_TYPE]: createPlaceholderVideoJobHandler(connection.database, dataRoot),
     [RENDER_CHUNKS_JOB_TYPE]: createRenderChunksJobHandler(connection.database, dataRoot),
     [FINAL_VIDEO_JOB_TYPE]: createFinalVideoJobHandler(connection.database, dataRoot),
@@ -784,6 +797,62 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
+  app.get<{
+    Params: { episodeId: string };
+    Querystring: { timelineHash?: string };
+  }>("/api/episodes/:episodeId/contact-sheet/review", async (request, reply) => {
+    const timelineHash = request.query.timelineHash;
+    if (Object.keys(request.query).some((key) => key !== "timelineHash") ||
+        typeof timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(timelineHash)) {
+      return reply.code(400).send({ ok: false, message: "联系表审核只能指定有效的时间轴哈希" });
+    }
+    try {
+      const workspace = await getContactSheetReviewWorkspace(
+        connection.database, dataRoot, request.params.episodeId, timelineHash,
+      );
+      return { ok: true, workspace };
+    } catch (error) {
+      if (error instanceof ContactSheetReviewError || error instanceof ContactSheetError ||
+          error instanceof VisualSegmentStoreError || error instanceof ScriptApprovalStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post<{
+    Params: { episodeId: string };
+    Querystring: { timelineHash?: string };
+    Body: ContactSheetReviewBody;
+  }>("/api/episodes/:episodeId/contact-sheet/review", async (request, reply) => {
+    const timelineHash = request.query.timelineHash;
+    const body = request.body;
+    if (Object.keys(request.query).some((key) => key !== "timelineHash") ||
+        typeof timelineHash !== "string" || !/^[0-9a-f]{64}$/.test(timelineHash)) {
+      return reply.code(400).send({ ok: false, message: "联系表审核只能指定有效的时间轴哈希" });
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).some((key) => !["action", "expectedIdentityHash", "notes"].includes(key))) {
+      return reply.code(400).send({ ok: false, message: "联系表审核请求只能包含操作、预期身份哈希和备注" });
+    }
+    try {
+      const job = await enqueueContactSheetReview(connection.database, dataRoot, {
+        episodeId: request.params.episodeId,
+        timelineHash,
+        action: body.action as "approve" | "reject",
+        expectedIdentityHash: body.expectedIdentityHash as string,
+        notes: body.notes as string | null | undefined,
+      });
+      return reply.code(201).send({ ok: true, message: "联系表审核任务已创建", job });
+    } catch (error) {
+      if (error instanceof ContactSheetReviewError || error instanceof ContactSheetError ||
+          error instanceof VisualSegmentStoreError || error instanceof ScriptApprovalStoreError) {
+        return reply.code(error.statusCode).send({ ok: false, message: error.message });
+      }
+      throw error;
+    }
+  });
+
   const episodeIdForRoute = (seriesId: string, episodeIndex: string) => {
     const index = Number(episodeIndex);
     if (!Number.isSafeInteger(index) || index < 1) {
@@ -1007,6 +1076,9 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
     if (type === TTS_LISTENING_REVIEW_JOB_TYPE) {
       return reply.code(400).send({ ok: false, message: "人工听审任务只能通过当前语音时间轴的听审入口创建" });
+    }
+    if (type === CONTACT_SHEET_REVIEW_JOB_TYPE) {
+      return reply.code(400).send({ ok: false, message: "人工联系表审核任务只能通过当前联系表审核入口创建" });
     }
     let requestImageProvider: OpenAiImageConfig | null = null;
     let requestTextProvider: ChapterTextModelConfig | null = null;

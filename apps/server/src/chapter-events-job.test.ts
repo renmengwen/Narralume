@@ -7,6 +7,8 @@ import test from "node:test";
 
 import { buildApp } from "./app.js";
 import {
+  CHAPTER_ANALYSIS_IDLE_TIMEOUT_MS,
+  CHAPTER_ANALYSIS_TOTAL_TIMEOUT_MS,
   CHAPTER_ANALYSIS_TIMEOUT_MS,
   CHAPTER_EVENTS_ANALYZE_JOB_TYPE,
   CHAPTER_EVENTS_JOB_TYPE,
@@ -21,8 +23,10 @@ const textProvider = {
   providerId: "test-provider",
 };
 
-test("章节分析使用真实 Gate 的三分钟整章超时", () => {
+test("章节分析使用首活动、空闲三分钟与十五分钟总时限", () => {
   assert.equal(CHAPTER_ANALYSIS_TIMEOUT_MS, 180_000);
+  assert.equal(CHAPTER_ANALYSIS_IDLE_TIMEOUT_MS, 180_000);
+  assert.equal(CHAPTER_ANALYSIS_TOTAL_TIMEOUT_MS, 900_000);
 });
 
 async function waitForJob(app: ReturnType<typeof buildApp>, jobId: string) {
@@ -226,6 +230,9 @@ test("自动分析复用身份不包含 provider 和 model 且保留首次执行
     assert.equal(firstJob.payload.analysisContractVersion, "chapter-events-analysis-v1");
     assert.equal(firstJob.payload.promptContractVersion, "chapter-events-prompt-v2");
     assert.equal(firstJob.payload.parserContractVersion, "chapter-events-parser-v1");
+    const persisted = openDatabase(dataRoot);
+    persisted.database.prepare("UPDATE jobs SET max_attempts=3 WHERE id=?").run(firstJob.id);
+    persisted.close();
     await firstApp.close();
 
     const secondApp = buildApp({
@@ -244,6 +251,7 @@ test("自动分析复用身份不包含 provider 和 model 且保留首次执行
     assert.equal(reused.json().job.id, firstJob.id);
     assert.equal(reused.json().job.payload.providerId, "provider-a");
     assert.equal(reused.json().job.payload.model, "model-a");
+    assert.equal(reused.json().job.maxAttempts, 3);
   } finally {
     await firstApp.close();
     await rm(dataRoot, { recursive: true, force: true });

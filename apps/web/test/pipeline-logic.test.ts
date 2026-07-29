@@ -37,7 +37,7 @@ function run(change: Partial<SeriesPipelineRun> = {}): SeriesPipelineRun {
     resumeStatus: null,
     episodeCount: 10,
     targetDurationSeconds: 1200,
-    chapterBatchSize: 10,
+    chapterBatchSize: 1,
     chapterConcurrency: 8,
     sourceStartChapterId: "chapter_1",
     sourceEndChapterId: "chapter_3",
@@ -57,19 +57,19 @@ function run(change: Partial<SeriesPipelineRun> = {}): SeriesPipelineRun {
   };
 }
 
-test("全本设置只接受连续范围、成片规格和安全的分析批次", () => {
-  const input = { episodeCount: 10, targetDurationSeconds: 1200, chapterBatchSize: 10, chapterConcurrency: 8, sourceStartChapterId: "chapter_1", sourceEndChapterId: "chapter_3" };
+test("全本设置只接受连续范围、成片规格和单章滚动并发", () => {
+  const input = { episodeCount: 10, targetDurationSeconds: 1200, chapterBatchSize: 1, chapterConcurrency: 8, sourceStartChapterId: "chapter_1", sourceEndChapterId: "chapter_3" };
   assert.deepEqual(pipelineCreateInput(input, chapters, policy), input);
   assert.equal(pipelineRangeCount(chapters, "chapter_1", "chapter_3"), 3);
   assert.throws(() => pipelineCreateInput({ ...input, sourceStartChapterId: "chapter_3", sourceEndChapterId: "chapter_1" }, chapters, policy), /顺序正确/);
   assert.throws(() => pipelineCreateInput({ ...input, episodeCount: 0 }, chapters, policy), /1～1000/);
   assert.throws(() => pipelineCreateInput({ ...input, targetDurationSeconds: 61 }, chapters, policy), /30 秒递增/);
-  assert.throws(() => pipelineCreateInput({ ...input, chapterBatchSize: 21 }, chapters, policy), /1～20/);
-  assert.equal(pipelineCreateInput({ ...input, chapterConcurrency: 50 }, chapters, policy).chapterConcurrency, 50);
-  assert.throws(() => pipelineCreateInput({ ...input, chapterConcurrency: 51 }, chapters, policy), /1～50/);
+  assert.throws(() => pipelineCreateInput({ ...input, chapterBatchSize: 2 }, chapters, policy), /每章一个独立任务/);
+  assert.equal(pipelineCreateInput({ ...input, chapterConcurrency: 8 }, chapters, policy).chapterConcurrency, 8);
+  assert.throws(() => pipelineCreateInput({ ...input, chapterConcurrency: 9 }, chapters, policy), /1～8/);
 });
 
-test("全本设置展示默认批次、并发和输入安全说明", () => {
+test("全本设置隐藏批次并展示默认章级并发", () => {
   const html = renderToString(createElement(PipelineSetup, {
     chapters,
     chapterTotal: chapters.length,
@@ -79,13 +79,11 @@ test("全本设置展示默认批次、并发和输入安全说明", () => {
     operation: "设置已就绪",
     onCreate: () => undefined,
   }));
-  assert.match(html, /每批最多章节数/);
-  assert.match(html, /value="10"/);
-  assert.match(html, /实际批次会按输入安全上限自动缩小/);
-  assert.match(html, /并发批次数/);
+  assert.doesNotMatch(html, /每批最多章节数|并发批次数/);
+  assert.match(html, /章节分析并发数/);
   assert.match(html, /value="8"/);
-  assert.match(html, /max="50"/);
-  assert.match(html, /并发越高越可能触发供应商限流/);
+  assert.match(html, /max="8"/);
+  assert.match(html, /每章独立分析/);
   assert.match(html, /min-h-11/);
 });
 
@@ -128,21 +126,21 @@ test("URL 中跨系列 runId 不会被采用并回退当前系列 run", async ()
   }
 });
 
-test("全本进度渲染真实数量和当前章节，不伪造百分比", () => {
+test("全本进度渲染真实章数和并发状态，不冒充唯一当前章节", () => {
   const html = renderToString(createElement(PipelineProgress, {
     run: run(), chapters, operation: "已恢复全本改写任务。", onControl: () => undefined, onReset: () => undefined,
   }));
-  assert.match(html, /1\/3/);
+  assert.match(html, /已完成 1\/3 章/);
   assert.match(html, /复用 1/);
-  assert.match(html, /第 2 章/);
-  assert.match(html, /job_2/);
+  assert.match(html, /正在并发分析 1 章/);
+  assert.doesNotMatch(html, /第 2 章|job_2/);
   assert.match(html, /暂停当前任务/);
   assert.doesNotMatch(html, /暂停后续任务/);
   assert.doesNotMatch(html, /<progress|%/);
   assert.match(html, /min-h-11/);
 });
 
-test("运行页如实展示后端冻结的旧任务单批单并发设置", () => {
+test("运行页以章级语义展示新任务并保守标记旧任务并发", () => {
   const html = renderToString(createElement(PipelineProgress, {
     run: run({ chapterBatchSize: 1, chapterConcurrency: 1 }),
     chapters,
@@ -151,11 +149,40 @@ test("运行页如实展示后端冻结的旧任务单批单并发设置", () =>
     onReset: () => undefined,
   }));
   assert.match(html, /本次全本改写冻结设置/);
-  assert.match(html, /每批最多章节/);
-  assert.match(html, />1章</);
-  assert.match(html, /并发批次/);
-  assert.match(html, />1批</);
-  assert.doesNotMatch(html, />10章|>8批/);
+  assert.match(html, /章节分析并发/);
+  assert.match(html, /最多 1 章/);
+  assert.doesNotMatch(html, /每批最多章节|并发批次/);
+
+  const legacy = renderToString(createElement(PipelineProgress, {
+    run: run({ chapterBatchSize: 10, chapterConcurrency: 8 }), chapters,
+    operation: "已恢复历史任务。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(legacy, /历史分析并发/);
+  assert.match(legacy, /最多 8 个任务/);
+});
+
+test("失败且没有活动 Job 时隐藏暂停并保留后端允许的重试与取消", () => {
+  const html = renderToString(createElement(PipelineProgress, {
+    run: run({
+      status: "failed",
+      current: null,
+      failureCode: "handler_failed",
+      failureMessage: "章节分析失败，请重试该章节",
+      progress: {
+        ...run().progress,
+        chapterAnalysis: { completed: 1, total: 3, reused: 1, queued: 0, running: 0, failed: 2 },
+      },
+      actions: { canPause: true, canResume: false, canCancel: true, canRetry: true },
+    }),
+    chapters,
+    operation: "流水线执行失败。",
+    onControl: () => undefined,
+    onReset: () => undefined,
+  }));
+  assert.match(html, /全本改写执行失败/);
+  assert.match(html, /重试失败章节/);
+  assert.match(html, /取消全本改写/);
+  assert.doesNotMatch(html, /暂停当前任务|固定流水线正在处理全书/);
 });
 
 test("全书世界观构建展示后端返回的真实步骤进度", () => {

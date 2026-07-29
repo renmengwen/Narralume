@@ -7,10 +7,19 @@ import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
 import {
   chapterEventsAnalysisJobMatchesChapter,
   chapterEventsAnalysisJobMatchesChapters,
+  chapterEventsAnalysisJobIsLegacyBatch,
+  chapterEventsAnalysisJobIsSingleChapter,
+  chapterEventsAnalysisJobMatchesSingleChapter,
+  convergeSingleChapterAnalysisJob,
+  type ChapterAnalysisPromptSnapshot,
 } from "./chapter-events-job.js";
 import { getJob, requestJobCancellation, type JobRecord } from "./job-store.js";
-import { getOrCreateBookPromptProfile } from "./book-prompt-profile-store.js";
-import { PRODUCT_PROMPT_SET_VERSION } from "./product-prompts.js";
+import {
+  bookPromptInstructions,
+  getBookPromptProfileRevision,
+  getOrCreateBookPromptProfile,
+} from "./book-prompt-profile-store.js";
+import { PRODUCT_PROMPT_SET_VERSION, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 import {
   allocateEpisodeChapterRanges,
   validateConfirmedEpisodeChapterRanges,
@@ -166,8 +175,8 @@ export function createSeriesPipelineRun(
     EPISODE_DURATION_POLICY.maximumSeconds,
     "单集时长",
   );
-  const chapterBatchSize = safeInteger(input.chapterBatchSize ?? 10, 1, 20, "每批章节数");
-  const chapterConcurrency = safeInteger(input.chapterConcurrency ?? 8, 1, 50, "并发批次数");
+  const chapterBatchSize = safeInteger(input.chapterBatchSize ?? 1, 1, 1, "每批章节数");
+  const chapterConcurrency = safeInteger(input.chapterConcurrency ?? 8, 1, 8, "章节分析并发数");
   if ((targetDurationSeconds - EPISODE_DURATION_POLICY.minimumSeconds) % EPISODE_DURATION_POLICY.stepSeconds !== 0) {
     throw new SeriesPipelineError(400, `单集时长必须按 ${EPISODE_DURATION_POLICY.stepSeconds} 秒递增`);
   }
@@ -410,8 +419,31 @@ export function mapSeriesPipelineJob(
   chapterId: string,
   jobId: string,
   now = Date.now(),
+  replaceStaleJobIds: readonly string[] = [],
 ) {
-  return mapSeriesPipelineBatchJob(database, runId, [chapterId], jobId, now);
+  return mapSeriesPipelineBatchJob(database, runId, [chapterId], jobId, now, replaceStaleJobIds);
+}
+
+function frozenChapterPromptIdentity(database: DatabaseSync, run: SeriesPipelineRun, bookId: string) {
+  if (run.planningContractVersion !== 2) {
+    return { valid: true, prompt: undefined as ChapterAnalysisPromptSnapshot | undefined };
+  }
+  if (!run.bookPromptProfileRevision || run.productPromptVersion !== PRODUCT_PROMPT_SET_VERSION) {
+    return { valid: false, prompt: undefined };
+  }
+  const profile = getBookPromptProfileRevision(database, bookId, run.bookPromptProfileRevision);
+  if (!profile || profile.profileHash !== run.bookPromptProfileHash) {
+    return { valid: false, prompt: undefined };
+  }
+  return {
+    valid: true,
+    prompt: {
+      productVersion: PRODUCT_PROMPT_VERSIONS.chapterAnalysis,
+      profileRevision: profile.revision,
+      profileHash: profile.profileHash,
+      instructions: bookPromptInstructions(profile, "chapterAnalysisInstructions"),
+    } satisfies ChapterAnalysisPromptSnapshot,
+  };
 }
 
 export function mapSeriesPipelineBatchJob(
@@ -605,6 +637,94 @@ function hasOtherActiveOwner(database: DatabaseSync, jobId: string, runId: strin
   ).get(jobId, runId));
 }
 
+export function convergeMappedSingleChapterAnalysisJobs(database: DatabaseSync) {
+  const jobIds = database.prepare(
+    `SELECT DISTINCT job_id FROM series_pipeline_jobs
+     WHERE stage = 'chapter_analysis' AND subject_type = 'chapter'`,
+  ).all() as unknown as Array<{ job_id: string }>;
+  for (const { job_id: jobId } of jobIds) {
+    const job = getJob(database, jobId);
+    if (!chapterEventsAnalysisJobIsSingleChapter(job) ||
+        !job || !["queued", "running"].includes(job.status) ||
+        (job.status === "queued" && job.runAfter === PAUSED_JOB_RUN_AFTER)) continue;
+    const mappings = database.prepare(
+      `SELECT run_id, subject_id FROM series_pipeline_jobs
+       WHERE job_id = ? AND stage = 'chapter_analysis' AND subject_type = 'chapter'`,
+    ).all(jobId) as unknown as Array<{ run_id: string; subject_id: string }>;
+    let currentOwner = false;
+    for (const runId of new Set(mappings.map((mapping) => mapping.run_id))) {
+      try {
+        const runMappings = mappings.filter((mapping) => mapping.run_id === runId);
+        if (runMappings.length !== 1) continue;
+        const run = getSeriesPipelineRun(database, runId);
+        if (!run || !["configured", "analyzing_chapters"].includes(run.status)) continue;
+        const book = database.prepare(
+          "SELECT book_id FROM series_projects WHERE id = ?",
+        ).get(run.seriesProjectId) as { book_id: string } | undefined;
+        if (!book) continue;
+        const chapterPrompt = frozenChapterPromptIdentity(database, run, book.book_id);
+        if (!chapterPrompt.valid) continue;
+        const chapter = listPipelineChapters(database, run)
+          .find((item) => item.id === runMappings[0]!.subject_id);
+        if (chapter && chapterEventsAnalysisJobMatchesSingleChapter(
+          job, book.book_id, chapter.id, chapter.contentHash, chapterPrompt.prompt,
+        )) {
+          currentOwner = true;
+          break;
+        }
+      } catch {
+        // 坏历史 Run 不能阻断启动，也不能证明该 Job 可以继续执行。
+      }
+    }
+    if (currentOwner) {
+      convergeSingleChapterAnalysisJob(database, jobId);
+    } else if (job.status === "queued") {
+      database.prepare(
+        "UPDATE jobs SET run_after = ?, updated_at = ? WHERE id = ? AND status = 'queued' AND run_after <> ?",
+      ).run(PAUSED_JOB_RUN_AFTER, Date.now(), jobId, PAUSED_JOB_RUN_AFTER);
+    }
+  }
+}
+
+export function parkLegacyChapterAnalysisJobs(
+  database: DatabaseSync,
+  runId: string,
+  jobIds: readonly string[],
+  now = Date.now(),
+) {
+  if (!jobIds.length) return;
+  immediateTransaction(database, () => {
+    for (const jobId of new Set(jobIds)) {
+      const job = getJob(database, jobId);
+      if (!job || !chapterEventsAnalysisJobIsLegacyBatch(job) || job.status !== "queued" ||
+          hasOtherActiveOwner(database, jobId, runId)) continue;
+      database.prepare(
+        "UPDATE jobs SET run_after = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+      ).run(PAUSED_JOB_RUN_AFTER, now, jobId);
+    }
+  });
+}
+
+function detachLegacyChapterAnalysisJobs(database: DatabaseSync, runId: string, now: number) {
+  const jobIds = [...new Set(getMappedChapterJobs(database, runId).map((mapping) => mapping.job_id))];
+  for (const jobId of jobIds) {
+    const job = getJob(database, jobId);
+    if (!chapterEventsAnalysisJobIsLegacyBatch(job)) continue;
+    const shared = hasOtherActiveOwner(database, jobId, runId);
+    if (job!.status === "running" && !shared) {
+      requestJobCancellation(database, jobId, now);
+      continue;
+    }
+    database.prepare(
+      `DELETE FROM series_pipeline_jobs
+       WHERE run_id = ? AND stage = 'chapter_analysis' AND job_id = ?`,
+    ).run(runId, jobId);
+    if ((job!.status === "queued" || job!.status === "running") && !shared) {
+      requestJobCancellation(database, jobId, now);
+    }
+  }
+}
+
 export function pauseSeriesPipelineRun(database: DatabaseSync, id: string, now = Date.now()) {
   return immediateTransaction(database, () => {
     const run = getSeriesPipelineRun(database, id);
@@ -641,6 +761,7 @@ export function resumeSeriesPipelineRun(database: DatabaseSync, id: string, now 
          AND job.run_after = ? LIMIT 1`,
     ).get(id, PAUSED_JOB_RUN_AFTER);
     if (stopping) throw new SeriesPipelineError(409, "当前任务正在停止，请稍后再继续");
+    detachLegacyChapterAnalysisJobs(database, id, now);
     database.prepare(
       `UPDATE jobs SET status = 'queued', progress = 0, attempts = 0, cancel_requested = 0,
          lease_owner = NULL, lease_expires_at = NULL, result_json = NULL,
@@ -691,6 +812,11 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
        WHERE mapping.run_id = ?
        ORDER BY mapping.created_at DESC LIMIT 1`,
     ).get(id) as { stage: string } | undefined : undefined;
+    const book = database.prepare(
+      "SELECT book_id FROM series_projects WHERE id = ?",
+    ).get(run.seriesProjectId) as { book_id: string } | undefined;
+    const chapterPrompt = book ? frozenChapterPromptIdentity(database, run, book.book_id) : { valid: false, prompt: undefined };
+    detachLegacyChapterAnalysisJobs(database, id, now);
     for (const job of mappedJobs(database, id)) {
       if (job.status !== "failed" && job.status !== "cancelled") continue;
       const chapters = database.prepare(
@@ -702,9 +828,13 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
          WHERE mapping.run_id = ? AND mapping.stage = 'chapter_analysis' AND mapping.job_id = ?`,
       ).all(id, job.id) as unknown as Array<{ id: string; content_hash: string; book_id: string }>;
       const currentJob = getJob(database, job.id);
-      if (chapters.length && chapters.some((chapter) => !chapterEventsAnalysisJobMatchesChapter(
-        currentJob, chapter.book_id, chapter.id, chapter.content_hash,
-      ))) continue;
+      if (chapters.length && (!chapterPrompt.valid || chapters.some((chapter) =>
+        chapter.book_id !== book?.book_id || !chapterEventsAnalysisJobMatchesChapter(
+          currentJob, chapter.book_id, chapter.id, chapter.content_hash, chapterPrompt.prompt,
+        )))) continue;
+      if (chapters.length) {
+        database.prepare("UPDATE jobs SET max_attempts = 1 WHERE id = ? AND status <> 'succeeded'").run(job.id);
+      }
       const runAfter = run.status === "paused" && !hasOtherActiveOwner(database, job.id, id)
         ? PAUSED_JOB_RUN_AFTER
         : now;
@@ -732,8 +862,11 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     "SELECT book_id FROM series_projects WHERE id = ?",
   ).get(run.seriesProjectId) as { book_id: string } | undefined;
   const allMappings = getMappedChapterJobs(database, run.id);
+  const chapterPrompt = book
+    ? frozenChapterPromptIdentity(database, run, book.book_id)
+    : { valid: false, prompt: undefined };
   const currentJobIds = new Set<string>();
-  if (book) {
+  if (book && chapterPrompt.valid) {
     for (const jobId of new Set(allMappings.map((mapping) => mapping.job_id))) {
       const mappedChapters = allMappings.filter((mapping) => mapping.job_id === jobId).map((mapping) => {
         const chapter = chapters.find((item) => item.id === mapping.subject_id);
@@ -741,6 +874,7 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
       });
       if (mappedChapters.every(Boolean) && chapterEventsAnalysisJobMatchesChapters(
         getJob(database, jobId), book.book_id, mappedChapters as Array<{ chapterId: string; contentHash: string }>,
+        chapterPrompt.prompt,
       )) currentJobIds.add(jobId);
     }
   }
@@ -761,7 +895,10 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
   const completedChapterIds = new Set(chapters.filter((chapter) => {
     if (!chapter.hasEvents || staleChapterIds.has(chapter.id)) return false;
     const job = jobs.find((item) => item.chapterId === chapter.id)?.job;
-    return !job || job.status === "succeeded";
+    return !job || job.status === "succeeded" || Boolean(database.prepare(
+      `SELECT 1 FROM job_checkpoints
+       WHERE job_id = ? AND stage = 'chapter-events-analyze' AND scope_key = ?`,
+    ).get(job.id, chapter.id));
   }).map((chapter) => chapter.id));
   const completed = completedChapterIds.size;
   const relevantJobs = jobs.filter((item) => !completedChapterIds.has(item.chapterId));
@@ -782,7 +919,8 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
     message: item.job.status === "cancelled" ? "本集稿件生成已中断，请从本集重试" : "本集稿件生成失败，请从本集重试",
     canRetry: true,
   }));
-  const current = relevantJobs.find((item) => item.job.status === "running" || item.job.status === "queued");
+  const current = relevantJobs.find((item) => item.job.status === "running" ||
+    (item.job.status === "queued" && item.job.runAfter !== PAUSED_JOB_RUN_AFTER));
   const currentScript = scriptJobs.find((item) => item.job.status === "running" || item.job.status === "queued");
   const storyMapping = getMappedStoryBibleJob(database, run.id);
   const storyJob = storyMapping ? getJob(database, storyMapping.job_id) : undefined;
@@ -830,13 +968,24 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
      WHERE mapping.run_id = ? AND job.status = 'running' AND job.cancel_requested = 1
        AND job.run_after = ? LIMIT 1`,
   ).get(run.id, PAUSED_JOB_RUN_AFTER));
+  const active = Boolean(current || currentScript || currentLocalPlan ||
+    (storyJob && (storyJob.status === "queued" || storyJob.status === "running")) ||
+    (planJob && (planJob.status === "queued" || planJob.status === "running")));
+  const failureCount = failures.length + storyFailure.length + planFailure.length + localPlanFailures.length +
+    scriptFailures.length;
+  const status = !active && (failureCount > 0 || run.failureCode) &&
+    !["paused", "cancelled", "completed"].includes(run.status)
+    ? "failed"
+    : run.status;
   return {
     ...run,
+    status,
     progress: {
       chapterAnalysis: {
         completed, total: chapters.length,
         reused: chapters.filter((chapter) => completedChapterIds.has(chapter.id) && !mapped.has(chapter.id)).length,
-        queued: relevantJobs.filter((item) => item.job.status === "queued").length,
+        queued: relevantJobs.filter((item) =>
+          item.job.status === "queued" && item.job.runAfter !== PAUSED_JOB_RUN_AFTER).length,
         running: relevantJobs.filter((item) => item.job.status === "running").length,
         failed: failures.length,
       },
@@ -863,11 +1012,10 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
       : null,
     failures: [...failures, ...storyFailure, ...planFailure, ...localPlanFailures, ...scriptFailures],
     actions: {
-      canPause: !["paused", "cancelled", "completed"].includes(run.status),
+      canPause: active && !["paused", "cancelled", "completed"].includes(run.status),
       canResume: run.status === "paused" && !stopping,
       canCancel: !["cancelled", "completed"].includes(run.status),
-      canRetry: failures.length + storyFailure.length + planFailure.length + localPlanFailures.length +
-        scriptFailures.length > 0,
+      canRetry: failureCount > 0 || Boolean(run.failureCode),
     },
   };
 }

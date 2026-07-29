@@ -36,7 +36,6 @@ export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy
   const [endId, setEndId] = useState("");
   const [episodeCount, setEpisodeCount] = useState("");
   const [targetDurationSeconds, setTargetDurationSeconds] = useState<number>();
-  const [chapterBatchSize, setChapterBatchSize] = useState(10);
   const [chapterConcurrency, setChapterConcurrency] = useState(8);
   const [validationError, setValidationError] = useState<string>();
 
@@ -60,7 +59,7 @@ export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy
     return pipelineCreateInput({
       episodeCount: Number(episodeCount),
       targetDurationSeconds: targetDurationSeconds ?? Number.NaN,
-      chapterBatchSize,
+      chapterBatchSize: 1,
       chapterConcurrency,
       sourceStartChapterId: startId,
       sourceEndChapterId: endId,
@@ -162,13 +161,9 @@ export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy
             <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min={policy?.minimumSeconds} max={policy?.maximumSeconds} step={policy?.stepSeconds} disabled={disabled} value={targetDurationSeconds ?? ""} onChange={(event) => setTargetDurationSeconds(Number(event.target.value))} />
             {policy ? <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 {policy.minimumSeconds}～{policy.maximumSeconds} 秒，按 {policy.stepSeconds} 秒递增。</span> : null}
           </label>
-          <label className="grid gap-2 text-sm font-semibold">每批最多章节数
-            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="20" step="1" inputMode="numeric" disabled={disabled} value={chapterBatchSize} onChange={(event) => setChapterBatchSize(Number(event.target.value))} />
-            <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～20章；实际批次会按输入安全上限自动缩小。</span>
-          </label>
-          <label className="grid gap-2 text-sm font-semibold">并发批次数
-            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="50" step="1" inputMode="numeric" disabled={disabled} value={chapterConcurrency} onChange={(event) => setChapterConcurrency(Number(event.target.value))} />
-            <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～50批；并发越高越可能触发供应商限流。</span>
+          <label className="grid gap-2 text-sm font-semibold">章节分析并发数
+            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="8" step="1" inputMode="numeric" disabled={disabled} value={chapterConcurrency} onChange={(event) => setChapterConcurrency(Number(event.target.value))} />
+            <span className="text-xs font-normal text-[var(--fg-tertiary)]">每章独立分析；允许同时处理 1～8 章，完成一章后自动补入下一章。</span>
           </label>
         </div>
 

@@ -4,13 +4,14 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   buildChapterEvidenceAtoms,
   MAX_CHAPTER_BATCH_INPUT_BYTES,
-  prepareChapterBatchPrompt,
   type ChapterTextModelConfig,
 } from "./chapter-event-analyzer.js";
 import {
   chapterEventsAnalysisJobMatchesChapter,
-  chapterEventsAnalysisJobMatchesChapters,
-  enqueueChapterEventsAnalysisBatchJob,
+  chapterEventsAnalysisJobIsLegacyBatch,
+  chapterEventsAnalysisJobMatchesSingleChapter,
+  convergeSingleChapterAnalysisJob,
+  enqueueChapterEventsAnalysisJob,
   type ChapterAnalysisPromptSnapshot,
 } from "./chapter-events-job.js";
 import {
@@ -55,6 +56,7 @@ import { bookPromptInstructions, getBookPromptProfileRevision } from "./book-pro
 import { PRODUCT_PROMPT_SET_VERSION, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 import {
   cancelSeriesPipelineRun,
+  convergeMappedSingleChapterAnalysisJobs,
   createSeriesPipelineRun,
   finishChapterAnalysis,
   finishEpisodePlan,
@@ -69,12 +71,14 @@ import {
   getSeriesPipelineRun,
   listPipelineChapters,
   listRunnableSeriesPipelineRuns,
+  mapSeriesPipelineJob,
   mapSeriesPipelineBatchJob,
   mapSeriesPipelineEpisodePlanJob,
   mapSeriesPipelineLocalEpisodePlanJob,
   mapSeriesPipelineStoryBibleJob,
   mapSeriesPipelineScriptJob,
   pauseSeriesPipelineRun,
+  parkLegacyChapterAnalysisJobs,
   previewSeriesPipelineEpisodeRanges,
   retainStaleChapterAnalysisJobs,
   resumeSeriesPipelineRun,
@@ -150,6 +154,10 @@ export class SeriesPipelineService {
   cancel(id: string) { return this.view(cancelSeriesPipelineRun(this.options.database, id)); }
   retry(id: string) { return this.view(retrySeriesPipelineRun(this.options.database, id)); }
 
+  convergeChapterAnalysisJobsBeforeWorkerStart() {
+    convergeMappedSingleChapterAnalysisJobs(this.options.database);
+  }
+
   private view(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
     return seriesPipelineView(this.options.database, run);
   }
@@ -205,11 +213,15 @@ export class SeriesPipelineService {
             const chapter = chapterById.get(mapping.subject_id);
             return chapter ? { chapterId: chapter.id, contentHash: chapter.contentHash } : undefined;
           });
-          if (mappedChapters.every(Boolean) && chapterEventsAnalysisJobMatchesChapters(
-            getJob(this.options.database, jobId), bookId,
-            mappedChapters as Array<{ chapterId: string; contentHash: string }>,
-            chapterPrompt,
-          )) currentJobIds.add(jobId);
+          const mappedChapter = mappedChapters.length === 1 ? mappedChapters[0] : undefined;
+          const mappedJob = getJob(this.options.database, jobId);
+          if (mappedChapter && chapterEventsAnalysisJobMatchesSingleChapter(
+            mappedJob, bookId,
+            mappedChapter.chapterId, mappedChapter.contentHash, chapterPrompt,
+          )) {
+            currentJobIds.add(jobId);
+            convergeSingleChapterAnalysisJob(this.options.database, jobId);
+          }
         }
         const mappings = allMappings.filter((mapping) => currentJobIds.has(mapping.job_id));
         const staleMappings = allMappings.filter((mapping) => !currentJobIds.has(mapping.job_id));
@@ -227,6 +239,29 @@ export class SeriesPipelineService {
           ));
           if (reusable) reusableStaleMappings.push({ chapterId: mapping.subject_id, jobId: mapping.job_id });
           else staleChapterIds.add(mapping.subject_id);
+        }
+        const reusableStale = new Set(reusableStaleMappings.map((mapping) => `${mapping.chapterId}\0${mapping.jobId}`));
+        const legacyIncomplete = staleMappings.some((mapping) => {
+          const job = getJob(this.options.database, mapping.job_id);
+          return chapterEventsAnalysisJobIsLegacyBatch(job) &&
+            !reusableStale.has(`${mapping.subject_id}\0${mapping.job_id}`) &&
+            (!job!.cancelRequested || job!.status === "running");
+        });
+        if (legacyIncomplete) {
+          parkLegacyChapterAnalysisJobs(
+            this.options.database,
+            run.id,
+            staleMappings.filter((mapping) => chapterEventsAnalysisJobIsLegacyBatch(
+              getJob(this.options.database, mapping.job_id),
+            )).map((mapping) => mapping.job_id),
+          );
+          setSeriesPipelineFailure(
+            this.options.database,
+            run.id,
+            "legacy_chapter_analysis_retry_required",
+            "旧版多章分析未完成，请显式重试失败章节",
+          );
+          continue;
         }
         const { blockingJobIds } = retainStaleChapterAnalysisJobs(
           this.options.database,
@@ -261,24 +296,14 @@ export class SeriesPipelineService {
             failed.job!.status === "cancelled" ? "job_cancelled" : failed.job!.errorCode ?? "chapter_analysis_failed",
             failed.job!.status === "cancelled" ? "章节分析已中断，请重试该章节" : "章节分析失败，请重试该章节",
           );
-          continue;
         }
         const mappedSubjects = new Set(mappings.map((mapping) => mapping.subject_id));
         for (const mapping of staleMappings) {
           if (blockingStaleJobIds.has(mapping.job_id)) mappedSubjects.add(mapping.subject_id);
         }
-        const pendingRuns: typeof chapters[] = [];
-        let pendingRun: typeof chapters = [];
-        for (const chapter of chapters) {
-          if (!completedChapterIds.has(chapter.id) && !mappedSubjects.has(chapter.id)) {
-            pendingRun.push(chapter);
-          } else if (pendingRun.length) {
-            pendingRuns.push(pendingRun);
-            pendingRun = [];
-          }
-        }
-        if (pendingRun.length) pendingRuns.push(pendingRun);
-        if (!pendingRuns.length) {
+        const pending = chapters.filter((chapter) =>
+          !completedChapterIds.has(chapter.id) && !mappedSubjects.has(chapter.id));
+        if (!pending.length) {
           const incomplete = relevantJobs.some((item) => item.job?.status !== "succeeded");
           if (!incomplete && chapters.every((chapter) => completedChapterIds.has(chapter.id))) {
             finishChapterAnalysis(this.options.database, run);
@@ -296,51 +321,25 @@ export class SeriesPipelineService {
         ).map((item) => item.mapping.job_id));
         for (const jobId of blockingStaleJobIds) activeJobs.add(jobId);
         let slots = Math.max(0, run.chapterConcurrency - activeJobs.size);
-        let oversized = false;
-        for (const contiguous of pendingRuns) {
-          let offset = 0;
-          while (slots > 0 && offset < contiguous.length) {
-            const batch: Array<{ chapterId: string; contentHash: string }> = [];
-            const inputs: Array<{ chapterId: string; atoms: Awaited<ReturnType<typeof buildChapterEvidenceAtoms>>["atoms"] }> = [];
-            while (batch.length < run.chapterBatchSize && offset < contiguous.length) {
-              const chapter = contiguous[offset]!;
-              const source = await buildChapterEvidenceAtoms(this.options.database, this.options.dataRoot, bookId, chapter.id);
-              const nextInputs = [...inputs, { chapterId: chapter.id, atoms: source.atoms }];
-              if (prepareChapterBatchPrompt(nextInputs, chapterPrompt?.instructions).bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
-                if (!batch.length) {
-                  setSeriesPipelineFailure(
-                    this.options.database, run.id, "chapter_batch_input_too_large",
-                    `章节 ${chapter.id} 的分析输入超过服务端 512 KiB 安全上限`,
-                  );
-                  oversized = true;
-                }
-                break;
-              }
-              inputs.push(nextInputs.at(-1)!);
-              batch.push({ chapterId: chapter.id, contentHash: source.contentHash });
-              offset += 1;
-            }
-            if (oversized) break;
-            const result = await enqueueChapterEventsAnalysisBatchJob(
-              this.options.database,
-              provider,
-              { payload: { bookId, chapters: batch }, maxAttempts: 3, runAfter: Number.MAX_SAFE_INTEGER },
-              () => getSeriesPipelineRun(this.options.database, run.id)?.status === "analyzing_chapters",
-              chapterPrompt,
-            );
-            const batchChapterIds = batch.map((chapter) => chapter.chapterId);
-            if (!mapSeriesPipelineBatchJob(
-              this.options.database,
-              run.id,
-              batchChapterIds,
-              result.job.id,
-              Date.now(),
-              staleMappings.filter((mapping) => batchChapterIds.includes(mapping.subject_id))
-                .map((mapping) => mapping.job_id),
-            )) break;
-            if (result.job.status === "queued" || result.job.status === "running") slots -= 1;
-          }
-          if (oversized || slots === 0) break;
+        for (const chapter of pending) {
+          if (slots === 0) break;
+          const result = await enqueueChapterEventsAnalysisJob(
+            this.options.database,
+            this.options.dataRoot,
+            provider,
+            { payload: { bookId, chapterId: chapter.id }, maxAttempts: 1, runAfter: Number.MAX_SAFE_INTEGER },
+            () => getSeriesPipelineRun(this.options.database, run.id)?.status === "analyzing_chapters",
+            chapterPrompt,
+          );
+          if (!mapSeriesPipelineJob(
+            this.options.database,
+            run.id,
+            chapter.id,
+            result.job.id,
+            Date.now(),
+            staleMappings.filter((mapping) => mapping.subject_id === chapter.id).map((mapping) => mapping.job_id),
+          )) break;
+          if (result.job.status === "queued" || result.job.status === "running") slots -= 1;
         }
       } catch (error) {
         if (getSeriesPipelineRun(this.options.database, candidate.id)?.status === "paused") continue;
@@ -1008,6 +1007,7 @@ export class SeriesPipelineWorker {
   start(pollMs = 100) {
     if (!Number.isSafeInteger(pollMs) || pollMs < 1) throw new Error("流水线轮询间隔无效");
     if (this.#loop) throw new Error("流水线 Worker 已启动");
+    this.service.convergeChapterAnalysisJobsBeforeWorkerStart();
     this.#stopRequested = false;
     this.#loop = (async () => {
       while (!this.#stopRequested) {

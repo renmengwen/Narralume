@@ -16,7 +16,6 @@ import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
 const MAX_CHAPTER_BYTES = 128 * 1024;
 const MAX_ATOM_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const MAX_ATOMS_PER_REQUEST = 10;
 export const MAX_CHAPTER_BATCH_INPUT_BYTES = 512 * 1024;
 const EVENT_TYPES = new Set<string>(CHAPTER_EVENT_TYPES);
 
@@ -42,6 +41,7 @@ export interface ChapterAnalysisInput {
   atoms: readonly ChapterEvidenceAtom[];
   promptInstructions?: string;
   signal?: AbortSignal;
+  onActivity?: () => void;
 }
 
 export type AnalyzeChapterEvents = (
@@ -52,6 +52,7 @@ export interface ChapterBatchAnalysisInput {
   chapters: readonly ChapterAnalysisInput[];
   promptInstructions?: string;
   signal?: AbortSignal;
+  onActivity?: () => void;
 }
 
 export interface ChapterBatchAnalysisResult {
@@ -328,7 +329,7 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
       (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
     throw new Error("章节分析模型配置无效");
   }
-  return async ({ chapters, promptInstructions, signal }) => {
+  return async ({ chapters, promptInstructions, signal, onActivity }) => {
     if (!chapters.length || chapters.length > 20 || new Set(chapters.map((chapter) => chapter.chapterId)).size !== chapters.length) {
       throw new Error("多章分析输入章节集合无效");
     }
@@ -352,7 +353,7 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
         throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
       }
       return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? streamedText(response, config.protocol ?? "openai-response", { signal })
+        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
         : responseText(await limitedJson(response));
     });
     return parseChapterBatchAnalysisEvents(text, prepared.chapters);
@@ -370,60 +371,28 @@ export function createOpenAiResponsesChapterAnalyzer(
       (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
     throw new Error("章节分析模型配置无效");
   }
-  async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal, promptInstructions?: string) {
+  return async ({ atoms, promptInstructions, signal, onActivity }) => {
     const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
-    async function requestEvents(input: string) {
-      const request = textModelRequest(config, input, 8192, true);
-      const text = await textModelConcurrencyGate.run(signal, async () => {
-        let response: Response;
-        try {
-          response = await fetchImpl(request.endpoint, {
-            method: "POST",
-            headers: request.headers,
-            body: request.body,
-            signal,
-            redirect: "error",
-          });
-        } catch (error) {
-          if (signal?.aborted) throw error;
-          throw new Error("章节分析模型请求失败");
-        }
-        if (!response.ok) {
-          await response.body?.cancel();
-          throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
-        }
-        return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-          ? streamedText(response, config.protocol ?? "openai-response", { signal })
-          : responseText(await limitedJson(response));
-      });
-      return modelEvents(text, requestAtoms);
-    }
-    try {
-      return await requestEvents(prompt(requestAtoms, promptInstructions));
-    } catch (error) {
-      if (!(error instanceof ChapterEvidenceReferenceError) || signal?.aborted) throw error;
-      return requestEvents([
-        "上一答的 evidenceIds 非法。请重新输出本批次完整、严格 JSON，不要输出 Markdown 或解释。",
-        "每个事件必须引用 1～20 个互不重复的 evidenceId，且只能逐字使用以下允许 ID：",
-        ...requestAtoms.map((atom) => atom.id),
-        "原任务和全部结构约束如下：",
-        prompt(requestAtoms, promptInstructions),
-      ].join("\n"));
-    }
-  }
-  return async ({ atoms, promptInstructions, signal }) => {
-    const events: ChapterEventInput[] = [];
-    for (let offset = 0; offset < atoms.length; offset += MAX_ATOMS_PER_REQUEST) {
-      if (signal?.aborted) throw signal.reason;
+    const request = textModelRequest(config, prompt(requestAtoms, promptInstructions), 8192, true);
+    const text = await textModelConcurrencyGate.run(signal, async () => {
+      let response: Response;
       try {
-        events.push(...await analyzeBatch(atoms.slice(offset, offset + MAX_ATOMS_PER_REQUEST), signal, promptInstructions));
+        response = await fetchImpl(request.endpoint, {
+          method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+        });
       } catch (error) {
         if (signal?.aborted) throw error;
-        throw new Error(`章节分析第 ${Math.floor(offset / MAX_ATOMS_PER_REQUEST) + 1} 批失败：${error instanceof Error ? error.message : "未知错误"}`);
+        throw new Error("章节分析模型请求失败");
       }
-      if (events.length > 200) throw new Error("章节分析结果事件数量超过 200 条");
-    }
-    return assignOccurrences(events);
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
+      }
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+        : responseText(await limitedJson(response));
+    });
+    return assignOccurrences(modelEvents(text, requestAtoms));
   };
 }
 

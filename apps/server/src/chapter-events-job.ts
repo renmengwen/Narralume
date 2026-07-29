@@ -16,9 +16,11 @@ import {
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import { JobCancelledError, type JobExecutionContext, type JobHandler } from "./job-worker.js";
 import { PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
+import { withTextModelTimeout } from "./text-model-timeout.js";
 
 export const CHAPTER_EVENTS_JOB_TYPE = "chapter_events_replace";
 export const CHAPTER_EVENTS_ANALYZE_JOB_TYPE = "chapter_events_analyze";
+export const CHAPTER_EVENTS_MANUAL_RETRY_REQUIRED = "chapter_analysis_manual_retry_required";
 
 export interface ChapterEventsJobHooks {
   beforeCommit?(chapterId: string, completedChapters: number): void;
@@ -69,6 +71,8 @@ const CHAPTER_ANALYSIS_CONTRACT_VERSION = "chapter-events-analysis-v1";
 const CHAPTER_ANALYSIS_PROMPT_VERSION = "chapter-events-prompt-v2";
 const CHAPTER_ANALYSIS_PARSER_VERSION = "chapter-events-parser-v1";
 export const CHAPTER_ANALYSIS_TIMEOUT_MS = 180_000;
+export const CHAPTER_ANALYSIS_IDLE_TIMEOUT_MS = 180_000;
+export const CHAPTER_ANALYSIS_TOTAL_TIMEOUT_MS = 900_000;
 
 export interface ChapterEventsAnalysisIdentity {
   bookId: string;
@@ -215,6 +219,35 @@ function hasSameReuseIdentity(job: JobRecord, expected: ChapterEventsAnalysisIde
   }
 }
 
+export function chapterEventsAnalysisJobIsLegacyBatch(job: JobRecord | undefined) {
+  if (!job || job.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE) return false;
+  try { analyzeBatchPayload(job.payload); return true; } catch { return false; }
+}
+
+export function chapterEventsAnalysisJobIsSingleChapter(job: JobRecord | undefined) {
+  if (!job || job.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE) return false;
+  try {
+    const task = analyzePayload(job.payload);
+    return job.id === `job_chapter_analyze_${task.requestHash}` &&
+      task.requestHash === analysisRequestHash(reuseIdentity(task));
+  } catch {
+    return false;
+  }
+}
+
+export function chapterEventsAnalysisJobMatchesSingleChapter(
+  job: JobRecord | undefined,
+  bookId: string,
+  chapterId: string,
+  contentHash: string,
+  prompt?: ChapterAnalysisPromptSnapshot,
+) {
+  return Boolean(job && hasSameReuseIdentity(
+    job,
+    chapterEventsAnalysisJobIdentity(bookId, chapterId, contentHash, prompt).identity,
+  ));
+}
+
 export function chapterEventsAnalysisJobIdentity(
   bookId: string,
   chapterId: string,
@@ -335,6 +368,7 @@ export async function enqueueChapterEventsAnalysisJob(
   config: ChapterTextModelConfig,
   input: Omit<CreateJobInput, "id" | "type">,
   canCreate: () => boolean = () => true,
+  prompt?: ChapterAnalysisPromptSnapshot,
 ): Promise<{ job: JobRecord; created: boolean }> {
   const request = input.payload && typeof input.payload === "object" && !Array.isArray(input.payload)
     ? input.payload as { bookId?: unknown; chapterId?: unknown }
@@ -347,7 +381,7 @@ export async function enqueueChapterEventsAnalysisJob(
     database, dataRoot, request.bookId.trim(), request.chapterId.trim(),
   );
   const { identity, requestHash, jobId: id } = chapterEventsAnalysisJobIdentity(
-    request.bookId.trim(), request.chapterId.trim(), contentHash,
+    request.bookId.trim(), request.chapterId.trim(), contentHash, prompt,
   );
   const providerId = config.providerId.trim();
   const model = config.model.trim();
@@ -359,17 +393,17 @@ export async function enqueueChapterEventsAnalysisJob(
     if (!hasSameReuseIdentity(existing, identity)) {
       throw new Error("章节自动分析任务身份冲突");
     }
-    return { job: existing, created: false };
+    return { job: convergeSingleChapterAnalysisJob(database, id), created: false };
   }
   try {
     return {
-      job: createJob(database, { ...input, id, type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload }),
+      job: createJob(database, { ...input, id, type: CHAPTER_EVENTS_ANALYZE_JOB_TYPE, payload, maxAttempts: 1 }),
       created: true,
     };
   } catch (error) {
     const raced = getJob(database, id);
     if (!raced || !hasSameReuseIdentity(raced, identity)) throw error;
-    return { job: raced, created: false };
+    return { job: convergeSingleChapterAnalysisJob(database, id), created: false };
   }
 }
 
@@ -444,22 +478,21 @@ export function createChapterEventsAnalysisJobHandler(
       context.reportProgress(1);
       return { analyzed: 0, preserved: false, reused: true };
     }
-    const controller = new AbortController();
-    const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
     let inputs: readonly ChapterEventInput[];
     try {
-      inputs = await analyze({
-        chapterId: task.chapterId,
-        atoms: source.atoms,
-        promptInstructions: task.prompt?.instructions,
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(CHAPTER_ANALYSIS_TIMEOUT_MS)]),
+      inputs = await withTextModelTimeout((signal, onActivity) => analyze({
+        chapterId: task.chapterId, atoms: source.atoms,
+        promptInstructions: task.prompt?.instructions, signal, onActivity,
+      }), {
+        firstActivityMs: CHAPTER_ANALYSIS_TIMEOUT_MS,
+        idleMs: CHAPTER_ANALYSIS_IDLE_TIMEOUT_MS,
+        totalMs: CHAPTER_ANALYSIS_TOTAL_TIMEOUT_MS,
+        isCancellationRequested: context.isCancellationRequested,
       });
     } catch (error) {
-      if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
+      if (context.isCancellationRequested()) throw new JobCancelledError();
       if (error instanceof Error && error.name === "TimeoutError") throw new Error("章节分析模型请求超时");
       throw error;
-    } finally {
-      clearInterval(poll);
     }
     context.throwIfCancellationRequested();
     if (inputs.length === 0) {
@@ -479,10 +512,10 @@ export function createChapterEventsAnalysisJobHandler(
 }
 
 export function createChapterEventsBatchAnalysisJobHandler(
-  database: DatabaseSync,
-  dataRoot: string,
+  _database: DatabaseSync,
+  _dataRoot: string,
   config: ChapterTextModelConfig,
-  analyze: AnalyzeChapterEventsBatch,
+  _analyze: AnalyzeChapterEventsBatch,
 ): JobHandler {
   return async (context) => {
     const task = analyzeBatchPayload(context.job.payload);
@@ -491,77 +524,27 @@ export function createChapterEventsBatchAnalysisJobHandler(
         task.providerId !== config.providerId.trim() || task.model !== config.model.trim()) {
       throw new Error("多章自动分析任务冻结身份不一致");
     }
-    context.throwIfCancellationRequested();
-    const chapters = await Promise.all(task.chapters.map(async (chapter) => {
-      const source = await buildChapterEvidenceAtoms(database, dataRoot, task.bookId, chapter.chapterId);
-      if (source.contentHash !== chapter.contentHash) throw new Error("章节原文在任务排队后已变化");
-      return { chapterId: chapter.chapterId, atoms: source.atoms };
-    }));
-    const pending = chapters.filter((chapter) =>
-      !context.getCheckpoint("chapter-events-analyze", chapter.chapterId));
-    let reused = chapters.length - pending.length;
-    if (reused) context.reportProgress(reused / task.chapters.length);
-    if (!pending.length) return { analyzed: 0, reused, preserved: 0, chapters: task.chapters.length };
-    const controller = new AbortController();
-    const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
-    let outputs: readonly { chapterId: string; events: readonly ChapterEventInput[] }[];
-    try {
-      outputs = await analyze({
-        chapters: pending,
-        promptInstructions: task.prompt?.instructions,
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(CHAPTER_ANALYSIS_TIMEOUT_MS)]),
-      });
-    } catch (error) {
-      if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
-      if (error instanceof Error && error.name === "TimeoutError") throw new Error("多章分析模型请求超时");
-      throw error;
-    } finally {
-      clearInterval(poll);
-    }
-    context.throwIfCancellationRequested();
-    const expected = new Set(pending.map((chapter) => chapter.chapterId));
-    const seen = new Set<string>();
-    if (!Array.isArray(outputs) || outputs.length !== expected.size) throw new Error("多章分析结果章节集合不完整");
-    const prepared = await Promise.all(outputs.map(async (output) => {
-      if (!output || typeof output.chapterId !== "string" || !expected.has(output.chapterId)) {
-        throw new Error("多章分析结果包含未知章节");
-      }
-      if (seen.has(output.chapterId)) throw new Error("多章分析结果重复包含章节");
-      seen.add(output.chapterId);
-      if (!Array.isArray(output.events)) throw new Error("多章分析结果事件列表无效");
-      if (output.events.length === 0) {
-        const existing = database.prepare("SELECT 1 FROM chapter_events WHERE chapter_id = ? LIMIT 1").get(output.chapterId);
-        if (!existing) throw new Error("多章分析未为每个章节生成可持久事件");
-      }
-      return {
-        chapterId: output.chapterId,
-        events: output.events.length
-          ? await prepareChapterEvents(database, dataRoot, task.bookId, output.chapterId, output.events)
-          : undefined,
-      };
-    }));
-    if (seen.size !== expected.size) throw new Error("多章分析结果章节集合不完整");
-    let analyzed = 0;
-    let preserved = 0;
-    for (const [index, chapter] of prepared.entries()) {
-      context.throwIfCancellationRequested();
-      if (!chapter.events) {
-        preserved += 1;
-      } else {
-        const result = context.commitCheckpoint(
-          "chapter-events-analyze",
-          chapter.chapterId,
-          inputHash(chapter.events),
-          (transaction) => {
-            queueChapterEventReplacement(transaction, chapter.chapterId, chapter.events!);
-            return undefined;
-          },
-        );
-        if (result.created || result.replaced) analyzed += 1;
-        else reused += 1;
-      }
-      context.reportProgress((chapters.length - pending.length + index + 1) / task.chapters.length);
-    }
-    return { analyzed, reused, preserved, chapters: task.chapters.length };
+    throw new Error("旧版多章分析任务已停用，请通过流水线显式重试为单章任务");
   };
+}
+
+export function convergeSingleChapterAnalysisJob(
+  database: DatabaseSync,
+  jobId: string,
+  now = Date.now(),
+): JobRecord {
+  database.prepare(
+    `UPDATE jobs SET max_attempts = 1,
+       status = CASE WHEN status = 'queued' AND attempts >= 1 THEN 'failed' ELSE status END,
+       error_code = CASE WHEN status = 'queued' AND attempts >= 1 THEN ? ELSE error_code END,
+       error_message = CASE WHEN status = 'queued' AND attempts >= 1
+         THEN '历史章节分析任务需要手动重试' ELSE error_message END,
+       finished_at = CASE WHEN status = 'queued' AND attempts >= 1 THEN ? ELSE finished_at END,
+       updated_at = ?
+     WHERE id = ? AND status <> 'succeeded'
+       AND (max_attempts <> 1 OR (status = 'queued' AND attempts >= 1))`,
+  ).run(CHAPTER_EVENTS_MANUAL_RETRY_REQUIRED, now, now, jobId);
+  const job = getJob(database, jobId);
+  if (!job) throw new Error("章节分析任务不存在");
+  return job;
 }

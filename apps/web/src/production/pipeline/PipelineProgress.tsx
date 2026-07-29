@@ -27,6 +27,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
   const chapter = run.progress.chapterAnalysis;
   const story = run.progress.storyBible;
   const presentation = pipelineStatusPresentation(run.status, run.planningContractVersion);
+  const hasActiveJob = Boolean(run.current && !["succeeded", "failed", "cancelled"].includes(run.current.jobStatus ?? ""));
   const primaryAction = run.actions.canResume ? "resume" : run.actions.canRetry ? "retry" : undefined;
   const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败章节";
   const worldviewUnavailable = run.status === "failed"
@@ -34,7 +35,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
     : run.status === "paused" || run.status === "cancelled"
       ? "全书世界观构建已中断；恢复或重试完成后可查看详情。"
       : "全书世界观尚不可用；完成构建后可查看详情。";
-  const stateMessage = run.current
+  const stateMessage = run.current && run.current.stage !== "chapter_analysis"
     ? `当前对象：${chapterName(run.current.subjectId)}；任务 ${run.current.jobId}`
     : pipelineStatusText(run);
 
@@ -55,15 +56,14 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
       </div>
       {error ? <div className="border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]" role="alert">{error}</div> : null}
 
-      <dl className="grid grid-cols-4 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] max-md:grid-cols-2 max-sm:grid-cols-1" aria-label="本次全本改写冻结设置">
+      <dl className="grid grid-cols-3 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] max-md:grid-cols-2 max-sm:grid-cols-1" aria-label="本次全本改写冻结设置">
         <RunFact label="总集数" value={`${run.episodeCount}集`} />
         <RunFact label="单集时长" value={`${run.targetDurationSeconds}秒`} />
-        <RunFact label="每批最多章节" value={`${run.chapterBatchSize}章`} />
-        <RunFact label="并发批次" value={`${run.chapterConcurrency}批`} />
+        <RunFact label={run.chapterBatchSize === 1 ? "章节分析并发" : "历史分析并发"} value={run.chapterBatchSize === 1 ? `最多 ${run.chapterConcurrency} 章` : `最多 ${run.chapterConcurrency} 个任务`} />
       </dl>
 
       <div className="grid border border-[var(--border-subtle)]" aria-label="全本改写阶段进度">
-        <ProgressRow label="章节事件分析" count={`${chapter.completed}/${chapter.total}`} detail={`复用 ${chapter.reused} · 排队 ${chapter.queued} · 执行中 ${chapter.running} · 失败 ${chapter.failed}`} />
+        <ProgressRow label="章节事件分析" count={`已完成 ${chapter.completed}/${chapter.total} 章`} detail={`复用 ${chapter.reused} 章 · 排队 ${chapter.queued} 章 · 执行中 ${chapter.running} 章 · 失败 ${chapter.failed} 章`} />
         <ProgressRow label="全书世界观构建" count={story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} />
         <ProgressRow label={run.planningContractVersion === 2 ? "逐集局部规划" : "全书分集规划"} count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
         <ProgressRow label={run.scriptContractVersion === 6 ? "成片旁白稿" : "原著还原稿与成片旁白稿"} count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
@@ -87,7 +87,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
 
       <div className="flex flex-wrap justify-end gap-2">
         {pipelineIsTerminal(run) ? <button type="button" className="min-h-11 rounded border border-[var(--accent)] bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] disabled:opacity-50" disabled={!!busyAction} onClick={onReset}>返回全本改写设置</button> : null}
-        {run.actions.canPause ? <button type="button" className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl("pause")}>{busyAction === "pause" ? "正在暂停当前任务…" : "暂停当前任务"}</button> : null}
+        {run.actions.canPause && hasActiveJob ? <button type="button" className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl("pause")}>{busyAction === "pause" ? "正在暂停当前任务…" : "暂停当前任务"}</button> : null}
         {primaryAction ? <button type="button" className="min-h-11 rounded border border-transparent bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-strong)] disabled:opacity-50" disabled={!!busyAction} onClick={() => onControl(primaryAction)}>{busyAction === primaryAction ? operation : primaryLabel}</button> : null}
         {run.actions.canCancel ? <AlertDialog>
           <AlertDialogTrigger asChild><button type="button" className="min-h-11 rounded border border-[var(--danger)] px-4 text-sm font-semibold text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-50" disabled={!!busyAction}>取消全本改写</button></AlertDialogTrigger>

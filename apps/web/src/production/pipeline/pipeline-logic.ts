@@ -107,11 +107,11 @@ export function pipelineCreateInput(
       (input.targetDurationSeconds - policy.minimumSeconds) % policy.stepSeconds !== 0) {
     throw new Error(`单集时长必须是 ${policy.minimumSeconds}～${policy.maximumSeconds} 秒，并按 ${policy.stepSeconds} 秒递增`);
   }
-  if (!Number.isSafeInteger(input.chapterBatchSize) || input.chapterBatchSize < 1 || input.chapterBatchSize > 20) {
-    throw new Error("每批最多章节数必须是 1～20 之间的整数");
+  if (input.chapterBatchSize !== 1) {
+    throw new Error("章节分析固定为每章一个独立任务");
   }
-  if (!Number.isSafeInteger(input.chapterConcurrency) || input.chapterConcurrency < 1 || input.chapterConcurrency > 50) {
-    throw new Error("并发批次数必须是 1～50 之间的整数");
+  if (!Number.isSafeInteger(input.chapterConcurrency) || input.chapterConcurrency < 1 || input.chapterConcurrency > 8) {
+    throw new Error("章节分析并发数必须是 1～8 之间的整数");
   }
   return input;
 }
@@ -135,11 +135,13 @@ export function pipelineStatusText(run: SeriesPipelineRun) {
   if (run.status === "cancelled") return "任务已取消。已完成章节事件已保留。";
   if (run.status === "completed") return `全本稿件已生成，共 ${run.episodeCount} 集。请逐集审核。`;
   if (run.failureMessage || run.failures.length) return run.failureMessage ?? `有 ${run.failures.length} 个失败章节，可局部重试。`;
-  if (run.current?.stage === "chapter_analysis") {
-    return `正在分析章节 ${run.current.subjectId}，共 ${run.progress.chapterAnalysis.total} 章。`;
+  const chapter = run.progress.chapterAnalysis;
+  if (run.current?.stage === "chapter_analysis" || run.status === "analyzing_chapters") {
+    return chapter.running > 0
+      ? `正在并发分析 ${chapter.running} 章；已完成 ${chapter.completed}/${chapter.total} 章。`
+      : `章节分析已完成 ${chapter.completed}/${chapter.total} 章，正在等待下一项任务。`;
   }
   if (run.status === "configured") return "全本改写任务已配置，等待开始章节分析。";
-  if (run.status === "analyzing_chapters") return "正在准备下一章分析任务。";
   if (run.status === "building_story_bible") return "章节分析已完成，正在构建全书世界观。";
   if (run.status === "planning_episodes" || run.status === "validating_plan" || run.status === "freezing_plan") {
     return run.planningContractVersion === 2

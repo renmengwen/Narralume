@@ -99,34 +99,7 @@ function streamedModelResponse(value: unknown) {
   });
 }
 
-test("证据 ID 首答非法时只纠错一次并接受严格合法答复", async () => {
-  const modelAtoms = atoms.map((atom, index) => ({ ...atom, id: `evidence_${"a".repeat(64)}_${index}` }));
-  const replies = [
-    { events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e_missing"] }] },
-    { events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e1"] }] },
-  ];
-  const requests: string[] = [];
-  const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async (_input, init) => {
-    requests.push(String(init?.body));
-    return streamedModelResponse(replies.shift());
-  }) as typeof fetch);
-
-  assert.deepEqual(await analyzer({ chapterId: "chapter", atoms: modelAtoms }), [{
-    type: "location",
-    payload: { name: "墓道" },
-    sources: [{ byteStart: 100, byteEnd: 112 }],
-    occurrence: 0,
-  }]);
-  assert.equal(requests.length, 2);
-  for (const request of requests) {
-    assert.equal((JSON.parse(request) as { stream?: unknown }).stream, true);
-    assert.doesNotMatch(request, /evidence_/);
-    assert.match(request, /e1/);
-    assert.match(request, /e2/);
-  }
-});
-
-test("证据 ID 纠错答复仍非法时失败且不做第三次请求", async () => {
+test("证据合同错误直接失败且不复制付费请求", async () => {
   let calls = 0;
   const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async () => {
     calls += 1;
@@ -134,7 +107,7 @@ test("证据 ID 纠错答复仍非法时失败且不做第三次请求", async (
   }) as typeof fetch);
 
   await assert.rejects(() => analyzer({ chapterId: "chapter", atoms }), /未知证据 ID/);
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
 });
 
 test("HTTP 和非 JSON 错误不触发证据纠错请求", async () => {
@@ -196,29 +169,35 @@ test("文本模型闸门排队取消后不发送章节分析请求", async () =>
   await Promise.all([...running, queued]);
 });
 
-test("分批合并后为重复事件身份稳定分配 occurrence", async () => {
+test("单章全部证据只请求一次并稳定分配 occurrence", async () => {
   const repeatedAtoms = Array.from({ length: 11 }, (_, index): ChapterEvidenceAtom => ({
     id: `evidence_${index}`,
     byteStart: index === 10 ? 100 : 100 + index * 20,
     byteEnd: index === 10 ? 112 : 112 + index * 20,
     text: `原子-${index}`,
   }));
-  const replies = [
-    { events: [
-      { type: "location", payload: { name: "地点甲" }, evidenceIds: ["e1"] },
-      { type: "location", payload: { name: "地点乙" }, evidenceIds: ["e1"] },
-      { type: "character", payload: { name: "人物甲" }, evidenceIds: ["e1"] },
-      { type: "location", payload: { name: "地点丙" }, evidenceIds: ["e2"] },
-    ] },
-    { events: [{ type: "location", payload: { name: "地点丁" }, evidenceIds: ["e1"] }] },
-  ];
+  const reply = { events: [
+    { type: "location", payload: { name: "地点甲" }, evidenceIds: ["e1"] },
+    { type: "location", payload: { name: "地点乙" }, evidenceIds: ["e1"] },
+    { type: "character", payload: { name: "人物甲" }, evidenceIds: ["e1"] },
+    { type: "location", payload: { name: "地点丙" }, evidenceIds: ["e2"] },
+    { type: "location", payload: { name: "地点丁" }, evidenceIds: ["e11"] },
+  ] };
   const run = async () => {
-    let call = 0;
+    let calls = 0;
+    let activity = 0;
     const analyzer = createOpenAiResponsesChapterAnalyzer(
       config,
-      (async () => modelResponse(replies[call++])) as typeof fetch,
+      (async (_input, init) => {
+        calls += 1;
+        assert.match(String(init?.body), /e11/);
+        return streamedModelResponse(reply);
+      }) as typeof fetch,
     );
-    return analyzer({ chapterId: "chapter", atoms: repeatedAtoms });
+    const events = await analyzer({ chapterId: "chapter", atoms: repeatedAtoms, onActivity: () => { activity += 1; } });
+    assert.equal(calls, 1);
+    assert.ok(activity > 0);
+    return events;
   };
 
   const first = await run();

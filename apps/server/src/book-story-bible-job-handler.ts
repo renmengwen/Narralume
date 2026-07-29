@@ -30,6 +30,7 @@ import { createBookStoryBible, findBookStoryBibleForJob } from "./book-story-bib
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
+import { withTextModelTimeout } from "./text-model-timeout.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
@@ -275,30 +276,20 @@ async function withCancellation<T>(
   groupSignal?: AbortSignal,
 ) {
   context.throwIfCancellationRequested();
-  const controller = new AbortController();
-  const idleController = new AbortController();
-  const totalController = new AbortController();
-  const poll = setInterval(() => { if (context.isCancellationRequested()) controller.abort(); }, 50);
-  let idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")), BOOK_STORY_BIBLE_TIMEOUT_MS);
-  const total = setTimeout(() => totalController.abort(new DOMException("total timeout", "TimeoutError")),
-    BOOK_STORY_BIBLE_TOTAL_TIMEOUT_MS);
-  const onActivity = () => {
-    clearTimeout(idle);
-    idle = setTimeout(() => idleController.abort(new DOMException("idle timeout", "TimeoutError")), BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS);
-  };
   try {
-    return await call(AbortSignal.any([
-      controller.signal,
-      idleController.signal,
-      totalController.signal,
-      ...(groupSignal ? [groupSignal] : []),
-    ]), onActivity);
+    return await withTextModelTimeout(call, {
+      firstActivityMs: BOOK_STORY_BIBLE_TIMEOUT_MS,
+      idleMs: BOOK_STORY_BIBLE_IDLE_TIMEOUT_MS,
+      totalMs: BOOK_STORY_BIBLE_TOTAL_TIMEOUT_MS,
+      signal: groupSignal,
+      isCancellationRequested: context.isCancellationRequested,
+    });
   } catch (error) {
-    if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
+    if (context.isCancellationRequested()) throw new JobCancelledError();
     if (groupSignal?.aborted) throw groupSignal.reason ?? error;
     if (error instanceof Error && error.name === "TimeoutError") throw new Error("全书世界观模型请求超时");
     throw error;
-  } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
+  }
 }
 
 export function createBookStoryBibleJobHandler(

@@ -45,4 +45,3 @@ export function adjustEpisodeBoundary(
     characterCount: characterCount(nextStart.chapter_index, range.endChapterIndex),
   } : range);
 }
-

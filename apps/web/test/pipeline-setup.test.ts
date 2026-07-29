@@ -51,4 +51,3 @@ test("全本设置展示付费前范围确认、六类本书提示词和只读�
   assert.match(html, /产品级提示词（只读）/);
   assert.doesNotMatch(html, /故事圣经|原著还原稿/);
 });
-

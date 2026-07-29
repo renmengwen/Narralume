@@ -91,11 +91,11 @@ function context(task: FullBookPlanJobPayload, saved = new Map<string, {
   };
 }
 
-test("依次执行 interval 和独立 final，产出恰好 N 集的服务端验证计划", async () => {
+test("依次执行 interval 并确定性归并恰好 N 集的服务端验证计划", async () => {
   const task = payload();
   const calls: string[] = [];
   const streamFlags: unknown[] = [];
-  const responses = [plan(["event_0"]), plan(["event_1"]), plan(["event_0", "event_1"])];
+  const responses = [plan(["event_0"]), plan(["event_1"])];
   let index = 0;
   const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as { input: string };
@@ -108,8 +108,8 @@ test("依次执行 interval 和独立 final，产出恰好 N 集的服务端验�
   const result = await createFullBookPlanJobHandler(config, { fetchImpl: fetchImpl as typeof fetch })(execution.value) as {
     plan: { episodes: unknown[] }; validation: { episodeCount: number; intervalQuotas: unknown[] };
   };
-  assert.deepEqual(calls, ["interval", "interval", "final"]);
-  assert.deepEqual(streamFlags, [true, true, true]);
+  assert.deepEqual(calls, ["interval", "interval"]);
+  assert.deepEqual(streamFlags, [true, true]);
   assert.equal(result.plan.episodes.length, 2);
   assert.equal(result.validation.episodeCount, 2);
   assert.equal(result.validation.intervalQuotas.length, 2);
@@ -134,13 +134,9 @@ test("按当前书籍流水线配置并发 interval，全部完成后才执行 f
   const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as { input: string };
     const input = JSON.parse(request.input.split("\n").at(-1)!) as {
-      kind: "interval" | "final";
+      kind: "interval";
       request: { sourceEvents?: Array<{ id: string }> };
     };
-    if (input.kind === "final") {
-      assert.equal(inFlight, 0);
-      return Response.json({ output_text: JSON.stringify(plan(["event_0", "event_1"])) });
-    }
     inFlight += 1;
     peak = Math.max(peak, inFlight);
     intervalStarted += 1;
@@ -155,13 +151,13 @@ test("按当前书籍流水线配置并发 interval，全部完成后才执行 f
 });
 
 test("全书规划只在流式成功终态后解析", async () => {
-  const responses = [plan(["event_0"]), plan(["event_1"]), plan(["event_0", "event_1"])];
+  const responses = [plan(["event_0"]), plan(["event_1"])];
   let calls = 0;
   const fetchImpl = (async () => streamedPlanResponse(responses[calls++])) as typeof fetch;
   const result = await createFullBookPlanJobHandler(config, { fetchImpl })(context(payload()).value) as {
     plan: { episodes: unknown[] };
   };
-  assert.equal(calls, 3);
+  assert.equal(calls, 2);
   assert.equal(result.plan.episodes.length, 2);
 });
 
@@ -178,15 +174,13 @@ test("瞬时 HTTP 与上游流失败在单区间内有界重试", async () => {
       if (calls < FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS) return failure();
       const body = JSON.parse(String(init?.body)) as { input: string };
       const input = JSON.parse(body.input.split("\n").at(-1)!) as {
-        kind: "interval" | "final"; request: { sourceEvents?: Array<{ id: string }> };
+        kind: "interval"; request: { sourceEvents: Array<{ id: string }> };
       };
-      const events = input.kind === "final"
-        ? ["event_0", "event_1"]
-        : [input.request.sourceEvents![0]!.id];
+      const events = [input.request.sourceEvents[0]!.id];
       return Response.json({ output_text: JSON.stringify(plan(events)) });
     }) as typeof fetch;
     await createFullBookPlanJobHandler(config, { fetchImpl, retryDelayMs: 0 })(context(payload()).value);
-    assert.equal(calls, FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS + 2);
+    assert.equal(calls, FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS + 1);
   }
 });
 
@@ -195,14 +189,14 @@ test("已验证区间与 final 输出持久后重试不再调用模型", async (
   const saved = new Map<string, {
     jobId: string; stage: string; scopeKey: string; inputHash: string; completedAt: number; output?: unknown;
   }>();
-  const responses = [plan(["event_0"]), plan(["event_1"]), plan(["event_0", "event_1"])];
+  const responses = [plan(["event_0"]), plan(["event_1"])];
   let calls = 0;
   const fetchImpl = (async () => {
     calls += 1;
     return Response.json({ output_text: JSON.stringify(responses.shift()) });
   }) as typeof fetch;
   await createFullBookPlanJobHandler(config, { fetchImpl })(context(task, saved).value);
-  assert.equal(calls, 3);
+  assert.equal(calls, 2);
 
   const restored = context(task, saved);
   const result = await createFullBookPlanJobHandler(config, {
@@ -258,7 +252,6 @@ test("首答回显包装字段时仅纠错一次，并使用同一任务与精�
     { kind: "interval", identityHash: "x", start: 0, end: 0, episodeCount: 1, ...plan(["event_0"]) },
     plan(["event_0"]),
     plan(["event_1"]),
-    plan(["event_0", "event_1"]),
   ];
   const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as { input: string };
@@ -269,11 +262,10 @@ test("首答回显包装字段时仅纠错一次，并使用同一任务与精�
     plan: { episodes: unknown[] };
   };
   assert.equal(result.plan.episodes.length, 2);
-  assert.equal(prompts.length, 4);
+  assert.equal(prompts.length, 3);
   assert.match(prompts[0]!, /唯一允许的输出 schema.*\{episodes:\[\{index:number,title:string,storyArc:string,sourceEventIds:string\[\],recap:string\|null,nextHook:string\|null\}\]\}/u);
   assert.match(prompts[1]!, /包含未知字段/u);
   assert.equal(prompts[0]!.split("\n").at(-1), prompts[1]!.split("\n").at(-1));
-  assert.match(prompts[3]!, /逐项满足 request\.intervalQuotas/u);
 });
 
 test("纠错答仍非法时不发起第三次请求", async () => {

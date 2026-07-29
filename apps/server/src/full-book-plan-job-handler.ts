@@ -146,9 +146,7 @@ const OUTPUT_SCHEMA = "{episodes:[{index:number,title:string,storyArc:string," +
   "sourceEventIds:string[],recap:string|null,nextHook:string|null}]}";
 
 function modelPrompt(input: unknown, correction?: string) {
-  const request = input as { kind: "interval" | "final"; request: FullBookPlanIntervalRequest | { identity: {
-    episodeCount: number;
-  }; intervalQuotas?: unknown } };
+  const request = input as { kind: "interval"; request: FullBookPlanIntervalRequest };
   return [
     "你是全书分集规划器。只输出一个严格 JSON 对象，不要输出 Markdown、解释或代码围栏。",
     `唯一允许的输出 schema（不得增加包装字段或任何其他字段）：${OUTPUT_SCHEMA}`,
@@ -156,7 +154,6 @@ function modelPrompt(input: unknown, correction?: string) {
     `episodes 必须恰好包含 ${request.request.identity.episodeCount} 集。`,
     "sourceEventIds 每集至少一个，只能引用当前 request 中的事件 ID；所有 ID 在全计划中不得重复。",
     "各集及集内事件必须按原文和章节顺序连续排列，并覆盖当前 request 的全部章节范围。",
-    ...(request.kind === "final" ? ["最终计划还必须逐项满足 request.intervalQuotas，任何一集不得跨越配额边界。"] : []),
     "不得输出或推测字节范围，也不得回显 kind、request、identityHash、章节范围或集数包装字段。",
     ...(correction ? [`上一次完整 JSON 输出未通过合同校验：${correction}`, "请针对同一原任务仅纠正输出合同；不要改变任务输入。"] : []),
     canonical(input),
@@ -334,14 +331,12 @@ export function createFullBookPlanJobHandler(
       task.bookId, task.storyBible, task.episodeCount, verified,
       { providerId: task.providerId, model: task.model }, task.limits,
     );
-    const finalInput = { kind: "final" as const, request: finalRequest };
     const parseFinal = fullBookPlanFinalResponseParser(finalRequest);
     const finalCheckpoint = context.getCheckpoint("full-book-plan-final", finalRequest.identityHash);
     const final = finalCheckpoint?.inputHash === finalRequest.identityHash && finalCheckpoint.output !== undefined
       ? parseFinal(finalCheckpoint.output)
-      : await callAndParse(context,
-        (signal, correction, onActivity) => callModel(config, fetchImpl, finalInput, signal, onActivity, correction),
-        parseFinal, undefined, options.retryDelayMs);
+      : parseFinal({ episodes: verified.flatMap(({ content }) => content.episodes)
+        .map((episode, index) => ({ ...episode, index: index + 1 })) });
     context.throwIfCancellationRequested();
     if (finalCheckpoint?.inputHash !== finalRequest.identityHash || finalCheckpoint.output === undefined) {
       context.commitCheckpoint("full-book-plan-final", finalRequest.identityHash, finalRequest.identityHash,

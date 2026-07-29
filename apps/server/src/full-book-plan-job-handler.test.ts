@@ -15,7 +15,11 @@ import {
 } from "./full-book-plan-job-handler.js";
 import {
   FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
+  FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION,
+  FULL_BOOK_PLAN_JOB_V1_PROMPT_VERSION,
+  buildFullBookPlanFinalRequest,
   buildFullBookPlanIntervalRequests,
+  parseFullBookPlanIntervalResponse,
   type FullBookPlanBuildLimits,
 } from "./full-book-plan-job.js";
 import type { JobExecutionContext } from "./job-worker.js";
@@ -50,6 +54,26 @@ function payload(): FullBookPlanJobPayload {
     }],
   })), 2, { providerId: config.providerId, model: config.model }, limits);
   const frozen = { contractVersion: FULL_BOOK_PLAN_JOB_CONTRACT_VERSION, bookId: "book_a", storyBible,
+    episodeCount: 2, intervals, limits } as const;
+  return { ...frozen, providerId: config.providerId, model: config.model,
+    requestHash: fullBookPlanJobRequestHash(frozen) };
+}
+
+function v1Payload(): FullBookPlanJobPayload {
+  const storyBible = { id: "bible_a", contentHash: "b".repeat(64) };
+  const legacyChapters = [0, 1].map((chapterIndex) => ({
+    chapterId: `chapter_${chapterIndex}`, chapterIndex,
+    sourceEvents: [{
+      id: `event_${chapterIndex}`, contentHash: `${chapterIndex + 1}`.repeat(64), inputBytes: 10,
+      chapterId: `chapter_${chapterIndex}`, chapterIndex,
+      byteRanges: [{ byteStart: chapterIndex * 10, byteEnd: chapterIndex * 10 + 9 }],
+    }],
+  }));
+  const intervals = buildFullBookPlanIntervalRequests("book_a", storyBible,
+    legacyChapters as unknown as Parameters<typeof buildFullBookPlanIntervalRequests>[2],
+    2, { providerId: config.providerId, model: config.model }, limits,
+  FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION);
+  const frozen = { contractVersion: FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION, bookId: "book_a", storyBible,
     episodeCount: 2, intervals, limits } as const;
   return { ...frozen, providerId: config.providerId, model: config.model,
     requestHash: fullBookPlanJobRequestHash(frozen) };
@@ -220,6 +244,60 @@ test("已验证区间与 final 输出持久后重试不再调用模型", async (
   })(restored.value) as { plan: { episodes: unknown[] } };
   assert.equal(result.plan.episodes.length, 2);
   assert.deepEqual(restored.progress, [2 / 3, 1]);
+});
+
+test("冻结的 v1 payload 与 checkpoint 按原 identity 恢复且不重新调用模型", async () => {
+  const task = v1Payload();
+  assert.equal(task.intervals[0]!.identity.promptVersion, FULL_BOOK_PLAN_JOB_V1_PROMPT_VERSION);
+  assert.deepEqual(task.intervals.map(({ identityHash }) => identityHash), [
+    "256091bf857dca9ea4bcb7994a89ebf061ff147a146a159fe7df9dc5274a1b24",
+    "b68479180833475e0177e6bf84bbb0b0d6b2ad5d8462e3819bf33ec2ae6af075",
+  ]);
+  assert.equal(task.requestHash, "8eb8cd87fc5e85ef15eecbb6a06bf890855e3a79c745a553cf5290e589dc3876");
+  const verified = task.intervals.map((request, index) =>
+    parseFullBookPlanIntervalResponse(request, plan([`event_${index}`])));
+  const finalRequest = buildFullBookPlanFinalRequest(
+    task.bookId, task.storyBible, task.episodeCount, verified,
+    { providerId: task.providerId, model: task.model }, task.limits,
+  );
+  assert.equal(finalRequest.identityHash, "5696dfc1fa86f70dd578c2206e923b91247ef339c485bfab880c66c4a17213e3");
+  const final = { episodes: verified.flatMap(({ content }) => content.episodes)
+    .map((episode, index) => ({ ...episode, index: index + 1 })) };
+  const saved = new Map(task.intervals.map((request, index) => [
+    `full-book-plan-interval:${request.identityHash}`,
+    { jobId: "job_v1", stage: "full-book-plan-interval", scopeKey: request.identityHash,
+      inputHash: request.identityHash, completedAt: 1, output: verified[index]!.content },
+  ]));
+  saved.set(`full-book-plan-final:${finalRequest.identityHash}`,
+    { jobId: "job_v1", stage: "full-book-plan-final", scopeKey: finalRequest.identityHash,
+      inputHash: finalRequest.identityHash, completedAt: 1, output: final });
+
+  const execution = context(task, saved);
+  const result = await createFullBookPlanJobHandler(config, {
+    fetchImpl: (async () => { throw new Error("v1 checkpoint 恢复不应重新调用模型"); }) as typeof fetch,
+  })(execution.value) as { identityHash: string; plan: { episodes: unknown[] } };
+  assert.equal(result.identityHash, finalRequest.identityHash);
+  assert.equal(result.plan.episodes.length, 2);
+  assert.deepEqual(execution.checkpoints, []);
+});
+
+test("并发 permit 覆盖响应正文消费", async (t) => {
+  let held = false;
+  t.mock.method(textModelConcurrencyGate, "run", async (_signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    held = true;
+    try { return await task(); }
+    finally { held = false; }
+  });
+  const responses = [plan(["event_0"]), plan(["event_1"])];
+  const fetchImpl = (async () => new Response(new ReadableStream({
+    pull(controller) {
+      assert.equal(held, true);
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ output_text: JSON.stringify(responses.shift()) })));
+      controller.close();
+    },
+  }))) as typeof fetch;
+  await createFullBookPlanJobHandler(config, { fetchImpl })(context(payload()).value);
+  assert.equal(held, false);
 });
 
 test("流式响应无成功终态时不纠错", async () => {

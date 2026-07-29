@@ -255,13 +255,15 @@ export function createAssetPromptDraftJobHandler(
 export function createOpenAiAssetPromptDraftGenerator(config: ChapterTextModelConfig, fetchImpl: typeof fetch = fetch): GenerateAssetPromptDraft {
   return async ({ prompt, signal, onActivity }) => {
     const request = textModelRequest(config, `${prompt}\n\n只输出符合 outputSchema �� JSON 对象，不得增加字段或 Markdown。`, 8192, true);
-    const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-      method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
-    }));
-    if (!response.ok) { await response.body?.cancel(); throw new Error(`资产 Prompt 草稿模型请求失败（HTTP ${response.status}）`); }
-    const raw = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-      ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-      : responseText(await limitedJson(response));
+    const raw = await textModelConcurrencyGate.run(signal, async () => {
+      const response = await fetchImpl(request.endpoint, {
+        method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+      });
+      if (!response.ok) { await response.body?.cancel(); throw new Error(`资产 Prompt 草稿模型请求失败（HTTP ${response.status}）`); }
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+        : responseText(await limitedJson(response));
+    });
     try { return JSON.parse(raw) as unknown; } catch { throw new Error("资产 Prompt 草稿模型返回了无效 JSON"); }
   };
 }

@@ -224,16 +224,18 @@ async function callModel(
       promptSnapshot.instructions, frozenInput)
     : frozenInput;
   const request = textModelRequest(config, prompt, 8192, true);
-  const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-    method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-  }));
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`全书世界观模型请求失败（HTTP ${response.status}）`);
-  }
-  const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-    ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-    : responseText(await limitedJson(response));
+  const text = await textModelConcurrencyGate.run(signal, async () => {
+    const response = await fetchImpl(request.endpoint, {
+      method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`全书世界观模型请求失败（HTTP ${response.status}）`);
+    }
+    return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+      ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+      : responseText(await limitedJson(response));
+  });
   try {
     return JSON.parse(text) as unknown;
   } catch { throw new Error("全书世界观模型返回了无效 JSON"); }

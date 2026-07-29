@@ -47,16 +47,18 @@ export function createOpenAiEpisodeScriptGenerator(
           input.prompt.instructions, JSON.stringify(safeInput))}`
         : `${instructions}\n${JSON.stringify(safeInput)}`;
     const request = textModelRequest(config, prompt, 8192, true);
-    const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-      method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
-    }));
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`长稿生成模型请求失败（HTTP ${response.status}）`);
-    }
-    const raw = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-      ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-      : responseText(await limitedJson(response));
+    const raw = await textModelConcurrencyGate.run(signal, async () => {
+      const response = await fetchImpl(request.endpoint, {
+        method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`长稿生成模型请求失败（HTTP ${response.status}）`);
+      }
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+        : responseText(await limitedJson(response));
+    });
     try { return JSON.parse(raw) as Awaited<ReturnType<GenerateEpisodeScript>>; }
     catch { throw new Error("长稿生成模型返回了无效 JSON"); }
   };

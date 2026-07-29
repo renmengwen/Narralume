@@ -167,20 +167,33 @@ test("文本模型闸门排队取消后不发送章节分析请求", async () =>
   let calls = 0;
   const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async () => {
     calls += 1;
-    await new Promise<void>((resolve) => releases.push(resolve));
-    return streamedModelResponse({ events: [] });
+    const delta = JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify({ events: [] }) });
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        releases.push(() => {
+          controller.enqueue(new TextEncoder().encode(`data: ${delta}\n\ndata: {"type":"response.completed"}\n\n`));
+          controller.close();
+        });
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch);
   const running = Array.from({ length: TEXT_MODEL_REQUEST_CONCURRENCY }, (_, index) => analyzer({ chapterId: `chapter-${index}`, atoms }));
   while (calls < TEXT_MODEL_REQUEST_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve));
 
-  const controller = new AbortController();
-  const queued = analyzer({ chapterId: "chapter-queued", atoms, signal: controller.signal });
-  controller.abort(new Error("cancelled while queued"));
-  await assert.rejects(queued, /cancelled while queued/);
+  const queued = analyzer({ chapterId: "chapter-queued", atoms });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls, TEXT_MODEL_REQUEST_CONCURRENCY);
 
+  const controller = new AbortController();
+  const cancelled = analyzer({ chapterId: "chapter-cancelled", atoms, signal: controller.signal });
+  controller.abort(new Error("cancelled while queued"));
+  await assert.rejects(cancelled, /cancelled while queued/);
+  assert.equal(calls, TEXT_MODEL_REQUEST_CONCURRENCY);
+
+  releases.shift()!();
+  while (calls < TEXT_MODEL_REQUEST_CONCURRENCY + 1) await new Promise((resolve) => setImmediate(resolve));
   releases.splice(0).forEach((release) => release());
-  await Promise.all(running);
+  await Promise.all([...running, queued]);
 });
 
 test("分批合并后为重复事件身份稳定分配 occurrence", async () => {

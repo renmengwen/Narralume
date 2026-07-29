@@ -12,6 +12,8 @@ import {
 export const FULL_BOOK_PLAN_JOB_CONTRACT_VERSION = "full-book-plan-job-v2";
 export const FULL_BOOK_PLAN_PROMPT_VERSION = "full-book-plan-prompt-v3";
 export const FULL_BOOK_PLAN_PARSER_VERSION = "full-book-plan-parser-v1";
+export const FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION = "full-book-plan-job-v1";
+export const FULL_BOOK_PLAN_JOB_V1_PROMPT_VERSION = "full-book-plan-prompt-v2";
 
 export class FullBookPlanJobContractError extends Error {}
 
@@ -120,6 +122,18 @@ const VERSIONS: PlanIdentityVersions = {
   promptVersion: FULL_BOOK_PLAN_PROMPT_VERSION,
   parserVersion: FULL_BOOK_PLAN_PARSER_VERSION,
 };
+const V1_VERSIONS: PlanIdentityVersions = {
+  contractVersion: FULL_BOOK_PLAN_CONTRACT_VERSION,
+  jobContractVersion: FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION,
+  promptVersion: FULL_BOOK_PLAN_JOB_V1_PROMPT_VERSION,
+  parserVersion: FULL_BOOK_PLAN_PARSER_VERSION,
+};
+
+function versionsForJobContract(jobContractVersion: string) {
+  if (jobContractVersion === FULL_BOOK_PLAN_JOB_CONTRACT_VERSION) return VERSIONS;
+  if (jobContractVersion === FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION) return V1_VERSIONS;
+  throw new FullBookPlanJobContractError("全书规划 Job 合同版本无效");
+}
 
 function canonical(value: unknown): string {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -174,16 +188,19 @@ function validateLimits(limits: FullBookPlanBuildLimits) {
   positiveInteger(limits.maxFinalInputBytes, "maxFinalInputBytes");
 }
 
-function eventIdentity(event: FullBookPlanJobSourceEvent) {
-  return {
+function eventIdentity(event: FullBookPlanJobSourceEvent, versions: PlanIdentityVersions) {
+  const frozen = {
     id: event.id,
-    eventType: event.eventType,
-    payload: event.payload,
     contentHash: event.contentHash,
-    inputBytes: event.inputBytes,
     chapterId: event.chapterId,
     chapterIndex: event.chapterIndex,
     byteRanges: event.byteRanges,
+  };
+  return versions === V1_VERSIONS ? frozen : {
+    ...frozen,
+    eventType: event.eventType,
+    payload: event.payload,
+    inputBytes: event.inputBytes,
   };
 }
 
@@ -220,7 +237,10 @@ export function buildFullBookPlanIntervalRequests(
   episodeCount: number,
   provenance: FullBookPlanModelProvenance,
   limits: FullBookPlanBuildLimits,
+  jobContractVersion: typeof FULL_BOOK_PLAN_JOB_CONTRACT_VERSION | typeof FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION =
+    FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
 ): FullBookPlanIntervalRequest[] {
+  const versions = versionsForJobContract(jobContractVersion);
   validId(bookId, "bookId");
   validId(storyBible.id, "storyBibleId");
   validHash(storyBible.contentHash, "storyBibleContentHash");
@@ -244,8 +264,10 @@ export function buildFullBookPlanIntervalRequests(
     let chapterBytes = 0;
     for (const event of chapter.sourceEvents) {
       validId(event.id, "sourceEventId");
-      validEventType(event.eventType);
-      canonical(event.payload);
+      if (versions === VERSIONS) {
+        validEventType(event.eventType!);
+        canonical(event.payload);
+      }
       validHash(event.contentHash, "sourceEventContentHash");
       positiveInteger(event.inputBytes, "事件输入字节数");
       if (event.chapterId !== chapter.chapterId || event.chapterIndex !== chapter.chapterIndex) {
@@ -290,12 +312,11 @@ export function buildFullBookPlanIntervalRequests(
     episodeCount,
   );
   return groups.map((chaptersInGroup, index) => {
-    const sourceEvents = chaptersInGroup.flatMap((chapter) => chapter.sourceEvents).map((event) => ({
-      ...event,
-      eventType: validEventType(event.eventType),
-      payload: JSON.parse(canonical(event.payload)) as unknown,
-      byteRanges: event.byteRanges.map((range) => ({ ...range })),
-    }));
+    const sourceEvents = chaptersInGroup.flatMap((chapter) => chapter.sourceEvents).map((event) => versions === V1_VERSIONS
+      ? { ...event, byteRanges: event.byteRanges.map((range) => ({ ...range })) }
+      : { ...event, eventType: validEventType(event.eventType!),
+          payload: JSON.parse(canonical(event.payload)) as unknown,
+          byteRanges: event.byteRanges.map((range) => ({ ...range })) });
     const identity = {
       bookId,
       storyBibleId: storyBible.id,
@@ -303,8 +324,8 @@ export function buildFullBookPlanIntervalRequests(
       startChapterIndex: chaptersInGroup[0]!.chapterIndex,
       endChapterIndex: chaptersInGroup.at(-1)!.chapterIndex,
       episodeCount: quotas[index]!,
-      sourceEventsHash: sha256(canonical(sourceEvents.map(eventIdentity))),
-      ...VERSIONS,
+      sourceEventsHash: sha256(canonical(sourceEvents.map((event) => eventIdentity(event, versions)))),
+      ...versions,
     };
     return {
       kind: "interval" as const,
@@ -319,6 +340,9 @@ export function buildFullBookPlanIntervalRequests(
 
 export function fullBookPlanIntervalModelInput(request: FullBookPlanIntervalRequest): FullBookPlanIntervalModelInput {
   validateIntervalRequest(request);
+  if (request.identity.jobContractVersion !== FULL_BOOK_PLAN_JOB_CONTRACT_VERSION) {
+    throw new FullBookPlanJobContractError("旧版全书规划请求必须使用冻结的 v1 模型输入");
+  }
   return {
     kind: "interval",
     chapterRange: {
@@ -327,21 +351,22 @@ export function fullBookPlanIntervalModelInput(request: FullBookPlanIntervalRequ
     },
     episodeCount: request.identity.episodeCount,
     sourceEvents: request.sourceEvents.map(({ id, chapterIndex, eventType, payload }) => ({
-      id, chapterIndex, eventType, payload,
+      id, chapterIndex, eventType: eventType!, payload,
     })),
   };
 }
 
 function validateIntervalRequest(request: FullBookPlanIntervalRequest) {
+  const versions = versionsForJobContract(request.identity?.jobContractVersion);
   if (request.kind !== "interval" || request.identityHash !== sha256(canonical(request.identity)) ||
       canonical({
         contractVersion: request.identity.contractVersion,
         jobContractVersion: request.identity.jobContractVersion,
         promptVersion: request.identity.promptVersion,
         parserVersion: request.identity.parserVersion,
-      }) !== canonical(VERSIONS) ||
+      }) !== canonical(versions) ||
       request.chapterIds.length !== request.identity.endChapterIndex - request.identity.startChapterIndex + 1 ||
-      request.identity.sourceEventsHash !== sha256(canonical(request.sourceEvents.map(eventIdentity)))) {
+      request.identity.sourceEventsHash !== sha256(canonical(request.sourceEvents.map((event) => eventIdentity(event, versions))))) {
     throw new FullBookPlanJobContractError("全书规划区间请求身份无效");
   }
   validProvenance(request.provenance);
@@ -379,6 +404,7 @@ export function buildFullBookPlanFinalRequest(
   positiveInteger(episodeCount, "episodeCount");
   validateLimits(limits);
   if (intervals.length === 0) throw new FullBookPlanJobContractError("全书规划最终聚合至少需要一个已验证区间");
+  const versions = versionsForJobContract(intervals[0]!.request.identity.jobContractVersion);
   if (intervals.length > limits.maxFinalIntervals) throw new FullBookPlanJobContractError("全书规划最终聚合区间数超限");
   let previousEnd: number | undefined;
   let totalEpisodes = 0;
@@ -388,6 +414,7 @@ export function buildFullBookPlanFinalRequest(
     validateIntervalRequest(interval.request);
     if (interval.request.identity.bookId !== bookId || interval.request.identity.storyBibleId !== storyBible.id ||
         interval.request.identity.storyBibleContentHash !== storyBible.contentHash ||
+        interval.request.identity.jobContractVersion !== versions.jobContractVersion ||
         interval.contentHash !== sha256(canonicalFullBookPlanJson(interval.content)) ||
         (previousEnd !== undefined && interval.request.identity.startChapterIndex !== previousEnd + 1)) {
       throw new FullBookPlanJobContractError("最终聚合只能使用同书、同全书世界观、连续且已验证的区间");
@@ -421,10 +448,10 @@ export function buildFullBookPlanFinalRequest(
     startChapterIndex: intervals[0]!.request.identity.startChapterIndex,
     endChapterIndex: intervals.at(-1)!.request.identity.endChapterIndex,
     episodeCount,
-    sourceEventsHash: sha256(canonical(sourceEvents.map(eventIdentity))),
+    sourceEventsHash: sha256(canonical(sourceEvents.map((event) => eventIdentity(event, versions)))),
     intervalContentsHash: sha256(canonical(intervalInputs)),
     intervalQuotasHash: sha256(canonical(intervalQuotas)),
-    ...VERSIONS,
+    ...versions,
   };
   return {
     kind: "final",
@@ -445,6 +472,7 @@ export function parseFullBookPlanFinalResponse(request: FullBookPlanFinalRequest
 }
 
 export function fullBookPlanFinalResponseParser(request: FullBookPlanFinalRequest) {
+  const versions = versionsForJobContract(request.identity?.jobContractVersion);
   const intervalInputs = request.intervals.map(({ identityHash, contentHash, content }, index) => {
     if (identityHash !== request.intervalIdentityHashes[index] || contentHash !== sha256(canonicalFullBookPlanJson(content))) {
       throw new FullBookPlanJobContractError("全书规划最终聚合区间内容无效");
@@ -455,13 +483,13 @@ export function fullBookPlanFinalResponseParser(request: FullBookPlanFinalReques
       request.intervals.length === 0 || request.intervals.length !== request.intervalIdentityHashes.length ||
       request.identity.intervalContentsHash !== sha256(canonical(intervalInputs)) ||
       request.identity.intervalQuotasHash !== sha256(canonical(request.intervalQuotas)) ||
-      request.identity.sourceEventsHash !== sha256(canonical(request.sourceEvents.map(eventIdentity))) ||
+      request.identity.sourceEventsHash !== sha256(canonical(request.sourceEvents.map((event) => eventIdentity(event, versions)))) ||
       canonical({
         contractVersion: request.identity.contractVersion,
         jobContractVersion: request.identity.jobContractVersion,
         promptVersion: request.identity.promptVersion,
         parserVersion: request.identity.parserVersion,
-      }) !== canonical(VERSIONS)) {
+      }) !== canonical(versions)) {
     throw new FullBookPlanJobContractError("全书规划最终请求身份无效");
   }
   validProvenance(request.provenance);

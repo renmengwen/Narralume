@@ -195,15 +195,17 @@ export function createOpenAiEpisodeRecommender(config: ChapterTextModelConfig, f
       '输出：{"chapterIds":[],"eventIds":[],"estimatedCharacterCount":1200,"advice":"保留"}',
     ].join("\n");
     const request = textModelRequest(config, input, 8192, true);
-    const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-      method: "POST", signal, redirect: "error",
-      headers: request.headers,
-      body: request.body,
-    }));
-    if (!response.ok) { await response.body?.cancel(); throw new Error(`选材推荐模型请求失败（HTTP ${response.status}）`); }
-    const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-      ? await streamedText(response, config.protocol ?? "openai-response", { signal })
-      : responseText(await limitedJson(response));
+    const text = await textModelConcurrencyGate.run(signal, async () => {
+      const response = await fetchImpl(request.endpoint, {
+        method: "POST", signal, redirect: "error",
+        headers: request.headers,
+        body: request.body,
+      });
+      if (!response.ok) { await response.body?.cancel(); throw new Error(`选材推荐模型请求失败（HTTP ${response.status}）`); }
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? streamedText(response, config.protocol ?? "openai-response", { signal })
+        : responseText(await limitedJson(response));
+    });
     try { return JSON.parse(text) as Awaited<ReturnType<RecommendEpisodeSources>>; }
     catch { throw new Error("选材推荐模型返回了无效 JSON"); }
   };

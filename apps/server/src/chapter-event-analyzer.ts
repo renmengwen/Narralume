@@ -337,22 +337,24 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
       throw new Error("多章分析输入超过服务端安全上限");
     }
     const request = textModelRequest(config, prepared.prompt, 32768, true);
-    let response: Response;
-    try {
-      response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-        method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-      }));
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      throw new Error("章节分析模型请求失败");
-    }
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
-    }
-    const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-      ? await streamedText(response, config.protocol ?? "openai-response", { signal })
-      : responseText(await limitedJson(response));
+    const text = await textModelConcurrencyGate.run(signal, async () => {
+      let response: Response;
+      try {
+        response = await fetchImpl(request.endpoint, {
+          method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+        });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        throw new Error("章节分析模型请求失败");
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
+      }
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? streamedText(response, config.protocol ?? "openai-response", { signal })
+        : responseText(await limitedJson(response));
+    });
     return parseChapterBatchAnalysisEvents(text, prepared.chapters);
   };
 }
@@ -372,26 +374,28 @@ export function createOpenAiResponsesChapterAnalyzer(
     const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
     async function requestEvents(input: string) {
       const request = textModelRequest(config, input, 8192, true);
-      let response: Response;
-      try {
-        response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-          method: "POST",
-          headers: request.headers,
-          body: request.body,
-          signal,
-          redirect: "error",
-        }));
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        throw new Error("章节分析模型请求失败");
-      }
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
-      }
-      const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? await streamedText(response, config.protocol ?? "openai-response", { signal })
-        : responseText(await limitedJson(response));
+      const text = await textModelConcurrencyGate.run(signal, async () => {
+        let response: Response;
+        try {
+          response = await fetchImpl(request.endpoint, {
+            method: "POST",
+            headers: request.headers,
+            body: request.body,
+            signal,
+            redirect: "error",
+          });
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          throw new Error("章节分析模型请求失败");
+        }
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
+        }
+        return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+          ? streamedText(response, config.protocol ?? "openai-response", { signal })
+          : responseText(await limitedJson(response));
+      });
       return modelEvents(text, requestAtoms);
     }
     try {

@@ -9,6 +9,7 @@ import {
 } from "./chapter-event-analyzer.js";
 import {
   FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
+  FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION,
   buildFullBookPlanFinalRequest,
   buildFullBookPlanIntervalRequests,
   fullBookPlanIntervalModelInput,
@@ -34,7 +35,7 @@ export const FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS = 3;
 export const FULL_BOOK_PLAN_RETRY_DELAY_MS = 1_000;
 
 export interface FullBookPlanJobPayload {
-  contractVersion: typeof FULL_BOOK_PLAN_JOB_CONTRACT_VERSION;
+  contractVersion: typeof FULL_BOOK_PLAN_JOB_CONTRACT_VERSION | typeof FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION;
   bookId: string;
   storyBible: { id: string; contentHash: string };
   episodeCount: number;
@@ -119,6 +120,7 @@ function validateIntervals(payload: FullBookPlanJobPayload) {
       request.identity.episodeCount,
       { providerId: payload.providerId, model: payload.model },
       payload.limits,
+      payload.contractVersion,
     );
     if (rebuilt.length !== 1 || canonical(rebuilt[0]) !== canonical(request) ||
         (previousEnd !== undefined && request.identity.startChapterIndex !== previousEnd + 1)) {
@@ -139,7 +141,8 @@ function parsePayload(value: unknown, config: ChapterTextModelConfig): FullBookP
     throw new Error("全书规划任务冻结参数无效");
   }
   const payload = value as FullBookPlanJobPayload;
-  if (payload.contractVersion !== FULL_BOOK_PLAN_JOB_CONTRACT_VERSION || typeof payload.bookId !== "string" ||
+  if (![FULL_BOOK_PLAN_JOB_CONTRACT_VERSION, FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION].includes(payload.contractVersion) ||
+      typeof payload.bookId !== "string" ||
       payload.bookId !== payload.bookId.trim() || !payload.bookId || !Number.isSafeInteger(payload.episodeCount) ||
       payload.episodeCount < 1 || !Array.isArray(payload.intervals) || payload.intervals.length < 1 ||
       !payload.storyBible || typeof payload.storyBible !== "object" || Array.isArray(payload.storyBible) ||
@@ -182,7 +185,9 @@ function modelPrompt(input: unknown, correction?: string) {
     "不得输出或推测字节范围，也不得回显 kind、request、identityHash、章节范围或集数包装字段。",
     ...(correction ? [`上一次完整 JSON 输出未通过合同校验：${correction}`, "请针对同一原任务仅纠正输出合同；不要改变任务输入。"] : []),
   ].join("\n");
-  const frozen = canonical(fullBookPlanIntervalModelInput(request.request));
+  const frozen = canonical(request.request.identity.jobContractVersion === FULL_BOOK_PLAN_JOB_V1_CONTRACT_VERSION
+    ? { kind: request.kind, request: request.request }
+    : fullBookPlanIntervalModelInput(request.request));
   return request.prompt
     ? [contract, layeredPrompt(PRODUCT_PROMPTS.episodePlanning, request.prompt.instructions, frozen)].join("\n\n")
     : [contract, frozen].join("\n");
@@ -199,26 +204,27 @@ async function callModel(
   const request = textModelRequest(config, [
     modelPrompt(input, correction),
   ].join("\n"), 8192, true);
-  const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
-    method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-  }));
-  if (!response.ok) {
-    await response.body?.cancel();
-    const message = `全书规划模型请求失败（HTTP ${response.status}）`;
-    if (TRANSIENT_HTTP_STATUSES.has(response.status)) throw new TransientFullBookPlanModelError(message);
-    throw new Error(message);
-  }
-  let text: string;
-  try {
-    text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-      ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-      : responseText(await limitedJson(response));
-  } catch (error) {
-    if (error instanceof Error && /response\.(?:failed|incomplete): (?:internal_server_error|server_error|overloaded_error)|websocket: close 1006|unexpected EOF|error: overloaded_error/iu.test(error.message)) {
-      throw new TransientFullBookPlanModelError(error.message, { cause: error });
+  const text = await textModelConcurrencyGate.run(signal, async () => {
+    const response = await fetchImpl(request.endpoint, {
+      method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      const message = `全书规划模型请求失败（HTTP ${response.status}）`;
+      if (TRANSIENT_HTTP_STATUSES.has(response.status)) throw new TransientFullBookPlanModelError(message);
+      throw new Error(message);
     }
-    throw error;
-  }
+    try {
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+        : responseText(await limitedJson(response));
+    } catch (error) {
+      if (error instanceof Error && /response\.(?:failed|incomplete): (?:internal_server_error|server_error|overloaded_error)|websocket: close 1006|unexpected EOF|error: overloaded_error/iu.test(error.message)) {
+        throw new TransientFullBookPlanModelError(error.message, { cause: error });
+      }
+      throw error;
+    }
+  });
   try { return JSON.parse(text) as unknown; }
   catch (error) {
     if (error instanceof Error && /大小限制/u.test(error.message)) throw error;

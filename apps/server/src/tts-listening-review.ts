@@ -144,7 +144,7 @@ function listeningProperNouns(database: DatabaseSync, storyBibleId: string) {
         JSON.stringify(left.aliases).localeCompare(JSON.stringify(right.aliases))),
     };
   } catch {
-    throw new TtsListeningReviewError(409, "当前故事圣经专名及冻结父层合同无效");
+    throw new TtsListeningReviewError(409, "当前全书世界观专名及冻结父层合同无效");
   }
 }
 
@@ -173,7 +173,7 @@ function currentWorkspace(database: DatabaseSync, episodeId: string, timelineHas
      WHERE series_project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
   ).get(episode.series_project_id) as { status: string; story_bible_id: string | null } | undefined;
   if (!run?.story_bible_id || run.status === "cancelled") {
-    throw new TtsListeningReviewError(409, "当前系列流水线尚未冻结可用故事圣经");
+    throw new TtsListeningReviewError(409, "当前系列流水线尚未冻结可用全书世界观");
   }
   const bible = listeningProperNouns(database, run.story_bible_id);
   const properNouns = bible.properNouns;

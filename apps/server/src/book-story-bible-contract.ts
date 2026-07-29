@@ -160,7 +160,7 @@ function sources(value: unknown, label: string, context: ParseContext) {
 function fact(context: ParseContext, label: string) {
   context.facts += 1;
   if (context.facts > MAX_TOTAL_FACTS) {
-    throw new BookStoryBibleContractError(`${label}使故事圣经事实总数超过 ${MAX_TOTAL_FACTS}`);
+    throw new BookStoryBibleContractError(`${label}使全书世界观事实总数超过 ${MAX_TOTAL_FACTS}`);
   }
 }
 
@@ -207,7 +207,7 @@ export function parseBookStoryBibleContent(
     "characters", "relationships", "locations", "organizations", "items", "concepts", "timeline", "flashbacks",
     "plotThreads", "confusingFacts", "spoilerRestrictions", "properNouns",
   ] as const;
-  const body = object(value, "故事圣经", keys);
+  const body = object(value, "全书世界观", keys);
   const context: ParseContext = { allowedSourceEventIds, facts: 0 };
   const content: BookStoryBibleContent = {
     characters: facts(body.characters, "characters", context, (item, label): CharacterFact => {
@@ -303,9 +303,9 @@ export function parseBookStoryBibleContent(
       };
     }),
   };
-  if (context.facts === 0) throw new BookStoryBibleContractError("故事圣经必须包含至少一条事实");
+  if (context.facts === 0) throw new BookStoryBibleContractError("全书世界观必须包含至少一条事实");
   if (Buffer.byteLength(canonicalBookStoryBibleJson(content), "utf8") > MAX_CANONICAL_BYTES) {
-    throw new BookStoryBibleContractError(`故事圣经规范化内容不能超过 ${MAX_CANONICAL_BYTES} 字节`);
+    throw new BookStoryBibleContractError(`全书世界观规范化内容不能超过 ${MAX_CANONICAL_BYTES} 字节`);
   }
   return content;
 }
@@ -319,7 +319,7 @@ function canonicalJson(value: unknown): string {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`).join(",")}}`;
   }
-  throw new BookStoryBibleContractError("故事圣经必须是可序列化 JSON");
+  throw new BookStoryBibleContractError("全书世界观必须是可序列化 JSON");
 }
 
 export function canonicalBookStoryBibleJson(content: BookStoryBibleContent) {

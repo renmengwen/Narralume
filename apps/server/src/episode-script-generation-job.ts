@@ -6,11 +6,14 @@ import { getEpisode } from "./episode-store.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
-import { createScriptVersionPair } from "./script-version-store.js";
+import { createScriptVersionPair, createStandalonePackagedScriptVersion } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
+import { PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
-export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = 5;
+export const EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION = 5;
+export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION;
+export const EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION = 6;
 export const EPISODE_SCRIPT_MINIMUM_CHARACTER_RATIO = 0.9;
 export const EPISODE_SCRIPT_MAXIMUM_CHARACTER_RATIO = 1.1;
 export const EPISODE_SCRIPT_GENERATION_TIMEOUT_MS = 180_000;
@@ -44,8 +47,16 @@ interface FrozenSource {
   eventPayloadJson: string;
 }
 
+interface ScriptPromptSnapshot {
+  skeletonProductVersion: typeof PRODUCT_PROMPT_VERSIONS.episodeSkeleton;
+  beatProductVersion: typeof PRODUCT_PROMPT_VERSIONS.finishedNarrationBeat;
+  profileRevision: number;
+  profileHash: string;
+  instructions: string;
+}
+
 interface FrozenPayload extends EpisodeScriptGenerationRequest {
-  contractVersion: typeof EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION;
+  contractVersion: 5 | 6;
   episodeId: string;
   targetDurationSeconds: number;
   storyArc: string;
@@ -55,6 +66,7 @@ interface FrozenPayload extends EpisodeScriptGenerationRequest {
   providerId: string;
   model: string;
   requestHash: string;
+  prompt?: ScriptPromptSnapshot;
 }
 
 export interface ScriptBeat {
@@ -75,6 +87,7 @@ interface SkeletonInput {
   characterBudget: number;
   calibration: FrozenPayload["calibration"];
   previousScriptHandoff?: ScriptHandoff | null;
+  prompt?: ScriptPromptSnapshot;
   sources: Array<{
     sourceIndex: number;
     chapterId: string;
@@ -98,6 +111,14 @@ interface FaithfulInput {
   signal: AbortSignal;
 }
 
+interface FinishedInput extends Omit<FaithfulInput, "stage"> {
+  stage: "finished";
+  paragraphs: Array<{ text: string; sourceIndexes: number[] }>;
+  correctionError?: string;
+  previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>;
+  prompt: ScriptPromptSnapshot;
+}
+
 interface PackagedInput {
   stage: "packaged";
   targetDurationSeconds: number;
@@ -112,8 +133,13 @@ interface PackagedInput {
 }
 
 export type GenerateEpisodeScript = (
-  input: SkeletonInput | FaithfulInput | PackagedInput,
+  input: SkeletonInput | FaithfulInput | FinishedInput | PackagedInput,
 ) => Promise<{ beats: ScriptBeat[] } | { text: string } | { paragraphs: Array<{ text: string; sourceIndexes: number[] }> }>;
+
+export interface EpisodeScriptGenerationContractOptions {
+  version: 5 | 6;
+  prompt?: ScriptPromptSnapshot;
+}
 
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
@@ -275,7 +301,8 @@ function requestHash(input: Omit<FrozenPayload, "requestHash">) {
 function parseFrozenPayload(value: unknown): FrozenPayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("长稿生成任务冻结参数无效");
   const input = value as FrozenPayload;
-  if (input.contractVersion !== EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION) {
+  if (input.contractVersion !== EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION &&
+      input.contractVersion !== EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION) {
     throw new Error("长稿生成任务合同版本已过期");
   }
   const request = validateRequest(input);
@@ -288,7 +315,7 @@ function parseFrozenPayload(value: unknown): FrozenPayload {
   }
   const payload: FrozenPayload = {
     ...request,
-    contractVersion: EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION,
+    contractVersion: input.contractVersion,
     episodeId,
     targetDurationSeconds: input.targetDurationSeconds,
     storyArc: text(input.storyArc, "故事弧", 100_000),
@@ -298,7 +325,17 @@ function parseFrozenPayload(value: unknown): FrozenPayload {
     providerId,
     model,
     requestHash: hash,
+    ...(input.prompt ? { prompt: input.prompt } : {}),
   };
+  if (payload.contractVersion === 6 && (!payload.prompt ||
+      payload.prompt.skeletonProductVersion !== PRODUCT_PROMPT_VERSIONS.episodeSkeleton ||
+      payload.prompt.beatProductVersion !== PRODUCT_PROMPT_VERSIONS.finishedNarrationBeat ||
+      !Number.isSafeInteger(payload.prompt.profileRevision) || payload.prompt.profileRevision < 1 ||
+      !/^[0-9a-f]{64}$/u.test(payload.prompt.profileHash) || typeof payload.prompt.instructions !== "string" ||
+      payload.prompt.instructions.length > 40_000)) {
+    throw new Error("成片旁白 v6 提示词快照无效");
+  }
+  if (payload.contractVersion === 5 && payload.prompt) throw new Error("历史稿件任务不能携带 v6 提示词快照");
   const { requestHash: _ignored, ...identity } = payload;
   if (requestHash(identity) !== hash) {
     throw new Error("长稿生成任务冻结身份不一致");
@@ -438,6 +475,19 @@ function validatePackagedResult(value: unknown, allowed: ReadonlySet<number>) {
   });
 }
 
+function validateFinishedBeatResult(value: unknown, beat: ScriptBeat) {
+  const paragraphs = validatePackagedResult(value, new Set(beat.sourceIndexes));
+  const covered = new Set(paragraphs.flatMap((paragraph) => paragraph.sourceIndexes));
+  if (covered.size !== beat.sourceIndexes.length || beat.sourceIndexes.some((index) => !covered.has(index))) {
+    throw new Error("成片旁白 beat 必须覆盖当前 beat 的全部冻结来源");
+  }
+  return paragraphs;
+}
+
+function finishedBeatOutputHash(paragraphs: Array<{ text: string; sourceIndexes: number[] }>) {
+  return sha256(canonicalJson({ paragraphs }));
+}
+
 function scriptCharacterLimits(characterBudget: number) {
   const minimumCharacterCount = Math.max(1, Math.floor(characterBudget * EPISODE_SCRIPT_MINIMUM_CHARACTER_RATIO));
   const maximumCharacterCount = Math.max(minimumCharacterCount,
@@ -516,6 +566,9 @@ export async function enqueueEpisodeScriptGenerationJob(
   config: ChapterTextModelConfig,
   input: Omit<CreateJobInput, "id" | "type">,
   isStillAllowed: () => boolean = () => true,
+  contract: EpisodeScriptGenerationContractOptions = {
+    version: EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION,
+  },
 ): Promise<{ job: JobRecord; created: boolean }> {
   const request = validateRequest(input.payload as EpisodeScriptGenerationRequest);
   const episode = await getEpisode(database, dataRoot, request.seriesId, request.episodeIndex);
@@ -523,10 +576,11 @@ export async function enqueueEpisodeScriptGenerationJob(
   assertCalibration(database, episode.id, request);
   const payloadWithoutHash: Omit<FrozenPayload, "requestHash"> = {
     ...request,
-    contractVersion: EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION,
+    contractVersion: contract.version,
     ...frozenIdentity(database, episode),
     providerId: text(config.providerId, "模型提供方", 100),
     model: text(config.model, "模型", 150),
+    ...(contract.prompt ? { prompt: contract.prompt } : {}),
   };
   const hash = requestHash(payloadWithoutHash);
   const payload: FrozenPayload = { ...payloadWithoutHash, requestHash: hash };
@@ -580,6 +634,7 @@ export function createEpisodeScriptGenerationJobHandler(
       characterBudget,
       calibration: task.calibration,
       previousScriptHandoff: task.previousScriptHandoff ?? null,
+      ...(task.prompt ? { prompt: task.prompt } : {}),
       sources: task.sources.map((source) => ({
         sourceIndex: source.sourceIndex,
         chapterId: source.chapterId,
@@ -604,6 +659,122 @@ export function createEpisodeScriptGenerationJobHandler(
       beats = validateBeats((corrected as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
     }
     context.reportProgress(0.2);
+
+    if (task.contractVersion === EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION) {
+      const sourceMap = new Map(episode.sources.map((source) => [source.sourceIndex, source]));
+      const paragraphsByBeat = new Array<Array<{ text: string; sourceIndexes: number[] }>>(beats.length);
+      const groupController = new AbortController();
+      let completed = 0;
+      await runConcurrent(
+        beats.map((_, index) => index),
+        mappedPipelineJobConcurrency(database, context.job.id, "script_generation"),
+        async (index) => {
+          const beat = beats[index]!;
+          const beatCharacterBudget = Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
+            task.targetDurationSeconds / beats.length) / task.targetDurationSeconds)));
+          const limits = scriptCharacterLimits(beatCharacterBudget);
+          const inputHash = sha256(canonicalJson({
+            contractVersion: task.contractVersion,
+            prompt: task.prompt,
+            episodeRequestHash: task.requestHash,
+            beatIndex: index,
+            beat,
+            sources: beat.sourceIndexes.map((sourceIndex) => {
+              const source = task.sources.find((candidate) => candidate.sourceIndex === sourceIndex)!;
+              return { sourceIndex, sourceHash: source.sourceHash, byteStart: source.byteStart, byteEnd: source.byteEnd };
+            }),
+            characterBudget: beatCharacterBudget,
+            limits,
+            providerId: task.providerId,
+            model: task.model,
+          }));
+          const scopeKey = `${task.episodeId}:${index}`;
+          const checkpoint = context.getCheckpoint("episode-script-finished-beat", scopeKey);
+          if (checkpoint?.inputHash === inputHash && checkpoint.output !== undefined) {
+            const output = checkpoint.output as { paragraphs?: unknown; outputHash?: unknown };
+            const restored = validateFinishedBeatResult({ paragraphs: output.paragraphs }, beat);
+            if (output.outputHash !== finishedBeatOutputHash(restored)) {
+              throw new Error(`第 ${index + 1} 个成片旁白 beat checkpoint 输出 hash 不一致`);
+            }
+            validateScriptLength(`第 ${index + 1} 个成片旁白 beat`, restored, limits);
+            paragraphsByBeat[index] = restored;
+            completed += 1;
+            context.reportProgress(0.2 + (completed / beats.length) * 0.7);
+            return;
+          }
+          const base: Omit<FinishedInput, "signal" | "onActivity" | "correctionError" | "previousParagraphs"> = {
+            stage: "finished",
+            paragraphs: [],
+            beat,
+            characterBudget: beatCharacterBudget,
+            ...limits,
+            sources: beat.sourceIndexes.map((sourceIndex) => ({
+              sourceIndex,
+              sourceText: sourceMap.get(sourceIndex)!.sourceText,
+            })),
+            prompt: task.prompt!,
+          };
+          const generateBeat = (correctionError?: string,
+            previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>) =>
+            callWithCancellation(context, (signal, onActivity) => generate({
+              ...base,
+              ...(correctionError ? { correctionError } : {}),
+              ...(previousParagraphs ? { previousParagraphs } : {}),
+              signal,
+              onActivity,
+            }), groupController.signal);
+          try {
+            let result = await generateBeat();
+            let restored: Array<{ text: string; sourceIndexes: number[] }>;
+            try {
+              restored = validateFinishedBeatResult(result, beat);
+              validateScriptLength(`第 ${index + 1} 个成片旁白 beat`, restored, limits);
+            } catch (error) {
+              const previous = (() => {
+                try { return validateFinishedBeatResult(result, beat); } catch { return undefined; }
+              })();
+              result = await generateBeat(error instanceof Error ? error.message : "输出合同无效", previous);
+              restored = validateFinishedBeatResult(result, beat);
+              validateScriptLength(`第 ${index + 1} 个成片旁白 beat`, restored, limits);
+            }
+            paragraphsByBeat[index] = restored;
+            context.throwIfCancellationRequested();
+            context.commitCheckpoint("episode-script-finished-beat", scopeKey, inputHash, () => undefined, {
+              paragraphs: restored,
+              outputHash: finishedBeatOutputHash(restored),
+            });
+            completed += 1;
+            context.reportProgress(0.2 + (completed / beats.length) * 0.7);
+          } catch (error) {
+            groupController.abort(error);
+            throw error;
+          }
+        },
+      );
+      const finishedParagraphs = paragraphsByBeat.flatMap((paragraphs) => paragraphs);
+      const actualCharacterCount = validateScriptLength("成片旁白稿", finishedParagraphs, characterLimits);
+      await requireCurrentEpisode(database, dataRoot, task);
+      context.throwIfCancellationRequested();
+      const packaged = createStandalonePackagedScriptVersion(database, task.episodeId, finishedParagraphs, () => {
+        context.throwIfCancellationRequested();
+        assertCurrentDatabaseIdentity(database, task);
+        assertCalibration(database, task.episodeId, task);
+      });
+      context.reportProgress(1);
+      return {
+        contractVersion: task.contractVersion,
+        episodeId: task.episodeId,
+        beats,
+        characterBudget,
+        ...characterLimits,
+        calibration: task.calibration,
+        packagedVersionId: packaged.id,
+        finishedNarrationVersionId: packaged.id,
+        actualCharacterCount,
+        compressionSuggested: actualCharacterCount > characterBudget,
+        scriptHandoff: createScriptHandoff(task, beats),
+      };
+    }
 
     const sourceMap = new Map(episode.sources.map((source) => [source.sourceIndex, source]));
     const faithfulParagraphs = new Array<{ text: string; sourceIndexes: number[] }>(beats.length);

@@ -123,6 +123,13 @@ import {
 } from "./image-candidate-job.js";
 import type { OpenAiImageConfig } from "./image-provider.js";
 import {
+  ASSET_PROMPT_DRAFT_JOB_TYPE,
+  createAssetPromptDraftJobHandler,
+  createOpenAiAssetPromptDraftGenerator,
+  enqueueAssetPromptDraftJob,
+  type GenerateAssetPromptDraft,
+} from "./asset-prompt-draft-job.js";
+import {
   ContactSheetError,
   exportContactSheet,
   resolveVerifiedCandidateFile,
@@ -141,12 +148,14 @@ import {
   VisualSegmentStoreError,
 } from "./visual-segment-store.js";
 import { registerSeriesPipelineRoutes } from "./series-pipeline-routes.js";
+import { registerSeriesPipelineStoryBibleRoutes } from "./series-pipeline-story-bible-routes.js";
 import { SeriesPipelineService, SeriesPipelineWorker } from "./series-pipeline-service.js";
 import {
   BOOK_STORY_BIBLE_JOB_TYPE,
   createBookStoryBibleJobHandler,
 } from "./book-story-bible-job-handler.js";
 import {
+  EPISODE_PLAN_JOB_TYPE,
   FULL_BOOK_PLAN_JOB_TYPE,
   createFullBookPlanJobHandler,
 } from "./full-book-plan-job-handler.js";
@@ -168,6 +177,7 @@ interface BuildAppOptions {
   chapterBatchAnalyzer?: AnalyzeChapterEventsBatch;
   episodeRecommender?: RecommendEpisodeSources;
   episodeScriptGenerator?: GenerateEpisodeScript;
+  assetPromptDraftGenerator?: GenerateAssetPromptDraft;
 }
 
 interface CreateJobBody {
@@ -393,13 +403,29 @@ export function buildApp(options: BuildAppOptions = {}) {
     },
     [BOOK_STORY_BIBLE_JOB_TYPE]: async (context: JobExecutionContext) => {
       const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
-      if (!provider) throw new Error("故事圣经任务对应的模型配置不可用");
+      if (!provider) throw new Error("全书世界观任务对应的模型配置不可用");
       return createBookStoryBibleJobHandler(connection.database, provider)(context);
     },
     [FULL_BOOK_PLAN_JOB_TYPE]: async (context: JobExecutionContext) => {
       const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
       if (!provider) throw new Error("全书规划任务对应的模型配置不可用");
       return createFullBookPlanJobHandler(provider, { database: connection.database })(context);
+    },
+    [ASSET_PROMPT_DRAFT_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("资产 Prompt 草稿任务对应的模型配置不可用");
+      return createAssetPromptDraftJobHandler(
+        connection.database, dataRoot, provider,
+        options.assetPromptDraftGenerator ?? createOpenAiAssetPromptDraftGenerator(provider),
+      )(context);
+    },
+    [EPISODE_PLAN_JOB_TYPE]: async (context: JobExecutionContext) => {
+      const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
+      if (!provider) throw new Error("逐集局部规划任务对应的模型配置不可用");
+      return createFullBookPlanJobHandler(provider, {
+        database: connection.database,
+        jobType: EPISODE_PLAN_JOB_TYPE,
+      })(context);
     },
     [TTS_TIMELINE_JOB_TYPE]: createTtsTimelineJobHandler(connection.database, dataRoot),
     [TTS_CALIBRATION_JOB_TYPE]: createTtsCalibrationJobHandler(connection.database, dataRoot),
@@ -420,8 +446,10 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(CHAPTER_EVENTS_ANALYZE_JOB_TYPE);
   supportedJobTypes.add(EPISODE_RECOMMENDATION_JOB_TYPE);
   supportedJobTypes.add(EPISODE_SCRIPT_GENERATION_JOB_TYPE);
+  supportedJobTypes.add(ASSET_PROMPT_DRAFT_JOB_TYPE);
   supportedJobTypes.add(BOOK_STORY_BIBLE_JOB_TYPE);
   supportedJobTypes.add(FULL_BOOK_PLAN_JOB_TYPE);
+  supportedJobTypes.add(EPISODE_PLAN_JOB_TYPE);
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
   let chapterWorkers: JobWorker[];
@@ -458,6 +486,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       options.jobWorker?.onError ?? ((error) => app.log.error(error, "全本流水线 Worker 运行异常")),
     );
     void app.register(registerSeriesPipelineRoutes, { service: pipelineService, worker: pipelineWorker });
+    void app.register(registerSeriesPipelineStoryBibleRoutes, { database: connection.database });
   } catch (error) {
     connection.close();
     throw error;
@@ -1157,14 +1186,16 @@ export function buildApp(options: BuildAppOptions = {}) {
       }
     }
     if (type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE || type === EPISODE_RECOMMENDATION_JOB_TYPE ||
-        type === EPISODE_SCRIPT_GENERATION_JOB_TYPE) {
+        type === EPISODE_SCRIPT_GENERATION_JOB_TYPE || type === ASSET_PROMPT_DRAFT_JOB_TYPE) {
       requestTextProvider = await resolveChapterTextProvider();
       if (!requestTextProvider) {
         const message = type === CHAPTER_EVENTS_ANALYZE_JOB_TYPE
           ? "Narralume 章节分析模型尚未配置，仍可使用人工事件入口"
           : type === EPISODE_RECOMMENDATION_JOB_TYPE
             ? "Narralume 选材推荐模型尚未配置"
-            : "Narralume 长稿生成模型尚未配置";
+            : type === EPISODE_SCRIPT_GENERATION_JOB_TYPE
+              ? "Narralume 长稿生成模型尚未配置"
+              : "Narralume 资产 Prompt 草稿模型尚未配置";
         return reply.code(409).send({ ok: false, message });
       }
     }
@@ -1305,6 +1336,24 @@ export function buildApp(options: BuildAppOptions = {}) {
           ok: false,
           message: error instanceof Error ? error.message : "跨章骨架与长稿任务参数无效",
         });
+      }
+    }
+    if (type === ASSET_PROMPT_DRAFT_JOB_TYPE) {
+      try {
+        const result = await enqueueAssetPromptDraftJob(
+          connection.database, dataRoot, requestTextProvider!,
+          { payload: body.payload ?? {}, priority, maxAttempts, runAfter },
+        );
+        return reply.code(result.created ? 201 : 200).send({
+          ok: true,
+          message: result.created ? "资产 Prompt 草稿任务已创建并持久化" : "已恢复相同资产 Prompt 草稿任务",
+          job: result.job,
+        });
+      } catch (error) {
+        if (error instanceof ScriptApprovalStoreError) {
+          return reply.code(error.statusCode).send({ ok: false, message: error.message });
+        }
+        return reply.code(400).send({ ok: false, message: error instanceof Error ? error.message : "资产 Prompt 草稿参数无效" });
       }
     }
     if (type === TTS_CALIBRATION_JOB_TYPE) {

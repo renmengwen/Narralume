@@ -15,6 +15,7 @@ import {
 } from "./chapter-event-analyzer.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import { JobCancelledError, type JobExecutionContext, type JobHandler } from "./job-worker.js";
+import { PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 export const CHAPTER_EVENTS_JOB_TYPE = "chapter_events_replace";
 export const CHAPTER_EVENTS_ANALYZE_JOB_TYPE = "chapter_events_analyze";
@@ -76,6 +77,14 @@ export interface ChapterEventsAnalysisIdentity {
   analysisContractVersion: string;
   promptContractVersion: string;
   parserContractVersion: string;
+  prompt?: ChapterAnalysisPromptSnapshot;
+}
+
+export interface ChapterAnalysisPromptSnapshot {
+  productVersion: typeof PRODUCT_PROMPT_VERSIONS.chapterAnalysis;
+  profileRevision: number;
+  profileHash: string;
+  instructions: string;
 }
 
 interface AnalyzeJobPayload extends ChapterEventsAnalysisIdentity {
@@ -90,6 +99,7 @@ export interface ChapterEventsBatchAnalysisIdentity {
   analysisContractVersion: string;
   promptContractVersion: string;
   parserContractVersion: string;
+  prompt?: ChapterAnalysisPromptSnapshot;
 }
 
 interface AnalyzeBatchJobPayload extends ChapterEventsBatchAnalysisIdentity {
@@ -101,7 +111,7 @@ interface AnalyzeBatchJobPayload extends ChapterEventsBatchAnalysisIdentity {
 function analyzePayload(value: unknown): AnalyzeJobPayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("章节自动分析任务参数无效");
   const input = value as Record<string, unknown>;
-  const result = {} as Record<keyof AnalyzeJobPayload, string>;
+  const result = {} as Record<string, unknown>;
   for (const key of [
     "bookId", "chapterId", "contentHash", "analysisContractVersion", "promptContractVersion",
     "parserContractVersion", "providerId", "model", "requestHash",
@@ -109,10 +119,24 @@ function analyzePayload(value: unknown): AnalyzeJobPayload {
     if (typeof input[key] !== "string" || !input[key].trim()) throw new Error("章节自动分析任务冻结身份无效");
     result[key] = input[key].trim();
   }
-  if (!/^[0-9a-f]{64}$/.test(result.contentHash) || !/^[0-9a-f]{64}$/.test(result.requestHash)) {
+  if (!/^[0-9a-f]{64}$/.test(result.contentHash as string) || !/^[0-9a-f]{64}$/.test(result.requestHash as string)) {
     throw new Error("章节自动分析任务冻结身份无效");
   }
-  return result;
+  if (input.prompt !== undefined) result.prompt = promptSnapshot(input.prompt);
+  return result as unknown as AnalyzeJobPayload;
+}
+
+function promptSnapshot(value: unknown): ChapterAnalysisPromptSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("章节自动分析任务提示词身份无效");
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).sort().join(",") !== ["instructions", "productVersion", "profileHash", "profileRevision"].sort().join(",") ||
+      input.productVersion !== PRODUCT_PROMPT_VERSIONS.chapterAnalysis ||
+      !Number.isSafeInteger(input.profileRevision) || (input.profileRevision as number) < 1 ||
+      typeof input.profileHash !== "string" || !/^[0-9a-f]{64}$/.test(input.profileHash) ||
+      typeof input.instructions !== "string" || input.instructions.length > 40_000) {
+    throw new Error("章节自动分析任务提示词身份无效");
+  }
+  return input as unknown as ChapterAnalysisPromptSnapshot;
 }
 
 function analysisRequestHash(input: ChapterEventsAnalysisIdentity) {
@@ -153,6 +177,7 @@ function analyzeBatchPayload(value: unknown): AnalyzeBatchJobPayload {
     providerId: input.providerId as string,
     model: input.model as string,
     requestHash: input.requestHash as string,
+    ...(input.prompt === undefined ? {} : { prompt: promptSnapshot(input.prompt) }),
   };
 }
 
@@ -163,6 +188,7 @@ function batchReuseIdentity(input: AnalyzeBatchJobPayload): ChapterEventsBatchAn
     analysisContractVersion: input.analysisContractVersion,
     promptContractVersion: input.promptContractVersion,
     parserContractVersion: input.parserContractVersion,
+    ...(input.prompt ? { prompt: input.prompt } : {}),
   };
 }
 
@@ -174,6 +200,7 @@ function reuseIdentity(input: AnalyzeJobPayload): ChapterEventsAnalysisIdentity 
     analysisContractVersion: input.analysisContractVersion,
     promptContractVersion: input.promptContractVersion,
     parserContractVersion: input.parserContractVersion,
+    ...(input.prompt ? { prompt: input.prompt } : {}),
   };
 }
 
@@ -192,6 +219,7 @@ export function chapterEventsAnalysisJobIdentity(
   bookId: string,
   chapterId: string,
   contentHash: string,
+  prompt?: ChapterAnalysisPromptSnapshot,
 ) {
   const identity: ChapterEventsAnalysisIdentity = {
     bookId,
@@ -200,6 +228,7 @@ export function chapterEventsAnalysisJobIdentity(
     analysisContractVersion: CHAPTER_ANALYSIS_CONTRACT_VERSION,
     promptContractVersion: CHAPTER_ANALYSIS_PROMPT_VERSION,
     parserContractVersion: CHAPTER_ANALYSIS_PARSER_VERSION,
+    ...(prompt ? { prompt } : {}),
   };
   const requestHash = analysisRequestHash(identity);
   return { identity, requestHash, jobId: `job_chapter_analyze_${requestHash}` };
@@ -208,6 +237,7 @@ export function chapterEventsAnalysisJobIdentity(
 export function chapterEventsBatchAnalysisJobIdentity(
   bookId: string,
   chapters: readonly { chapterId: string; contentHash: string }[],
+  prompt?: ChapterAnalysisPromptSnapshot,
 ) {
   const identity: ChapterEventsBatchAnalysisIdentity = {
     bookId,
@@ -215,6 +245,7 @@ export function chapterEventsBatchAnalysisJobIdentity(
     analysisContractVersion: "chapter-events-batch-analysis-v1",
     promptContractVersion: "chapter-events-batch-prompt-v1",
     parserContractVersion: "chapter-events-batch-parser-v1",
+    ...(prompt ? { prompt } : {}),
   };
   const requestHash = batchAnalysisRequestHash(identity);
   return { identity, requestHash, jobId: `job_chapter_batch_analyze_${requestHash}` };
@@ -225,14 +256,16 @@ export function chapterEventsAnalysisJobMatchesChapter(
   bookId: string,
   chapterId: string,
   contentHash: string,
+  prompt?: ChapterAnalysisPromptSnapshot,
 ) {
   if (!job || job.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE) return false;
   try {
     const batch = analyzeBatchPayload(job.payload);
     return batch.bookId === bookId && batch.requestHash === batchAnalysisRequestHash(batchReuseIdentity(batch)) &&
+      JSON.stringify(batch.prompt ?? null) === JSON.stringify(prompt ?? null) &&
       batch.chapters.some((chapter) => chapter.chapterId === chapterId && chapter.contentHash === contentHash);
   } catch {
-    try { return hasSameReuseIdentity(job, chapterEventsAnalysisJobIdentity(bookId, chapterId, contentHash).identity); }
+    try { return hasSameReuseIdentity(job, chapterEventsAnalysisJobIdentity(bookId, chapterId, contentHash, prompt).identity); }
     catch { return false; }
   }
 }
@@ -241,17 +274,19 @@ export function chapterEventsAnalysisJobMatchesChapters(
   job: JobRecord | undefined,
   bookId: string,
   chapters: readonly { chapterId: string; contentHash: string }[],
+  prompt?: ChapterAnalysisPromptSnapshot,
 ) {
   if (!job || job.type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE || !chapters.length) return false;
   try {
     const batch = analyzeBatchPayload(job.payload);
     if (batch.bookId !== bookId || batch.requestHash !== batchAnalysisRequestHash(batchReuseIdentity(batch)) ||
+        JSON.stringify(batch.prompt ?? null) !== JSON.stringify(prompt ?? null) ||
         batch.chapters.length !== chapters.length) return false;
     const current = new Map(chapters.map((chapter) => [chapter.chapterId, chapter.contentHash]));
     return batch.chapters.every((chapter) => current.get(chapter.chapterId) === chapter.contentHash);
   } catch {
     return chapters.length === 1 && chapterEventsAnalysisJobMatchesChapter(
-      job, bookId, chapters[0]!.chapterId, chapters[0]!.contentHash,
+      job, bookId, chapters[0]!.chapterId, chapters[0]!.contentHash, prompt,
     );
   }
 }
@@ -263,10 +298,12 @@ export async function enqueueChapterEventsAnalysisBatchJob(
     payload: { bookId: string; chapters: readonly { chapterId: string; contentHash: string }[] };
   },
   canCreate: () => boolean = () => true,
+  prompt?: ChapterAnalysisPromptSnapshot,
 ): Promise<{ job: JobRecord; created: boolean }> {
   const { identity, requestHash, jobId } = chapterEventsBatchAnalysisJobIdentity(
     input.payload.bookId,
     input.payload.chapters,
+    prompt,
   );
   const providerId = config.providerId.trim();
   const model = config.model.trim();
@@ -286,7 +323,7 @@ export async function enqueueChapterEventsAnalysisBatchJob(
   } catch (error) {
     const raced = getJob(database, jobId);
     if (!raced || !chapterEventsAnalysisJobMatchesChapter(
-      raced, identity.bookId, identity.chapters[0]!.chapterId, identity.chapters[0]!.contentHash,
+      raced, identity.bookId, identity.chapters[0]!.chapterId, identity.chapters[0]!.contentHash, prompt,
     )) throw error;
     return { job: raced, created: false };
   }
@@ -388,9 +425,9 @@ export function createChapterEventsAnalysisJobHandler(
         database,
         dataRoot,
         config,
-        async ({ chapters, signal }) => Promise.all(chapters.map(async (chapter) => ({
+        async ({ chapters, promptInstructions, signal }) => Promise.all(chapters.map(async (chapter) => ({
           chapterId: chapter.chapterId,
-          events: await analyze({ ...chapter, signal }),
+          events: await analyze({ ...chapter, promptInstructions, signal }),
         }))),
       )(context);
     }
@@ -414,6 +451,7 @@ export function createChapterEventsAnalysisJobHandler(
       inputs = await analyze({
         chapterId: task.chapterId,
         atoms: source.atoms,
+        promptInstructions: task.prompt?.instructions,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(CHAPTER_ANALYSIS_TIMEOUT_MS)]),
       });
     } catch (error) {
@@ -470,6 +508,7 @@ export function createChapterEventsBatchAnalysisJobHandler(
     try {
       outputs = await analyze({
         chapters: pending,
+        promptInstructions: task.prompt?.instructions,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(CHAPTER_ANALYSIS_TIMEOUT_MS)]),
       });
     } catch (error) {

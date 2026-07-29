@@ -31,8 +31,8 @@ function seedEpisode(database: ReturnType<typeof openDatabase>["database"]) {
   ).run();
   database.prepare(
     `INSERT INTO script_versions (
-      id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
-    ) VALUES ('script_tts', 'episode_tts', 'packaged', 1, NULL, ?, ?, 1)`,
+      id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
+    ) VALUES ('script_tts', 'episode_tts', 'packaged', 1, NULL, 6, ?, ?, 1)`,
   ).run(JSON.stringify({ paragraphs: [
     { text: "甲".repeat(35), sourceIndexes: [0] },
     { text: "第二段真实旁白。", sourceIndexes: [0] },

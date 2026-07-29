@@ -104,7 +104,7 @@ function canonical(value: unknown): string {
     return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
       .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`;
   }
-  throw new BookStoryBibleJobContractError("故事圣经 Job identity 必须是有限 JSON");
+  throw new BookStoryBibleJobContractError("全书世界观 Job identity 必须是有限 JSON");
 }
 
 function sha256(value: string) {
@@ -120,7 +120,7 @@ function validProvenance(value: StoryBibleModelProvenance) {
   const providerId = value.providerId?.trim();
   const model = value.model?.trim();
   if (!providerId || !model || providerId.length > 200 || model.length > 200) {
-    throw new BookStoryBibleJobContractError("故事圣经模型溯源无效");
+    throw new BookStoryBibleJobContractError("全书世界观模型溯源无效");
   }
   return { providerId, model };
 }
@@ -146,7 +146,7 @@ export function buildStoryBibleIntervalRequests(
   validId(bookId, "bookId");
   validProvenance(provenance);
   validateLimits(limits);
-  if (chapters.length === 0) throw new BookStoryBibleJobContractError("故事圣经至少需要一个章节");
+  if (chapters.length === 0) throw new BookStoryBibleJobContractError("全书世界观至少需要一个章节");
   const seenChapters = new Set<string>();
   const seenEvents = new Set<string>();
   for (let index = 0; index < chapters.length; index += 1) {
@@ -169,7 +169,7 @@ export function buildStoryBibleIntervalRequests(
       chapterBytes += event.inputBytes;
     }
     if (chapter.sourceEvents.length > limits.maxEventsPerInterval || chapterBytes > limits.maxInputBytesPerInterval) {
-      throw new BookStoryBibleJobContractError("单章事件超过故事圣经有界请求上限");
+      throw new BookStoryBibleJobContractError("单章事件超过全书世界观有界请求上限");
     }
   }
 
@@ -230,7 +230,7 @@ export function parseStoryBibleIntervalResponse(request: StoryBibleIntervalReque
       request.identity.contractVersion !== BOOK_STORY_BIBLE_CONTRACT_VERSION ||
       request.identity.promptVersion !== BOOK_STORY_BIBLE_PROMPT_VERSION ||
       request.identity.parserVersion !== BOOK_STORY_BIBLE_PARSER_VERSION) {
-    throw new BookStoryBibleJobContractError("故事圣经区间请求身份无效");
+    throw new BookStoryBibleJobContractError("全书世界观区间请求身份无效");
   }
   validProvenance(request.provenance);
   const content = parseBookStoryBibleContent(value, new Set(request.sourceEventIds));
@@ -245,8 +245,8 @@ export function buildStoryBibleFinalRequest(
 ): StoryBibleFinalRequest {
   validId(bookId, "bookId");
   validateLimits(limits);
-  if (intervals.length < 1) throw new BookStoryBibleJobContractError("故事圣经最终聚合至少需要一个已验证区间");
-  if (intervals.length > limits.maxFinalIntervals) throw new BookStoryBibleJobContractError("故事圣经最终聚合区间数超限");
+  if (intervals.length < 1) throw new BookStoryBibleJobContractError("全书世界观最终聚合至少需要一个已验证区间");
+  if (intervals.length > limits.maxFinalIntervals) throw new BookStoryBibleJobContractError("全书世界观最终聚合区间数超限");
   let previousEnd: number | undefined;
   const allSources: string[] = [];
   let finalBytes = 0;
@@ -262,7 +262,7 @@ export function buildStoryBibleFinalRequest(
     finalBytes += Buffer.byteLength(canonicalBookStoryBibleJson(interval.content), "utf8");
   }
   if (new Set(allSources).size !== allSources.length) throw new BookStoryBibleJobContractError("最终聚合区间来源不能重复");
-  if (finalBytes > limits.maxFinalInputBytes) throw new BookStoryBibleJobContractError("故事圣经最终聚合输入字节超限");
+  if (finalBytes > limits.maxFinalInputBytes) throw new BookStoryBibleJobContractError("全书世界观最终聚合输入字节超限");
   const identity = {
     bookId,
     startChapterIndex: intervals[0]!.request.identity.startChapterIndex,
@@ -294,14 +294,14 @@ export function buildStoryBibleFinalRequest(
 export function parseStoryBibleFinalResponse(request: StoryBibleFinalRequest, value: unknown) {
   if (request.kind !== "final" || !Array.isArray(request.intervals) || !Array.isArray(request.intervalIdentityHashes) ||
       !Array.isArray(request.sourceEventIds)) {
-    throw new BookStoryBibleJobContractError("故事圣经最终请求身份无效");
+    throw new BookStoryBibleJobContractError("全书世界观最终请求身份无效");
   }
   const validatedSources: string[] = [];
   const validatedInputs: Array<{ identityHash: string; contentHash: string }> = [];
   for (const [index, interval] of request.intervals.entries()) {
     if (interval.identityHash !== request.intervalIdentityHashes[index] ||
         interval.contentHash !== sha256(canonicalBookStoryBibleJson(interval.content))) {
-      throw new BookStoryBibleJobContractError("故事圣经最终聚合区间内容无效");
+      throw new BookStoryBibleJobContractError("全书世界观最终聚合区间内容无效");
     }
     parseBookStoryBibleContent(interval.content, new Set(interval.sourceEventIds));
     validatedSources.push(...interval.sourceEventIds);
@@ -317,7 +317,7 @@ export function parseStoryBibleFinalResponse(request: StoryBibleFinalRequest, va
       request.identity.contractVersion !== BOOK_STORY_BIBLE_CONTRACT_VERSION ||
       request.identity.promptVersion !== BOOK_STORY_BIBLE_PROMPT_VERSION ||
       request.identity.parserVersion !== BOOK_STORY_BIBLE_PARSER_VERSION) {
-    throw new BookStoryBibleJobContractError("故事圣经最终请求身份无效");
+    throw new BookStoryBibleJobContractError("全书世界观最终请求身份无效");
   }
   validProvenance(request.provenance);
   const content = parseBookStoryBibleContent(value, new Set(request.sourceEventIds));

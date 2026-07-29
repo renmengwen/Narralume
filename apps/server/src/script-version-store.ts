@@ -15,6 +15,7 @@ interface VersionRow {
   kind: ScriptVersionKind;
   version: number;
   parent_version_id: string | null;
+  script_contract_version: 5 | 6;
   content_json: string;
   content_hash: string;
   created_at: number;
@@ -85,6 +86,7 @@ function versionResult(database: DatabaseSync, row: VersionRow) {
     kind: row.kind,
     versionNumber: row.version,
     parentVersionId: row.parent_version_id,
+    contractVersion: row.script_contract_version,
     contentHash: row.content_hash,
     paragraphs: content.paragraphs.map((paragraph, paragraphIndex) => ({
       text: paragraph.text,
@@ -130,8 +132,12 @@ function sourceMap(database: DatabaseSync, episodeId: string, parentVersionId: s
 }
 
 export function validateStoredScriptVersion(database: DatabaseSync, id: string) {
+  const contractColumn = (database.prepare("PRAGMA table_info(script_versions)").all() as Array<{ name: string }>)
+    .some((column) => column.name === "script_contract_version")
+    ? "script_contract_version"
+    : "5 AS script_contract_version";
   const row = database.prepare(
-    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+    `SELECT id, episode_id, kind, version, parent_version_id, ${contractColumn}, content_json, content_hash, created_at
      FROM script_versions WHERE id = ?`,
   ).get(id) as VersionRow | undefined;
   if (!row) throw new ScriptVersionStoreError(409, "稿件版本不存在");
@@ -146,10 +152,14 @@ export function validateStoredScriptVersion(database: DatabaseSync, id: string) 
     const parent = row.parent_version_id && database.prepare(
       "SELECT episode_id, kind FROM script_versions WHERE id = ?",
     ).get(row.parent_version_id) as { episode_id: string; kind: string } | undefined;
-    if (!parent || parent.kind !== "faithful" || parent.episode_id !== row.episode_id) {
+    if ((row.script_contract_version === 5 && !row.parent_version_id) ||
+        (row.script_contract_version === 6 && row.parent_version_id) ||
+        (row.parent_version_id && (!parent || parent.kind !== "faithful" || parent.episode_id !== row.episode_id))) {
       throw new ScriptVersionStoreError(409, "成片旁白稿必须引用同一分集的原著还原稿");
     }
-    validateStoredScriptVersion(database, row.parent_version_id!);
+    if (row.parent_version_id) validateStoredScriptVersion(database, row.parent_version_id);
+  } else if (row.script_contract_version !== 5) {
+    throw new ScriptVersionStoreError(409, "原著还原稿合同版本无效");
   }
   if (row.content_json !== normalized.contentJson || row.content_hash !== normalized.contentHash ||
       row.id !== scriptVersionId({ episodeId: row.episode_id, kind: row.kind, version: row.version,
@@ -184,6 +194,7 @@ export function validateStoredScriptVersion(database: DatabaseSync, id: string) 
 
 function createScriptVersionInTransaction(
   database: DatabaseSync, episodeId: string, input: ScriptVersionInput, now: number,
+  allowStandalonePackaged = false,
 ) {
   if (!database.prepare("SELECT id FROM episodes WHERE id = ?").get(episodeId)) {
     throw new ScriptVersionStoreError(404, "分集不存在");
@@ -200,7 +211,8 @@ function createScriptVersionInTransaction(
     const parent = parentVersionId && database.prepare(
       "SELECT episode_id, kind FROM script_versions WHERE id = ?",
     ).get(parentVersionId) as { episode_id: string; kind: string } | undefined;
-    if (!parent || parent.kind !== "faithful" || parent.episode_id !== episodeId) {
+    if ((!parentVersionId && !allowStandalonePackaged) ||
+        (parentVersionId && (!parent || parent.kind !== "faithful" || parent.episode_id !== episodeId))) {
       throw new ScriptVersionStoreError(409, "成片旁白稿必须引用同一分集的原著还原稿");
     }
   }
@@ -212,7 +224,7 @@ function createScriptVersionInTransaction(
   }
   const { contentJson, contentHash } = normalizedContent(input.paragraphs);
   const existing = database.prepare(
-    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+    `SELECT id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
      FROM script_versions
      WHERE episode_id = ? AND kind = ? AND content_hash = ? AND parent_version_id IS ?`,
   ).get(episodeId, input.kind, contentHash, parentVersionId) as VersionRow | undefined;
@@ -223,9 +235,10 @@ function createScriptVersionInTransaction(
   const id = scriptVersionId({ episodeId, kind: input.kind, version, contentHash, parentVersionId });
   database.prepare(
     `INSERT INTO script_versions (
-       id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, episodeId, input.kind, version, parentVersionId, contentJson, contentHash, now);
+       id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, episodeId, input.kind, version, parentVersionId, allowStandalonePackaged ? 6 : 5,
+    contentJson, contentHash, now);
   const insertSource = database.prepare(
     `INSERT INTO script_version_sources (
        script_version_id, segment_index, source_index, episode_source_index,
@@ -238,7 +251,7 @@ function createScriptVersionInTransaction(
       source.source_event_id, source.source_byte_start, source.source_byte_end, source.source_hash);
   }));
   return versionResult(database, database.prepare(
-    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+    `SELECT id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
      FROM script_versions WHERE id = ?`,
   ).get(id) as unknown as VersionRow);
 }
@@ -292,14 +305,39 @@ export function createScriptVersionPair(
   }
 }
 
+export function createStandalonePackagedScriptVersion(
+  database: DatabaseSync,
+  episodeId: string,
+  paragraphs: ScriptVersionInput["paragraphs"],
+  assertCurrent: () => void,
+  now = Date.now(),
+) {
+  validateParagraphs(paragraphs);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const assertionResult = assertCurrent() as unknown;
+    if (assertionResult && typeof (assertionResult as { then?: unknown }).then === "function") {
+      throw new ScriptVersionStoreError(500, "原子落稿身份检查必须同步完成");
+    }
+    const packaged = createScriptVersionInTransaction(database, episodeId, {
+      kind: "packaged", paragraphs,
+    }, now, true);
+    database.exec("COMMIT");
+    return packaged;
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* 保留原始写入错误。 */ }
+    throw error;
+  }
+}
+
 export function listScriptVersions(database: DatabaseSync, episodeId: string, kind?: ScriptVersionKind) {
   const rows = kind
     ? database.prepare(
-      `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+      `SELECT id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
        FROM script_versions WHERE episode_id = ? AND kind = ? ORDER BY version`,
     ).all(episodeId, kind)
     : database.prepare(
-      `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+      `SELECT id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
        FROM script_versions WHERE episode_id = ? ORDER BY created_at, kind, version`,
     ).all(episodeId);
   return (rows as unknown as VersionRow[]).map((row) => versionResult(database, row));
@@ -307,7 +345,7 @@ export function listScriptVersions(database: DatabaseSync, episodeId: string, ki
 
 export function getScriptVersion(database: DatabaseSync, id: string) {
   const row = database.prepare(
-    `SELECT id, episode_id, kind, version, parent_version_id, content_json, content_hash, created_at
+    `SELECT id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
      FROM script_versions WHERE id = ?`,
   ).get(id) as VersionRow | undefined;
   return row ? versionResult(database, row) : undefined;

@@ -40,6 +40,11 @@ function seed(database: ReturnType<typeof openDatabase>["database"]) {
        ) VALUES (?, ?, 'packaged', 1, ?, '{"paragraphs":[]}', ?, 2)`,
     ).run(`packaged_${index}`, `episode_${index}`, `faithful_${index}`, String(index + 2).repeat(64));
   }
+  database.prepare(
+    `INSERT INTO script_versions (
+       id, episode_id, kind, version, parent_version_id, script_contract_version, content_json, content_hash, created_at
+     ) VALUES ('finished_2', 'episode_2', 'packaged', 2, NULL, 6, '{"paragraphs":[]}', ?, 3)`,
+  ).run("f".repeat(64));
 }
 
 function expectApprovalError(fn: () => unknown, statusCode: number, message: RegExp) {
@@ -93,6 +98,14 @@ test("批准与撤回追加不可变 revision，并控制语音和图片生产",
       episodeId: "episode_1", scriptVersionId: "packaged_1",
       contentHash: "3".repeat(64), approvalRevision: 1,
     });
+    const approvedFinished = changeScriptApproval(connection.database, "episode_2", {
+      action: "approve", expectedRevision: 0, scriptVersionId: "finished_2",
+    }, 11);
+    assert.equal(approvedFinished.scriptVersionId, "finished_2");
+    assert.deepEqual(requireApprovedScriptForProduction(connection.database, "episode_2", "tts"), {
+      episodeId: "episode_2", scriptVersionId: "finished_2",
+      contentHash: "f".repeat(64), approvalRevision: 1,
+    });
     expectApprovalError(
       () => changeScriptApproval(connection.database, "episode_1", {
         action: "approve", expectedRevision: 0, scriptVersionId: "packaged_1",
@@ -121,7 +134,7 @@ test("批准与撤回追加不可变 revision，并控制语音和图片生产",
     );
     assert.equal(
       connection.database.prepare("SELECT COUNT(*) AS count FROM script_approval_events").get()?.count,
-      2,
+      3,
     );
   } finally {
     connection.close();

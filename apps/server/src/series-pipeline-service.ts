@@ -11,10 +11,13 @@ import {
   chapterEventsAnalysisJobMatchesChapter,
   chapterEventsAnalysisJobMatchesChapters,
   enqueueChapterEventsAnalysisBatchJob,
+  type ChapterAnalysisPromptSnapshot,
 } from "./chapter-events-job.js";
 import {
   enqueueEpisodeScriptGenerationJob,
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+  EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION,
+  EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION,
   type EpisodeScriptGenerationRequest,
   type ScriptHandoff,
 } from "./episode-script-generation-job.js";
@@ -30,6 +33,7 @@ import {
   BOOK_STORY_BIBLE_JOB_TYPE,
   storyBibleJobRequestHash,
   type BookStoryBibleJobPayload,
+  type StoryBiblePromptSnapshot,
 } from "./book-story-bible-job-handler.js";
 import {
   FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
@@ -38,6 +42,7 @@ import {
   type FullBookPlanChapterInput,
 } from "./full-book-plan-job.js";
 import {
+  EPISODE_PLAN_JOB_TYPE,
   FULL_BOOK_PLAN_JOB_TYPE,
   fullBookPlanJobRequestHash,
   type FullBookPlanJobPayload,
@@ -45,6 +50,8 @@ import {
 import { freezeFullBookPlan } from "./full-book-plan-store.js";
 import { canonicalFullBookPlanJson, parseFullBookPlan } from "./full-book-plan-contract.js";
 import { validateStoredScriptVersion } from "./script-version-store.js";
+import { bookPromptInstructions, getBookPromptProfileRevision } from "./book-prompt-profile-store.js";
+import { PRODUCT_PROMPT_SET_VERSION, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 import {
   cancelSeriesPipelineRun,
   createSeriesPipelineRun,
@@ -55,6 +62,7 @@ import {
   getCurrentSeriesPipelineRun,
   getMappedChapterJobs,
   getMappedEpisodePlanJob,
+  getMappedLocalEpisodePlanJobs,
   getMappedStoryBibleJob,
   getMappedScriptJobs,
   getSeriesPipelineRun,
@@ -62,9 +70,11 @@ import {
   listRunnableSeriesPipelineRuns,
   mapSeriesPipelineBatchJob,
   mapSeriesPipelineEpisodePlanJob,
+  mapSeriesPipelineLocalEpisodePlanJob,
   mapSeriesPipelineStoryBibleJob,
   mapSeriesPipelineScriptJob,
   pauseSeriesPipelineRun,
+  previewSeriesPipelineEpisodeRanges,
   retainStaleChapterAnalysisJobs,
   resumeSeriesPipelineRun,
   retrySeriesPipelineRun,
@@ -119,6 +129,11 @@ export class SeriesPipelineService {
     return this.view(createSeriesPipelineRun(this.options.database, input));
   }
 
+  preview(input: Pick<CreateSeriesPipelineRunInput,
+    "seriesProjectId" | "sourceStartChapterId" | "sourceEndChapterId" | "episodeCount">) {
+    return previewSeriesPipelineEpisodeRanges(this.options.database, input);
+  }
+
   current(seriesProjectId: string) {
     const run = getCurrentSeriesPipelineRun(this.options.database, seriesProjectId);
     return run ? this.view(run) : undefined;
@@ -165,6 +180,22 @@ export class SeriesPipelineService {
 
         const chapters = listPipelineChapters(this.options.database, run);
         const bookId = this.bookId(run.seriesProjectId);
+        let chapterPrompt: ChapterAnalysisPromptSnapshot | undefined;
+        if (run.planningContractVersion === 2) {
+          const profile = run.bookPromptProfileRevision
+            ? getBookPromptProfileRevision(this.options.database, bookId, run.bookPromptProfileRevision)
+            : undefined;
+          if (!profile || profile.profileHash !== run.bookPromptProfileHash ||
+              run.productPromptVersion !== PRODUCT_PROMPT_SET_VERSION) {
+            throw new Error("章节分析缺少有效的冻结提示词身份");
+          }
+          chapterPrompt = {
+            productVersion: PRODUCT_PROMPT_VERSIONS.chapterAnalysis,
+            profileRevision: profile.revision,
+            profileHash: profile.profileHash,
+            instructions: bookPromptInstructions(profile, "chapterAnalysisInstructions"),
+          };
+        }
         const allMappings = getMappedChapterJobs(this.options.database, run.id);
         const chapterById = new Map(chapters.map((chapter) => [chapter.id, chapter]));
         const currentJobIds = new Set<string>();
@@ -176,6 +207,7 @@ export class SeriesPipelineService {
           if (mappedChapters.every(Boolean) && chapterEventsAnalysisJobMatchesChapters(
             getJob(this.options.database, jobId), bookId,
             mappedChapters as Array<{ chapterId: string; contentHash: string }>,
+            chapterPrompt,
           )) currentJobIds.add(jobId);
         }
         const mappings = allMappings.filter((mapping) => currentJobIds.has(mapping.job_id));
@@ -190,7 +222,7 @@ export class SeriesPipelineService {
              WHERE job_id = ? AND stage = 'chapter-events-analyze' AND scope_key = ?`,
           ).get(mapping.job_id, mapping.subject_id);
           const reusable = Boolean(chapter?.hasEvents && checkpoint && chapterEventsAnalysisJobMatchesChapter(
-            job, bookId, chapter.id, chapter.contentHash,
+            job, bookId, chapter.id, chapter.contentHash, chapterPrompt,
           ));
           if (reusable) reusableStaleMappings.push({ chapterId: mapping.subject_id, jobId: mapping.job_id });
           else staleChapterIds.add(mapping.subject_id);
@@ -273,7 +305,7 @@ export class SeriesPipelineService {
               const chapter = contiguous[offset]!;
               const source = await buildChapterEvidenceAtoms(this.options.database, this.options.dataRoot, bookId, chapter.id);
               const nextInputs = [...inputs, { chapterId: chapter.id, atoms: source.atoms }];
-              if (prepareChapterBatchPrompt(nextInputs).bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
+              if (prepareChapterBatchPrompt(nextInputs, chapterPrompt?.instructions).bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
                 if (!batch.length) {
                   setSeriesPipelineFailure(
                     this.options.database, run.id, "chapter_batch_input_too_large",
@@ -293,6 +325,7 @@ export class SeriesPipelineService {
               provider,
               { payload: { bookId, chapters: batch }, maxAttempts: 3, runAfter: Number.MAX_SAFE_INTEGER },
               () => getSeriesPipelineRun(this.options.database, run.id)?.status === "analyzing_chapters",
+              chapterPrompt,
             );
             const batchChapterIds = batch.map((chapter) => chapter.chapterId);
             if (!mapSeriesPipelineBatchJob(
@@ -339,9 +372,26 @@ export class SeriesPipelineService {
     const intervals = buildStoryBibleIntervalRequests(bookId, chapters, {
       providerId: provider.providerId, model: provider.model,
     }, limits);
+    let prompt: StoryBiblePromptSnapshot | undefined;
+    if (run.planningContractVersion === 2) {
+      const profile = run.bookPromptProfileRevision
+        ? getBookPromptProfileRevision(this.options.database, bookId, run.bookPromptProfileRevision)
+        : undefined;
+      if (!profile || profile.profileHash !== run.bookPromptProfileHash ||
+          run.productPromptVersion !== PRODUCT_PROMPT_SET_VERSION) {
+        throw new Error("全书世界观缺少有效的冻结提示词身份");
+      }
+      prompt = {
+        intervalProductVersion: PRODUCT_PROMPT_VERSIONS.storyBibleInterval,
+        finalProductVersion: PRODUCT_PROMPT_VERSIONS.storyBibleFinal,
+        profileRevision: profile.revision,
+        profileHash: profile.profileHash,
+        instructions: bookPromptInstructions(profile, "storyBibleInstructions"),
+      };
+    }
     const base: Omit<BookStoryBibleJobPayload, "providerId" | "model" | "requestHash"> = {
       contractVersion: BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION,
-      bookId, intervals, limits, forceRebuild: false,
+      bookId, intervals, limits, forceRebuild: false, ...(prompt ? { prompt } : {}),
     };
     const requestHash = storyBibleJobRequestHash(base);
     const mapping = getMappedStoryBibleJob(this.options.database, run.id);
@@ -349,7 +399,7 @@ export class SeriesPipelineService {
     if (job?.status === "failed" || job?.status === "cancelled") {
       setSeriesPipelineFailure(this.options.database, run.id,
         job.status === "cancelled" ? "job_cancelled" : job.errorCode ?? "story_bible_failed",
-        job.status === "cancelled" ? "故事圣经生成已中断，请重试" : "故事圣经生成失败，请重试");
+        job.status === "cancelled" ? "全书世界观生成已中断，请重试" : "全书世界观生成失败，请重试");
       return;
     }
     if (job?.status === "queued") {
@@ -362,14 +412,14 @@ export class SeriesPipelineService {
     if (job?.status === "succeeded") {
       const storyBibleId = (job.result as { storyBibleId?: unknown } | null)?.storyBibleId;
       if (typeof storyBibleId !== "string" || !storyBibleId) {
-        this.failInvalidStoryBibleJob(job.id, "故事圣经任务缺少最终版本 ID");
+        this.failInvalidStoryBibleJob(job.id, "全书世界观任务缺少最终版本 ID");
         return;
       }
       const bible = this.options.database.prepare(
         "SELECT id FROM book_story_bibles WHERE id = ? AND book_id = ? AND scope = 'final'",
       ).get(storyBibleId, bookId);
       if (!bible) {
-        this.failInvalidStoryBibleJob(job.id, "故事圣经任务最终版本不存在");
+        this.failInvalidStoryBibleJob(job.id, "全书世界观任务最终版本不存在");
         return;
       }
       finishStoryBible(this.options.database, run.id, storyBibleId);
@@ -394,7 +444,7 @@ export class SeriesPipelineService {
     }
     if (queued.type !== BOOK_STORY_BIBLE_JOB_TYPE ||
         (queued.payload as { requestHash?: unknown }).requestHash !== requestHash) {
-      throw new Error("故事圣经任务 identity 冲突");
+      throw new Error("全书世界观任务 identity 冲突");
     }
     mapSeriesPipelineStoryBibleJob(this.options.database, run.id, requestHash, queued.id);
   }
@@ -413,12 +463,16 @@ export class SeriesPipelineService {
       setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
       return;
     }
+    if (run.planningContractVersion === 2) {
+      await this.reconcileLocalEpisodePlans(run, provider);
+      return;
+    }
     const bookId = this.bookId(run.seriesProjectId);
     const bible = run.storyBibleId ? this.options.database.prepare(
       `SELECT id, content_hash FROM book_story_bibles
        WHERE id = ? AND book_id = ? AND scope = 'final' AND invalidated_at IS NULL`,
     ).get(run.storyBibleId, bookId) as { id: string; content_hash: string } | undefined : undefined;
-    if (!bible) throw new Error("全书规划缺少当前故事圣经");
+    if (!bible) throw new Error("全书规划缺少当前全书世界观");
     const chapters = this.fullBookPlanInputs(run);
     const limits = fullBookPlanBuildLimits(chapters, run.episodeCount);
     const intervals = buildFullBookPlanIntervalRequests(
@@ -517,6 +571,155 @@ export class SeriesPipelineService {
     mapSeriesPipelineEpisodePlanJob(this.options.database, run.id, pipelineIdentity, queued.id);
   }
 
+  private async reconcileLocalEpisodePlans(
+    run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>,
+    provider: ChapterTextModelConfig,
+  ) {
+    if (!run.episodeRanges || run.episodeRanges.length !== run.episodeCount) {
+      throw new Error("逐集局部规划缺少已确认的章节范围");
+    }
+    const bookId = this.bookId(run.seriesProjectId);
+    if (run.productPromptVersion !== PRODUCT_PROMPT_SET_VERSION || !run.bookPromptProfileRevision ||
+        !run.bookPromptProfileHash) throw new Error("逐集局部规划缺少冻结提示词身份");
+    const profile = getBookPromptProfileRevision(this.options.database, bookId, run.bookPromptProfileRevision);
+    if (!profile || profile.profileHash !== run.bookPromptProfileHash) {
+      throw new Error("逐集局部规划冻结的本书提示词版本不存在或已损坏");
+    }
+    const bible = run.storyBibleId ? this.options.database.prepare(
+      `SELECT id, content_hash FROM book_story_bibles
+       WHERE id = ? AND book_id = ? AND scope = 'final' AND invalidated_at IS NULL`,
+    ).get(run.storyBibleId, bookId) as { id: string; content_hash: string } | undefined : undefined;
+    if (!bible) throw new Error("逐集局部规划缺少当前全书世界观");
+
+    const allChapters = this.fullBookPlanInputs(run);
+    const mapped = new Map(getMappedLocalEpisodePlanJobs(this.options.database, run.id)
+      .map((mapping) => [mapping.subject_id, mapping.job_id]));
+    const localEpisodes: Array<ReturnType<typeof parseFullBookPlan>["episodes"][number] | undefined> =
+      new Array(run.episodeCount);
+    let waiting = false;
+
+    for (const range of run.episodeRanges) {
+      const chapters = allChapters.filter((chapter) => chapter.chapterIndex >= range.startChapterIndex &&
+        chapter.chapterIndex <= range.endChapterIndex);
+      if (!chapters.length || chapters[0]!.chapterId !== range.startChapterId ||
+          chapters.at(-1)!.chapterId !== range.endChapterId) {
+        throw new Error(`第 ${range.episodeIndex} 集确认范围与当前章节不一致`);
+      }
+      const limits = fullBookPlanBuildLimits(chapters, 1);
+      const intervals = buildFullBookPlanIntervalRequests(
+        bookId, { id: bible.id, contentHash: bible.content_hash }, chapters, 1,
+        { providerId: provider.providerId, model: provider.model }, limits,
+      );
+      if (intervals.length !== 1 || Buffer.byteLength(JSON.stringify({ kind: "interval", request: intervals[0] }), "utf8") >
+          MAX_CHAPTER_BATCH_INPUT_BYTES) {
+        throw new Error(`第 ${range.episodeIndex} 集局部规划输入超过 512 KiB 安全上限`);
+      }
+      const base: Omit<FullBookPlanJobPayload, "providerId" | "model" | "requestHash"> = {
+        contractVersion: FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
+        bookId,
+        storyBible: { id: bible.id, contentHash: bible.content_hash },
+        episodeCount: 1,
+        intervals,
+        limits,
+        prompt: {
+          productVersion: PRODUCT_PROMPT_VERSIONS.episodePlanning,
+          profileRevision: profile.revision,
+          profileHash: profile.profileHash,
+          instructions: bookPromptInstructions(profile, "episodePlanningInstructions"),
+        },
+      };
+      const hash = fullBookPlanJobRequestHash(base);
+      const subjectId = `${String(range.episodeIndex).padStart(4, "0")}:${hash}`;
+      let job = mapped.get(subjectId) ? getJob(this.options.database, mapped.get(subjectId)!) : undefined;
+      if (!job) {
+        const payload: FullBookPlanJobPayload = {
+          ...base, providerId: provider.providerId, model: provider.model, requestHash: hash,
+        };
+        const id = `job_episode_plan_${hash}`;
+        job = getJob(this.options.database, id);
+        if (!job) {
+          try {
+            job = createJob(this.options.database, {
+              id, type: EPISODE_PLAN_JOB_TYPE, payload, maxAttempts: 3, runAfter: Number.MAX_SAFE_INTEGER,
+            });
+          } catch (error) {
+            job = getJob(this.options.database, id);
+            if (!job) throw error;
+          }
+        }
+        if (job.type !== EPISODE_PLAN_JOB_TYPE ||
+            (job.payload as { requestHash?: unknown }).requestHash !== hash) {
+          throw new Error("逐集局部规划任务 identity 冲突");
+        }
+        mapSeriesPipelineLocalEpisodePlanJob(this.options.database, run.id, subjectId, job.id);
+      }
+      if (job.status === "failed" || job.status === "cancelled") {
+        setSeriesPipelineFailure(this.options.database, run.id,
+          job.status === "cancelled" ? "job_cancelled" : job.errorCode ?? "episode_plan_failed",
+          `第 ${range.episodeIndex} 集局部规划${job.status === "cancelled" ? "已中断" : "失败"}，请重试`);
+        return;
+      }
+      if (job.status !== "succeeded") {
+        waiting = true;
+        continue;
+      }
+      const result = job.result as { plan?: unknown; planHash?: unknown } | null;
+      if (!result || typeof result.planHash !== "string") {
+        this.failInvalidPlanJob(job.id, `第 ${range.episodeIndex} 集局部规划缺少有效结果`);
+        return;
+      }
+      const request = intervals[0]!;
+      const local = parseFullBookPlan(result.plan, {
+        startChapterIndex: range.startChapterIndex,
+        endChapterIndex: range.endChapterIndex,
+        episodeCount: 1,
+        allowedSourceEvents: new Map(request.sourceEvents.map(({ id, chapterId, chapterIndex, byteRanges }) =>
+          [id, { chapterId, chapterIndex, byteRanges }])),
+        intervalQuotas: [{
+          startChapterIndex: range.startChapterIndex,
+          endChapterIndex: range.endChapterIndex,
+          episodeCount: 1,
+        }],
+      });
+      const localHash = createHash("sha256").update(canonicalFullBookPlanJson(local)).digest("hex");
+      if (localHash !== result.planHash) {
+        this.failInvalidPlanJob(job.id, `第 ${range.episodeIndex} 集局部规划结果 hash 不一致`);
+        return;
+      }
+      localEpisodes[range.episodeIndex - 1] = { ...local.episodes[0]!, index: range.episodeIndex };
+    }
+    if (waiting || localEpisodes.some((episode) => !episode)) return;
+    if (run.status === "planning_episodes") {
+      setSeriesPipelineStatus(this.options.database, run.id, "planning_episodes", "validating_plan");
+    }
+    const sourceEvents = allChapters.flatMap((chapter) => chapter.sourceEvents);
+    const planOptions = {
+      startChapterIndex: allChapters[0]!.chapterIndex,
+      endChapterIndex: allChapters.at(-1)!.chapterIndex,
+      episodeCount: run.episodeCount,
+      allowedSourceEvents: new Map(sourceEvents.map(({ id, chapterId, chapterIndex, byteRanges }) =>
+        [id, { chapterId, chapterIndex, byteRanges }])),
+      intervalQuotas: run.episodeRanges.map((range) => ({
+        startChapterIndex: range.startChapterIndex,
+        endChapterIndex: range.endChapterIndex,
+        episodeCount: 1,
+      })),
+    };
+    const verifiedPlan = parseFullBookPlan({ episodes: localEpisodes }, planOptions);
+    const verifiedHash = createHash("sha256").update(canonicalFullBookPlanJson(verifiedPlan)).digest("hex");
+    if (getSeriesPipelineRun(this.options.database, run.id)?.status === "validating_plan") {
+      setSeriesPipelineStatus(this.options.database, run.id, "validating_plan", "freezing_plan");
+    }
+    const frozen = freezeFullBookPlan(this.options.database, {
+      seriesProjectId: run.seriesProjectId,
+      plan: verifiedPlan,
+      options: planOptions,
+      targetDurationSeconds: run.targetDurationSeconds,
+    });
+    if (frozen.planHash !== verifiedHash) throw new Error("逐集局部规划冻结 hash 不一致");
+    finishEpisodePlan(this.options.database, run.id, frozen.planHash);
+  }
+
   private failInvalidPlanJob(jobId: string, message: string) {
     const now = Date.now();
     this.options.database.prepare(
@@ -592,6 +795,14 @@ export class SeriesPipelineService {
       voice: "Microsoft Huihui Desktop", rate: 0, charactersPerSecond: 4.5,
       narrationOccupancy: 0.8, calibration: { identity: "provisional" as const },
     };
+    const profile = run.scriptContractVersion === 6 && run.bookPromptProfileRevision
+      ? getBookPromptProfileRevision(this.options.database, this.bookId(run.seriesProjectId),
+        run.bookPromptProfileRevision)
+      : undefined;
+    if (run.scriptContractVersion === 6 && (!profile || profile.profileHash !== run.bookPromptProfileHash ||
+        run.productPromptVersion !== PRODUCT_PROMPT_SET_VERSION)) {
+      throw new Error("成片旁白 v6 缺少有效的冻结提示词身份");
+    }
     let previousHandoff: ScriptHandoff | null = null;
     for (const episode of episodes) {
       const queued = await enqueueEpisodeScriptGenerationJob(this.options.database, this.options.dataRoot, provider, {
@@ -602,7 +813,16 @@ export class SeriesPipelineService {
           previousScriptHandoff: previousHandoff,
         },
         maxAttempts: 3,
-      }, () => getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts");
+      }, () => getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts", {
+        version: run.scriptContractVersion,
+        ...(profile ? { prompt: {
+          skeletonProductVersion: PRODUCT_PROMPT_VERSIONS.episodeSkeleton,
+          beatProductVersion: PRODUCT_PROMPT_VERSIONS.finishedNarrationBeat,
+          profileRevision: profile.revision,
+          profileHash: profile.profileHash,
+          instructions: bookPromptInstructions(profile, "narrationInstructions"),
+        } } : {}),
+      });
       if (getSeriesPipelineRun(this.options.database, run.id)?.status !== "generating_scripts") return;
       mapSeriesPipelineScriptJob(this.options.database, run.id, episode.id, queued.job.id);
       const job = queued.job;
@@ -639,6 +859,7 @@ export class SeriesPipelineService {
     }
 
     const versionIds = new Set<string>();
+    let expectedVersionCount = 0;
     for (const episode of episodes) {
       const source = this.options.database.prepare(
         `SELECT COUNT(*) AS total, COUNT(DISTINCT source_index) AS distinct_total,
@@ -656,6 +877,53 @@ export class SeriesPipelineService {
         this.failCoverage(run.id, "script_coverage_job_invalid", `覆盖复核失败：第 ${episode.episode_index} 集当前稿件任务未成功`);
         return;
       }
+      const jobContractVersion = (job.payload as { contractVersion?: unknown } | null)?.contractVersion;
+      if (jobContractVersion !== run.scriptContractVersion) {
+        this.failCoverage(run.id, "script_coverage_contract_mismatch",
+          `覆盖复核失败：第 ${episode.episode_index} 集稿件任务合同版本与当前流水线不一致`);
+        return;
+      }
+      if (jobContractVersion === EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION) {
+        const result = job.result as { packagedVersionId?: unknown; finishedNarrationVersionId?: unknown } | null;
+        if (typeof result?.packagedVersionId !== "string" ||
+            result.finishedNarrationVersionId !== result.packagedVersionId) {
+          this.failCoverage(run.id, "script_coverage_result_invalid",
+            `覆盖复核失败：第 ${episode.episode_index} 集任务缺少成片旁白版本身份`);
+          return;
+        }
+        const packaged = this.options.database.prepare(
+          "SELECT episode_id, kind, parent_version_id FROM script_versions WHERE id = ?",
+        ).get(result.packagedVersionId) as { episode_id: string; kind: string; parent_version_id: string | null } | undefined;
+        if (!packaged || packaged.episode_id !== episode.id || packaged.kind !== "packaged" ||
+            packaged.parent_version_id !== null) {
+          this.failCoverage(run.id, "script_coverage_parent_invalid",
+            `覆盖复核失败：第 ${episode.episode_index} 集 standalone 成片旁白缺失或父链无效`);
+          return;
+        }
+        try { validateStoredScriptVersion(this.options.database, result.packagedVersionId); }
+        catch {
+          this.failCoverage(run.id, "script_coverage_version_invalid",
+            `覆盖复核失败：第 ${episode.episode_index} 集成片旁白内容或来源快照损坏`);
+          return;
+        }
+        const covered = Number(this.options.database.prepare(
+          "SELECT COUNT(DISTINCT episode_source_index) AS total FROM script_version_sources WHERE script_version_id = ?",
+        ).get(result.packagedVersionId)?.total);
+        if (covered !== source.total) {
+          this.failCoverage(run.id, "script_coverage_incomplete",
+            `覆盖复核失败：第 ${episode.episode_index} 集成片旁白未覆盖全部冻结来源`);
+          return;
+        }
+        versionIds.add(result.packagedVersionId);
+        expectedVersionCount += 1;
+        continue;
+      }
+      if (jobContractVersion !== EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION) {
+        this.failCoverage(run.id, "script_coverage_contract_invalid",
+          `覆盖复核失败：第 ${episode.episode_index} 集稿件任务合同版本无效`);
+        return;
+      }
+      expectedVersionCount += 2;
       const result = job.result as { faithfulVersionId?: unknown; packagedVersionId?: unknown } | null;
       if (typeof result?.faithfulVersionId !== "string" || typeof result.packagedVersionId !== "string") {
         this.failCoverage(run.id, "script_coverage_result_invalid", `覆盖复核失败：第 ${episode.episode_index} 集任务缺少双稿版本身份`);
@@ -691,8 +959,8 @@ export class SeriesPipelineService {
         versionIds.add(versionId);
       }
     }
-    if (versionIds.size !== run.episodeCount * 2) {
-      this.failCoverage(run.id, "script_coverage_total_invalid", "覆盖复核失败：双稿覆盖总数与全书计划不一致");
+    if (versionIds.size !== expectedVersionCount) {
+      this.failCoverage(run.id, "script_coverage_total_invalid", "覆盖复核失败：稿件覆盖总数与各任务合同不一致");
       return;
     }
     setSeriesPipelineStatus(this.options.database, run.id, "checking_coverage", "awaiting_review");

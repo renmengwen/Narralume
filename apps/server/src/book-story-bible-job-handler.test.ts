@@ -19,6 +19,7 @@ import {
   type StoryBibleBuildLimits,
 } from "./book-story-bible-job.js";
 import { JobCancelledError, type JobExecutionContext } from "./job-worker.js";
+import { PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 const limits: StoryBibleBuildLimits = {
   maxChaptersPerInterval: 1, maxEventsPerInterval: 1, maxInputBytesPerInterval: 1_000,
@@ -175,6 +176,31 @@ test("严格执行 interval 后独立 final，并将模型身份仅保存为溯�
   assert.deepEqual(execution.progress, [1 / 2, 1]);
   assert.equal(execution.checkpoints.length, 2);
   assert.deepEqual(result, { storyBibleId: "bible_2", contentHash: "2".repeat(64), intervalBibleIds: ["bible_1"] });
+});
+
+test("新全书世界观任务冻结产品版本与本书要求并按 interval/final 分层追加", async () => {
+  const task = payload();
+  task.prompt = {
+    intervalProductVersion: PRODUCT_PROMPT_VERSIONS.storyBibleInterval,
+    finalProductVersion: PRODUCT_PROMPT_VERSIONS.storyBibleFinal,
+    profileRevision: 3,
+    profileHash: "a".repeat(64),
+    instructions: "保留本书的专有名词发音",
+  };
+  task.requestHash = storyBibleJobRequestHash(task);
+  const calls: string[] = [];
+  const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+    calls.push(prompt(init));
+    return modelResponse(content("event_0", "chapter_0"));
+  };
+  let stored = 0;
+  const createBible = (() => ({ id: `bible_${++stored}`, contentHash: String(stored).repeat(64) })) as never;
+  await createBookStoryBibleJobHandler(database(), config, { fetchImpl: fetchImpl as typeof fetch, createBible })(context(task).value);
+
+  assert.match(calls[0]!, /整理当前区间已经出现且有来源的稳定事实/u);
+  assert.match(calls[1]!, /全书级归一、去重和冲突整理/u);
+  assert.match(calls[0]!, /保留本书的专有名词发音/u);
+  assert.match(calls[1]!, /保留本书的专有名词发音/u);
 });
 
 test("Story Bible 只在明确流终态后解析并持久化", async () => {
@@ -370,7 +396,7 @@ test("未知字段仅受控纠错一次并保留最小原任务、精确 schema 
   await handler(context(task).value);
   assert.equal(calls.length, 3);
   assert.match(calls[1]!, /上一次输出被严格合同拒绝/);
-  assert.match(calls[1]!, /错误：故事圣经包含未知字段：unexpected/);
+  assert.match(calls[1]!, /错误：全书世界观包含未知字段：unexpected/);
   assert.match(calls[1]!, /顶层必须恰好包含以下 12 个数组/);
   assert.match(calls[1]!, /原任务：\{"chapterIds":\["chapter_0"\],"kind":"interval"/);
   assertSlimPrompt(calls[1]!, "interval");

@@ -345,7 +345,7 @@ export function buildFullBookPlanFinalRequest(
         interval.request.identity.storyBibleContentHash !== storyBible.contentHash ||
         interval.contentHash !== sha256(canonicalFullBookPlanJson(interval.content)) ||
         (previousEnd !== undefined && interval.request.identity.startChapterIndex !== previousEnd + 1)) {
-      throw new FullBookPlanJobContractError("最终聚合只能使用同书、同故事圣经、连续且已验证的区间");
+      throw new FullBookPlanJobContractError("最终聚合只能使用同书、同全书世界观、连续且已验证的区间");
     }
     parseFullBookPlan(interval.content, {
       startChapterIndex: interval.request.identity.startChapterIndex,

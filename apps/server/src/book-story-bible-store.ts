@@ -78,21 +78,21 @@ function uniqueIds(value: unknown, label: string, maximum: number, allowEmpty: b
 
 function frozenParents(value: unknown) {
   if (!Array.isArray(value) || value.length > MAX_PARENTS) {
-    throw new BookStoryBibleStoreError(409, "故事圣经冻结父层输入无效");
+    throw new BookStoryBibleStoreError(409, "全书世界观冻结父层输入无效");
   }
   const parents = value.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item) || Object.getPrototypeOf(item) !== Object.prototype) {
-      throw new BookStoryBibleStoreError(409, "故事圣经冻结父层输入无效");
+      throw new BookStoryBibleStoreError(409, "全书世界观冻结父层输入无效");
     }
     const row = item as Record<string, unknown>;
     if (Object.keys(row).sort().join(",") !== "contentHash,id" || typeof row.id !== "string" || !row.id ||
         row.id.length > 200 || typeof row.contentHash !== "string" || !HASH.test(row.contentHash)) {
-      throw new BookStoryBibleStoreError(409, "故事圣经冻结父层输入无效");
+      throw new BookStoryBibleStoreError(409, "全书世界观冻结父层输入无效");
     }
     return { id: row.id, contentHash: row.contentHash };
   }).sort((left, right) => left.id.localeCompare(right.id));
   if (new Set(parents.map((parent) => parent.id)).size !== parents.length) {
-    throw new BookStoryBibleStoreError(409, "故事圣经冻结父层输入不能重复");
+    throw new BookStoryBibleStoreError(409, "全书世界观冻结父层输入不能重复");
   }
   return parents;
 }
@@ -106,7 +106,7 @@ function range(database: DatabaseSync, bookId: string, startId: string, endId: s
      ORDER BY chapter_index`,
   ).all(bookId, startId, bookId, endId, bookId) as unknown as ChapterRow[];
   if (!rows.length || rows[0]!.id !== startId || rows.at(-1)!.id !== endId) {
-    throw new BookStoryBibleStoreError(409, "故事圣经覆盖章节无效或倒序");
+    throw new BookStoryBibleStoreError(409, "全书世界观覆盖章节无效或倒序");
   }
   return rows;
 }
@@ -126,7 +126,7 @@ function sourceSnapshot(database: DatabaseSync, bookId: string, chapters: Chapte
   ).all(...sourceEventIds) as unknown as Array<Record<string, unknown> & { id: string; chapter_id: string }>;
   const found = new Set(rows.map((row) => row.id));
   if (found.size !== sourceEventIds.length || rows.some((row) => !chapterIds.has(row.chapter_id))) {
-    throw new BookStoryBibleStoreError(409, "故事圣经引用了不存在、跨书或范围外的章节事件");
+    throw new BookStoryBibleStoreError(409, "全书世界观引用了不存在、跨书或范围外的章节事件");
   }
   return sha256(JSON.stringify({ contract: "book-story-bible-source-events-v1", eventIds: sourceEventIds, rows }));
 }
@@ -140,7 +140,7 @@ function validateContentChapters(content: BookStoryBibleContent, allowedChapterI
     ...content.plotThreads.flatMap((item) => item.chapterIds),
   ];
   if (ids.some((id) => !allowedChapterIds.has(id))) {
-    throw new BookStoryBibleStoreError(409, "故事圣经内容引用了覆盖范围外的章节");
+    throw new BookStoryBibleStoreError(409, "全书世界观内容引用了覆盖范围外的章节");
   }
 }
 
@@ -163,7 +163,7 @@ function parentSnapshot(
   const maximum = chapters.at(-1)!.chapter_index;
   if (rows.length !== parentBibleIds.length || rows.some((row) => row.book_id !== bookId ||
       row.start_index < minimum || row.end_index > maximum || !HASH.test(row.content_hash))) {
-    throw new BookStoryBibleStoreError(409, "故事圣经父层输入不存在、失效或超出覆盖范围");
+    throw new BookStoryBibleStoreError(409, "全书世界观父层输入不存在、失效或超出覆盖范围");
   }
   return rows.map((row) => ({ id: row.id, contentHash: row.content_hash }))
     .sort((left, right) => left.id.localeCompare(right.id));
@@ -174,12 +174,12 @@ function rowResult(database: DatabaseSync, row: BibleRow) {
   let parents: Array<{ id: string; contentHash: string }>;
   let rawContent: unknown;
   try {
-    sourceEventIds = uniqueIds(JSON.parse(row.source_event_ids_json), "故事圣经来源事件", MAX_SOURCE_EVENTS, false);
+    sourceEventIds = uniqueIds(JSON.parse(row.source_event_ids_json), "全书世界观来源事件", MAX_SOURCE_EVENTS, false);
     parents = frozenParents(JSON.parse(row.parent_bible_ids_json));
     rawContent = JSON.parse(row.content_json);
   } catch (error) {
     if (error instanceof BookStoryBibleStoreError) throw error;
-    throw new BookStoryBibleStoreError(409, "故事圣经持久内容不是有效 JSON");
+    throw new BookStoryBibleStoreError(409, "全书世界观持久内容不是有效 JSON");
   }
   const chapters = range(database, row.book_id, row.source_start_chapter_id, row.source_end_chapter_id);
   const inputHash = sha256(JSON.stringify({ sourceEventsHash: row.source_events_hash, parents }));
@@ -190,7 +190,7 @@ function rowResult(database: DatabaseSync, row: BibleRow) {
       row.input_hash !== inputHash || row.content_json !== contentJson || row.content_hash !== sha256(contentJson) ||
       row.source_event_ids_json !== JSON.stringify(sourceEventIds) ||
       row.parent_bible_ids_json !== JSON.stringify(parents)) {
-    throw new BookStoryBibleStoreError(409, "故事圣经持久身份或内容校验失败");
+    throw new BookStoryBibleStoreError(409, "全书世界观持久身份或内容校验失败");
   }
   return {
     id: row.id, bookId: row.book_id, scope: row.scope, sourceStartChapterId: row.source_start_chapter_id,
@@ -208,7 +208,7 @@ const SELECT_COLUMNS = `id, book_id, scope, source_start_chapter_id, source_end_
 
 export function getBookStoryBible(database: DatabaseSync, id: string) {
   const row = database.prepare(`SELECT ${SELECT_COLUMNS} FROM book_story_bibles WHERE id = ?`).get(id) as BibleRow | undefined;
-  if (!row) throw new BookStoryBibleStoreError(404, "故事圣经版本不存在");
+  if (!row) throw new BookStoryBibleStoreError(404, "全书世界观版本不存在");
   return rowResult(database, row);
 }
 
@@ -241,9 +241,9 @@ export function createBookStoryBible(
   database: DatabaseSync, input: BookStoryBibleInput, options: { forceRebuild?: boolean; now?: number } = {},
 ) {
   const bookId = plainText(input.bookId, "书籍");
-  if (input.scope !== "interval" && input.scope !== "final") throw new BookStoryBibleStoreError(400, "故事圣经层级无效");
-  const sourceEventIds = uniqueIds(input.sourceEventIds, "故事圣经来源事件", MAX_SOURCE_EVENTS, false);
-  const parentBibleIds = uniqueIds(input.parentBibleIds ?? [], "故事圣经父层输入", MAX_PARENTS, true);
+  if (input.scope !== "interval" && input.scope !== "final") throw new BookStoryBibleStoreError(400, "全书世界观层级无效");
+  const sourceEventIds = uniqueIds(input.sourceEventIds, "全书世界观来源事件", MAX_SOURCE_EVENTS, false);
+  const parentBibleIds = uniqueIds(input.parentBibleIds ?? [], "全书世界观父层输入", MAX_PARENTS, true);
   const sourceStartChapterId = plainText(input.sourceStartChapterId, "起始章节");
   const sourceEndChapterId = plainText(input.sourceEndChapterId, "结束章节");
   const providerId = plainText(input.providerId, "模型服务");
@@ -306,5 +306,5 @@ export function invalidateBookStoryBible(database: DatabaseSync, id: string, now
   const result = database.prepare(
     "UPDATE book_story_bibles SET invalidated_at = ? WHERE id = ? AND invalidated_at IS NULL",
   ).run(now, id);
-  if (result.changes !== 1) throw new BookStoryBibleStoreError(404, "可失效的故事圣经版本不存在");
+  if (result.changes !== 1) throw new BookStoryBibleStoreError(404, "可失效的全书世界观版本不存在");
 }

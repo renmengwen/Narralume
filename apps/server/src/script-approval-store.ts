@@ -146,7 +146,7 @@ export function requireApprovedScriptForProduction(
     throw new ScriptApprovalStoreError(400, "生产类型无效");
   }
   const row = database.prepare(
-    `SELECT approval.revision, approval.action, approval.script_version_id, script.content_hash
+    `SELECT approval.revision, approval.action, approval.script_version_id, script.kind, script.content_hash
      FROM script_approval_events approval
      JOIN script_versions script ON script.id = approval.script_version_id
      WHERE approval.episode_id = ? ORDER BY approval.revision DESC LIMIT 1`,
@@ -154,9 +154,10 @@ export function requireApprovedScriptForProduction(
     revision: number;
     action: ScriptApprovalAction;
     script_version_id: string;
+    kind: string;
     content_hash: string;
   } | undefined;
-  if (!row || row.action !== "approve") {
+  if (!row || row.action !== "approve" || row.kind !== "packaged") {
     const label = purpose === "tts" ? "语音" : purpose === "image" ? "图片" : "视频";
     throw new ScriptApprovalStoreError(409, `稿件未人工批准，不能开始${label}生产`);
   }

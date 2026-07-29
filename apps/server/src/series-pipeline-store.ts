@@ -9,6 +9,13 @@ import {
   chapterEventsAnalysisJobMatchesChapters,
 } from "./chapter-events-job.js";
 import { getJob, requestJobCancellation, type JobRecord } from "./job-store.js";
+import { getOrCreateBookPromptProfile } from "./book-prompt-profile-store.js";
+import { PRODUCT_PROMPT_SET_VERSION } from "./product-prompts.js";
+import {
+  allocateEpisodeChapterRanges,
+  validateConfirmedEpisodeChapterRanges,
+  type EpisodeChapterRange,
+} from "./episode-range-allocation.js";
 
 export type SeriesPipelineStatus =
   | "configured" | "analyzing_chapters" | "building_story_bible" | "planning_episodes"
@@ -19,6 +26,9 @@ interface RunRow {
   id: string; series_project_id: string; status: SeriesPipelineStatus; resume_status: SeriesPipelineStatus | null;
   episode_count: number; target_duration_seconds: number; source_start_chapter_id: string;
   source_end_chapter_id: string; chapter_batch_size: number; chapter_concurrency: number;
+  planning_contract_version: number; episode_ranges_json: string | null; script_contract_version: number;
+  product_prompt_version: string | null; book_prompt_profile_revision: number | null;
+  book_prompt_profile_hash: string | null;
   config_hash: string; chapter_events_hash: string | null;
   story_bible_id: string | null; plan_hash: string | null; failure_code: string | null;
   failure_message: string | null; created_at: number; updated_at: number;
@@ -28,6 +38,8 @@ export interface SeriesPipelineRun {
   id: string; seriesProjectId: string; status: SeriesPipelineStatus; resumeStatus: SeriesPipelineStatus | null;
   episodeCount: number; targetDurationSeconds: number; sourceStartChapterId: string;
   sourceEndChapterId: string; chapterBatchSize: number; chapterConcurrency: number;
+  planningContractVersion: 1 | 2; episodeRanges: EpisodeChapterRange[] | null; scriptContractVersion: 5 | 6;
+  productPromptVersion: string | null; bookPromptProfileRevision: number | null; bookPromptProfileHash: string | null;
   configHash: string; chapterEventsHash: string | null;
   storyBibleId: string | null; planHash: string | null; failureCode: string | null;
   failureMessage: string | null; createdAt: number; updatedAt: number;
@@ -37,10 +49,11 @@ export interface CreateSeriesPipelineRunInput {
   seriesProjectId: string; episodeCount: number; targetDurationSeconds: number;
   sourceStartChapterId: string; sourceEndChapterId: string;
   chapterBatchSize?: number; chapterConcurrency?: number;
+  episodeRanges?: Array<{ episodeIndex: number; startChapterId: string; endChapterId: string }>;
 }
 
 export interface PipelineChapter {
-  id: string; index: number; contentHash: string; hasEvents: boolean;
+  id: string; index: number; characterCount: number; contentHash: string; hasEvents: boolean;
 }
 
 export class SeriesPipelineError extends Error {
@@ -53,6 +66,12 @@ function runRecord(row: RunRow): SeriesPipelineRun {
     episodeCount: row.episode_count, targetDurationSeconds: row.target_duration_seconds,
     sourceStartChapterId: row.source_start_chapter_id, sourceEndChapterId: row.source_end_chapter_id,
     chapterBatchSize: row.chapter_batch_size, chapterConcurrency: row.chapter_concurrency,
+    planningContractVersion: row.planning_contract_version as 1 | 2,
+    episodeRanges: row.episode_ranges_json ? JSON.parse(row.episode_ranges_json) as EpisodeChapterRange[] : null,
+    scriptContractVersion: row.script_contract_version as 5 | 6,
+    productPromptVersion: row.product_prompt_version,
+    bookPromptProfileRevision: row.book_prompt_profile_revision,
+    bookPromptProfileHash: row.book_prompt_profile_hash,
     configHash: row.config_hash, chapterEventsHash: row.chapter_events_hash, storyBibleId: row.story_bible_id,
     planHash: row.plan_hash, failureCode: row.failure_code, failureMessage: row.failure_message,
     createdAt: row.created_at, updatedAt: row.updated_at,
@@ -120,11 +139,11 @@ function rangeRows(database: DatabaseSync, seriesProjectId: string, startId: str
     throw new SeriesPipelineError(400, "起止章节必须属于系列原著且顺序正确");
   }
   const rows = database.prepare(
-    `SELECT id, chapter_index, content_hash,
+    `SELECT id, chapter_index, char_count, content_hash,
             EXISTS(SELECT 1 FROM chapter_events event WHERE event.chapter_id = chapters.id) AS has_events
      FROM chapters WHERE book_id = ? AND chapter_index BETWEEN ? AND ? ORDER BY chapter_index`,
   ).all(project.book_id, bounds[0]!.chapter_index, bounds.at(-1)!.chapter_index) as Array<{
-    id: string; chapter_index: number; content_hash: string; has_events: number;
+    id: string; chapter_index: number; char_count: number; content_hash: string; has_events: number;
   }>;
   if (!rows.length || rows.some((row, index) => index > 0 && row.chapter_index !== rows[index - 1]!.chapter_index + 1)) {
     throw new SeriesPipelineError(409, "改写范围内章节索引不连续");
@@ -152,9 +171,33 @@ export function createSeriesPipelineRun(
   if ((targetDurationSeconds - EPISODE_DURATION_POLICY.minimumSeconds) % EPISODE_DURATION_POLICY.stepSeconds !== 0) {
     throw new SeriesPipelineError(400, `单集时长必须按 ${EPISODE_DURATION_POLICY.stepSeconds} 秒递增`);
   }
-  rangeRows(database, seriesProjectId, sourceStartChapterId, sourceEndChapterId);
-  const configHash = createHash("sha256").update(JSON.stringify({
-    contract: "series-pipeline-v2", seriesProjectId, episodeCount, targetDurationSeconds,
+  const chapters = rangeRows(database, seriesProjectId, sourceStartChapterId, sourceEndChapterId).map((row) => ({
+    chapterId: row.id, chapterIndex: row.chapter_index, characterCount: row.char_count,
+  }));
+  let episodeRanges: EpisodeChapterRange[] | null = null;
+  if (input.episodeRanges !== undefined) {
+    if (!Array.isArray(input.episodeRanges) || input.episodeRanges.length !== episodeCount) {
+      throw new SeriesPipelineError(400, "开始付费分析前必须确认全部分集章节范围");
+    }
+    try {
+      episodeRanges = validateConfirmedEpisodeChapterRanges(chapters, input.episodeRanges);
+    } catch (error) {
+      throw new SeriesPipelineError(400, error instanceof Error ? error.message : "确认的分集范围无效");
+    }
+  }
+  const book = database.prepare("SELECT book_id FROM series_projects WHERE id = ?")
+    .get(seriesProjectId) as { book_id: string };
+  const profile = episodeRanges ? getOrCreateBookPromptProfile(database, book.book_id, now) : null;
+  const configHash = createHash("sha256").update(JSON.stringify(episodeRanges ? {
+    contract: "series-pipeline-v3",
+    seriesProjectId, episodeCount, targetDurationSeconds,
+    sourceStartChapterId, sourceEndChapterId, chapterBatchSize, chapterConcurrency, episodeRanges,
+    productPromptVersion: PRODUCT_PROMPT_SET_VERSION,
+    bookPromptProfileRevision: profile!.revision,
+    bookPromptProfileHash: profile!.profileHash,
+  } : {
+    contract: "series-pipeline-v2",
+    seriesProjectId, episodeCount, targetDurationSeconds,
     sourceStartChapterId, sourceEndChapterId, chapterBatchSize, chapterConcurrency,
   })).digest("hex");
   const id = `pipeline_${randomUUID()}`;
@@ -163,10 +206,15 @@ export function createSeriesPipelineRun(
       `INSERT INTO series_pipeline_runs (
          id, series_project_id, status, episode_count, target_duration_seconds,
          source_start_chapter_id, source_end_chapter_id, chapter_batch_size, chapter_concurrency,
+         planning_contract_version, episode_ranges_json, script_contract_version,
+         product_prompt_version, book_prompt_profile_revision, book_prompt_profile_hash,
          config_hash, created_at, updated_at
-       ) VALUES (?, ?, 'configured', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, 'configured', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(id, seriesProjectId, episodeCount, targetDurationSeconds, sourceStartChapterId, sourceEndChapterId,
-      chapterBatchSize, chapterConcurrency, configHash, now, now);
+      chapterBatchSize, chapterConcurrency, episodeRanges ? 2 : 1,
+      episodeRanges ? JSON.stringify(episodeRanges) : null, episodeRanges ? 6 : 5,
+      episodeRanges ? PRODUCT_PROMPT_SET_VERSION : null, profile?.revision ?? null, profile?.profileHash ?? null,
+      configHash, now, now);
   } catch (error) {
     if (String(error).includes("series_pipeline_runs.series_project_id")) {
       throw new SeriesPipelineError(409, "该系列已有未结束的全本流水线");
@@ -178,8 +226,26 @@ export function createSeriesPipelineRun(
 
 export function listPipelineChapters(database: DatabaseSync, run: SeriesPipelineRun): PipelineChapter[] {
   return rangeRows(database, run.seriesProjectId, run.sourceStartChapterId, run.sourceEndChapterId).map((row) => ({
-    id: row.id, index: row.chapter_index, contentHash: row.content_hash, hasEvents: row.has_events === 1,
+    id: row.id, index: row.chapter_index, characterCount: row.char_count,
+    contentHash: row.content_hash, hasEvents: row.has_events === 1,
   }));
+}
+
+export function previewSeriesPipelineEpisodeRanges(database: DatabaseSync, input: {
+  seriesProjectId: string; sourceStartChapterId: string; sourceEndChapterId: string; episodeCount: number;
+}) {
+  const seriesProjectId = safeId(input.seriesProjectId, "系列 ID");
+  const sourceStartChapterId = safeId(input.sourceStartChapterId, "起始章节 ID");
+  const sourceEndChapterId = safeId(input.sourceEndChapterId, "结束章节 ID");
+  const episodeCount = safeInteger(input.episodeCount, 1, 1000, "总集数");
+  const chapters = rangeRows(database, seriesProjectId, sourceStartChapterId, sourceEndChapterId).map((row) => ({
+    chapterId: row.id, chapterIndex: row.chapter_index, characterCount: row.char_count,
+  }));
+  try {
+    return allocateEpisodeChapterRanges(chapters, episodeCount);
+  } catch (error) {
+    throw new SeriesPipelineError(400, error instanceof Error ? error.message : "无法生成分集范围预览");
+  }
 }
 
 export function listRunnableSeriesPipelineRuns(database: DatabaseSync) {
@@ -191,8 +257,46 @@ export function listRunnableSeriesPipelineRuns(database: DatabaseSync) {
 export function getMappedEpisodePlanJob(database: DatabaseSync, runId: string) {
   return database.prepare(
     `SELECT mapping.subject_id, mapping.job_id FROM series_pipeline_jobs mapping
-     WHERE mapping.run_id = ? AND mapping.stage = 'episode_plan' LIMIT 1`,
+     WHERE mapping.run_id = ? AND mapping.stage = 'episode_plan' AND mapping.subject_type = 'plan' LIMIT 1`,
   ).get(runId) as { subject_id: string; job_id: string } | undefined;
+}
+
+export function getMappedLocalEpisodePlanJobs(database: DatabaseSync, runId: string) {
+  return database.prepare(
+    `SELECT mapping.subject_id, mapping.job_id FROM series_pipeline_jobs mapping
+     WHERE mapping.run_id = ? AND mapping.stage = 'episode_plan' AND mapping.subject_type = 'episode'
+     ORDER BY mapping.subject_id`,
+  ).all(runId) as Array<{ subject_id: string; job_id: string }>;
+}
+
+export function mapSeriesPipelineLocalEpisodePlanJob(
+  database: DatabaseSync, runId: string, subjectId: string, jobId: string, now = Date.now(),
+) {
+  return immediateTransaction(database, () => {
+    const active = database.prepare(
+      "SELECT 1 FROM series_pipeline_runs WHERE id = ? AND status IN ('planning_episodes', 'validating_plan', 'freezing_plan')",
+    ).get(runId);
+    if (!active) return false;
+    const episodePrefix = subjectId.split(":", 1)[0];
+    database.prepare(
+      `DELETE FROM series_pipeline_jobs
+       WHERE run_id = ? AND stage = 'episode_plan' AND subject_type = 'episode'
+         AND subject_id LIKE ? AND subject_id <> ?`,
+    ).run(runId, `${episodePrefix}:%`, subjectId);
+    database.prepare(
+      `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
+       VALUES (?, 'episode_plan', 'episode', ?, ?, ?)
+       ON CONFLICT(run_id, stage, subject_type, subject_id) DO UPDATE SET job_id=excluded.job_id, created_at=excluded.created_at`,
+    ).run(runId, subjectId, jobId, now);
+    database.prepare(
+      `UPDATE jobs SET run_after = ?, updated_at = ?
+       WHERE id = ? AND status = 'queued' AND run_after = ?`,
+    ).run(now, now, jobId, PAUSED_JOB_RUN_AFTER);
+    database.prepare(
+      "UPDATE series_pipeline_runs SET failure_code = NULL, failure_message = NULL, updated_at = ? WHERE id = ?",
+    ).run(now, runId);
+    return true;
+  });
 }
 
 export function mapSeriesPipelineEpisodePlanJob(
@@ -697,18 +801,30 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
   const storyFailure = storyJob && (storyJob.status === "failed" || storyJob.status === "cancelled") ? [{
     stage: "story_bible", subjectType: "bible_chunk", subjectId: storyMapping!.subject_id,
     jobId: storyJob.id, code: storyJob.status === "cancelled" ? "job_cancelled" : storyJob.errorCode,
-    message: storyJob.status === "cancelled" ? "故事圣经生成已中断，请重试"
-      : storyJob.errorMessage ?? "故事圣经生成失败，请重试",
+    message: storyJob.status === "cancelled" ? "全书世界观构建已中断，请重试"
+      : storyJob.errorMessage ?? "全书世界观构建失败，请重试",
     canRetry: true,
   }] : [];
   const planMapping = getMappedEpisodePlanJob(database, run.id);
   const planJob = planMapping ? getJob(database, planMapping.job_id) : undefined;
+  const localPlanJobs = getMappedLocalEpisodePlanJobs(database, run.id).map((mapping) => ({
+    mapping, job: getJob(database, mapping.job_id),
+  })).filter((item): item is { mapping: { subject_id: string; job_id: string }; job: JobRecord } => Boolean(item.job));
+  const currentLocalPlan = localPlanJobs.find((item) => item.job.status === "queued" || item.job.status === "running");
   const planFailure = planJob && (planJob.status === "failed" || planJob.status === "cancelled") ? [{
     stage: "episode_plan", subjectType: "plan", subjectId: planMapping!.subject_id,
     jobId: planJob.id, code: planJob.status === "cancelled" ? "job_cancelled" : planJob.errorCode,
-    message: planJob.status === "cancelled" ? "全书规划已中断，请重试" : "全书规划失败，请重试",
+    message: `${run.planningContractVersion === 2 ? "逐集局部规划" : "全书规划"}${
+      planJob.status === "cancelled" ? "已中断，请重试" : "失败，请重试"}`,
     canRetry: true,
   }] : [];
+  const localPlanFailures = localPlanJobs.filter((item) => item.job.status === "failed" ||
+    item.job.status === "cancelled").map((item) => ({
+    stage: "episode_plan", subjectType: "episode", subjectId: item.mapping.subject_id,
+    jobId: item.job.id, code: item.job.status === "cancelled" ? "job_cancelled" : item.job.errorCode,
+    message: item.job.status === "cancelled" ? "逐集局部规划已中断，请重试" : "逐集局部规划失败，请重试",
+    canRetry: true,
+  }));
   const stopping = run.status === "paused" && Boolean(database.prepare(
     `SELECT 1 FROM jobs job JOIN series_pipeline_jobs mapping ON mapping.job_id = job.id
      WHERE mapping.run_id = ? AND job.status = 'running' AND job.cancel_requested = 1
@@ -725,22 +841,33 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
         failed: failures.length,
       },
       storyBible: { completed: run.storyBibleId ? 1 : 0, total: 1, steps: storySteps },
-      episodePlan: { completed: run.planHash ? run.episodeCount : 0, total: run.episodeCount },
-      scripts: { completed: scriptJobs.filter((item) => item.job.status === "succeeded").length * 2, total: run.episodeCount * 2 },
+      episodePlan: {
+        completed: run.planHash ? run.episodeCount
+          : Math.min(run.episodeCount, localPlanJobs.filter((item) => item.job.status === "succeeded").length),
+        total: run.episodeCount,
+      },
+      scripts: {
+        completed: scriptJobs.filter((item) => item.job.status === "succeeded").reduce((total, item) =>
+          total + ((item.job.payload as { contractVersion?: unknown } | null)?.contractVersion === 6 ? 1 : 2), 0),
+        total: run.episodeCount * (run.scriptContractVersion === 6 ? 1 : 2),
+      },
     },
     current: current ? currentJob("chapter_analysis", "chapter", current.chapterId, current.job)
       : storyJob && (storyJob.status === "queued" || storyJob.status === "running")
         ? currentJob("story_bible", "bible_chunk", storyMapping!.subject_id, storyJob)
       : planJob && (planJob.status === "queued" || planJob.status === "running")
         ? currentJob("episode_plan", "plan", planMapping!.subject_id, planJob)
+      : currentLocalPlan
+        ? currentJob("episode_plan", "episode", currentLocalPlan.mapping.subject_id, currentLocalPlan.job)
       : currentScript ? currentJob("script_generation", "episode", currentScript.episodeId, currentScript.job)
       : null,
-    failures: [...failures, ...storyFailure, ...planFailure, ...scriptFailures],
+    failures: [...failures, ...storyFailure, ...planFailure, ...localPlanFailures, ...scriptFailures],
     actions: {
       canPause: !["paused", "cancelled", "completed"].includes(run.status),
       canResume: run.status === "paused" && !stopping,
       canCancel: !["cancelled", "completed"].includes(run.status),
-      canRetry: failures.length + storyFailure.length + planFailure.length + scriptFailures.length > 0,
+      canRetry: failures.length + storyFailure.length + planFailure.length + localPlanFailures.length +
+        scriptFailures.length > 0,
     },
   };
 }

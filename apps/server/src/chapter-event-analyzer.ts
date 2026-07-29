@@ -10,6 +10,7 @@ import {
   type ChapterEventType,
 } from "./chapter-event-store.js";
 import { streamedText } from "./text-model-stream.js";
+import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
 
 const MAX_CHAPTER_BYTES = 128 * 1024;
 const MAX_ATOM_BYTES = 16 * 1024;
@@ -38,6 +39,7 @@ export interface ChapterTextModelConfig {
 export interface ChapterAnalysisInput {
   chapterId: string;
   atoms: readonly ChapterEvidenceAtom[];
+  promptInstructions?: string;
   signal?: AbortSignal;
 }
 
@@ -47,6 +49,7 @@ export type AnalyzeChapterEvents = (
 
 export interface ChapterBatchAnalysisInput {
   chapters: readonly ChapterAnalysisInput[];
+  promptInstructions?: string;
   signal?: AbortSignal;
 }
 
@@ -143,8 +146,8 @@ export async function buildChapterEvidenceAtoms(
   return { atoms, contentHash: chapter.content_hash };
 }
 
-function prompt(atoms: readonly ChapterEvidenceAtom[]) {
-  return [
+function prompt(atoms: readonly ChapterEvidenceAtom[], promptInstructions?: string) {
+  const frozenInput = [
     "你是小说章节结构化事件分析器。只输出严格 JSON，不要输出 Markdown 或解释。",
     "只能引用下面提供的 evidenceId；禁止返回字节偏移。没有可靠事件时返回空 events。",
     "事件类型仅限 character、location、prop、causality、revelation、suspense。",
@@ -153,6 +156,9 @@ function prompt(atoms: readonly ChapterEvidenceAtom[]) {
     "原文证据段：",
     ...atoms.map((atom) => JSON.stringify({ evidenceId: atom.id, text: atom.text })),
   ].join("\n");
+  return promptInstructions === undefined
+    ? frozenInput
+    : layeredPrompt(PRODUCT_PROMPTS.chapterAnalysis, promptInstructions, frozenInput);
 }
 
 export async function limitedJson(response: Response) {
@@ -257,12 +263,12 @@ function assignOccurrences(events: readonly ChapterEventInput[]) {
   });
 }
 
-export function prepareChapterBatchPrompt(chapters: readonly ChapterAnalysisInput[]) {
+export function prepareChapterBatchPrompt(chapters: readonly ChapterAnalysisInput[], promptInstructions?: string) {
   const requestChapters = chapters.map((chapter, chapterIndex) => ({
     chapterId: chapter.chapterId,
     atoms: chapter.atoms.map((atom, atomIndex) => ({ ...atom, id: `c${chapterIndex + 1}e${atomIndex + 1}` })),
   }));
-  const prompt = [
+  const frozenInput = [
     "你是小说多章节结构化事件分析器。只输出严格 JSON，不要输出 Markdown 或解释。",
     "输出必须逐章覆盖全部且仅覆盖给定 chapterId；每章事件只能引用该章 evidenceId，禁止跨章引用或返回字节偏移。",
     "事件类型仅限 character、location、prop、causality、revelation、suspense。",
@@ -274,6 +280,9 @@ export function prepareChapterBatchPrompt(chapters: readonly ChapterAnalysisInpu
       ...chapter.atoms.map((atom) => JSON.stringify({ evidenceId: atom.id, text: atom.text })),
     ]),
   ].join("\n");
+  const prompt = promptInstructions === undefined
+    ? frozenInput
+    : layeredPrompt(PRODUCT_PROMPTS.chapterAnalysis, promptInstructions, frozenInput);
   return { chapters: requestChapters, prompt, bytes: Buffer.byteLength(prompt, "utf8") };
 }
 
@@ -318,11 +327,11 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
       (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
     throw new Error("章节分析模型配置无效");
   }
-  return async ({ chapters, signal }) => {
+  return async ({ chapters, promptInstructions, signal }) => {
     if (!chapters.length || chapters.length > 20 || new Set(chapters.map((chapter) => chapter.chapterId)).size !== chapters.length) {
       throw new Error("多章分析输入章节集合无效");
     }
-    const prepared = prepareChapterBatchPrompt(chapters);
+    const prepared = prepareChapterBatchPrompt(chapters, promptInstructions);
     if (prepared.bytes > MAX_CHAPTER_BATCH_INPUT_BYTES) {
       throw new Error("多章分析输入超过服务端安全上限");
     }
@@ -358,7 +367,7 @@ export function createOpenAiResponsesChapterAnalyzer(
       (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
     throw new Error("章节分析模型配置无效");
   }
-  async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal) {
+  async function analyzeBatch(atoms: readonly ChapterEvidenceAtom[], signal?: AbortSignal, promptInstructions?: string) {
     const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
     async function requestEvents(input: string) {
       const request = textModelRequest(config, input, 8192, true);
@@ -385,7 +394,7 @@ export function createOpenAiResponsesChapterAnalyzer(
       return modelEvents(text, requestAtoms);
     }
     try {
-      return await requestEvents(prompt(requestAtoms));
+      return await requestEvents(prompt(requestAtoms, promptInstructions));
     } catch (error) {
       if (!(error instanceof ChapterEvidenceReferenceError) || signal?.aborted) throw error;
       return requestEvents([
@@ -393,16 +402,16 @@ export function createOpenAiResponsesChapterAnalyzer(
         "每个事件必须引用 1～20 个互不重复的 evidenceId，且只能逐字使用以下允许 ID：",
         ...requestAtoms.map((atom) => atom.id),
         "原任务和全部结构约束如下：",
-        prompt(requestAtoms),
+        prompt(requestAtoms, promptInstructions),
       ].join("\n"));
     }
   }
-  return async ({ atoms, signal }) => {
+  return async ({ atoms, promptInstructions, signal }) => {
     const events: ChapterEventInput[] = [];
     for (let offset = 0; offset < atoms.length; offset += MAX_ATOMS_PER_REQUEST) {
       if (signal?.aborted) throw signal.reason;
       try {
-        events.push(...await analyzeBatch(atoms.slice(offset, offset + MAX_ATOMS_PER_REQUEST), signal));
+        events.push(...await analyzeBatch(atoms.slice(offset, offset + MAX_ATOMS_PER_REQUEST), signal, promptInstructions));
       } catch (error) {
         if (signal?.aborted) throw error;
         throw new Error(`章节分析第 ${Math.floor(offset / MAX_ATOMS_PER_REQUEST) + 1} 批失败：${error instanceof Error ? error.message : "未知错误"}`);

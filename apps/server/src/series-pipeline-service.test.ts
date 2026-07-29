@@ -17,20 +17,26 @@ import { openDatabase } from "./database.js";
 import {
   createEpisodeScriptGenerationJobHandler,
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+  EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION,
   type GenerateEpisodeScript,
 } from "./episode-script-generation-job.js";
 import { createJob, getJob } from "./job-store.js";
 import { canonicalFullBookPlanJson } from "./full-book-plan-contract.js";
 import { buildFullBookPlanIntervalRequests } from "./full-book-plan-job.js";
-import { FULL_BOOK_PLAN_JOB_TYPE } from "./full-book-plan-job-handler.js";
+import {
+  EPISODE_PLAN_JOB_TYPE,
+  FULL_BOOK_PLAN_JOB_TYPE,
+  createFullBookPlanJobHandler,
+} from "./full-book-plan-job-handler.js";
 import { JobWorker } from "./job-worker.js";
 import { fullBookPlanBuildLimits, SeriesPipelineService } from "./series-pipeline-service.js";
-import { createScriptVersionPair } from "./script-version-store.js";
+import { createScriptVersionPair, createStandalonePackagedScriptVersion } from "./script-version-store.js";
 import {
   assertSeriesPipelineAllowsChapterEventMutation,
   createSeriesPipelineRun,
   getMappedChapterJobs,
   getMappedEpisodePlanJob,
+  getMappedLocalEpisodePlanJobs,
   getMappedScriptJobs,
   getMappedStoryBibleJob,
   getSeriesPipelineRun,
@@ -145,10 +151,13 @@ async function seedMany(dataRoot: string, suffix: string, parts: readonly Buffer
   return connection;
 }
 
-async function coverageFixture(dataRoot: string) {
+async function coverageFixture(dataRoot: string, contractVersion: 5 | 6 = 5) {
   const connection = await seed(dataRoot);
   const database = connection.database;
   const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 2 });
+  if (contractVersion === 6) {
+    database.prepare("UPDATE series_pipeline_runs SET script_contract_version = 6 WHERE id = ?").run(run.id);
+  }
   setSeriesPipelineStatus(database, run.id, "configured", "checking_coverage");
   const versions = [] as Array<{ episodeId: string; faithfulId: string; packagedId: string }>;
   for (const index of [1, 2]) {
@@ -174,7 +183,8 @@ async function coverageFixture(dataRoot: string) {
       packagedParagraphs: [{ text: `包装稿${index}`, sourceIndexes: [0] }],
     }, () => undefined);
     const job = createJob(database, {
-      id: `coverage_job_${index}`, type: EPISODE_SCRIPT_GENERATION_JOB_TYPE, payload: {}, maxAttempts: 1,
+      id: `coverage_job_${index}`, type: EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+      payload: { contractVersion: 5 }, maxAttempts: 1,
     });
     database.prepare(
       "UPDATE jobs SET status='succeeded',progress=1,result_json=?,finished_at=1,updated_at=1 WHERE id=?",
@@ -184,6 +194,65 @@ async function coverageFixture(dataRoot: string) {
   }
   return { connection, runId: run.id, versions };
 }
+
+test("checking_coverage 接受 v6 单稿并按每集一稿计数，且不自动批准", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-coverage-v6-"));
+  const fixture = await coverageFixture(dataRoot, EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION);
+  try {
+    const database = fixture.connection.database;
+    for (const [index, version] of fixture.versions.entries()) {
+      const packaged = createStandalonePackagedScriptVersion(database, version.episodeId, [
+        { text: `成片旁白${index + 1}`, sourceIndexes: [0] },
+      ], () => undefined);
+      const job = createJob(database, {
+        id: `coverage_v6_job_${index + 1}`, type: EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+        payload: { contractVersion: EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION }, maxAttempts: 1,
+      });
+      database.prepare(
+        "UPDATE jobs SET status='succeeded',progress=1,result_json=?,finished_at=1,updated_at=1 WHERE id=?",
+      ).run(JSON.stringify({
+        packagedVersionId: packaged.id, finishedNarrationVersionId: packaged.id,
+      }), job.id);
+      mapSeriesPipelineScriptJob(database, fixture.runId, version.episodeId, job.id);
+    }
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    assert.deepEqual(service.get(fixture.runId)!.progress.scripts, { completed: 2, total: 2 });
+    await service.reconcile();
+    assert.equal(service.get(fixture.runId)!.status, "awaiting_review");
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()!.total, 0);
+  } finally {
+    fixture.connection.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("checking_coverage 拒绝流水线与稿件任务合同版本不一致", async (t) => {
+  for (const item of [
+    { name: "v6 流水线拒绝 v5 任务", runVersion: 6 as const, jobVersion: 5 as const },
+    { name: "v5 流水线拒绝 v6 任务", runVersion: 5 as const, jobVersion: 6 as const },
+  ]) await t.test(item.name, async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-coverage-contract-"));
+    const fixture = await coverageFixture(dataRoot, item.runVersion);
+    try {
+      const database = fixture.connection.database;
+      database.prepare(
+        `UPDATE jobs SET payload_json = ? WHERE id IN (
+           SELECT job_id FROM series_pipeline_jobs WHERE run_id = ? AND stage = 'script_generation'
+         )`,
+      ).run(JSON.stringify({ contractVersion: item.jobVersion }), fixture.runId);
+      const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+      await service.reconcile();
+      const failed = service.get(fixture.runId)!;
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.failureCode, "script_coverage_contract_mismatch");
+      assert.equal(failed.failureMessage, "覆盖复核失败：第 1 集稿件任务合同版本与当前流水线不一致");
+      assert.equal(database.prepare("SELECT COUNT(*) AS total FROM script_approval_events").get()?.total, 0);
+    } finally {
+      fixture.connection.close();
+      await rm(dataRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 test("checking_coverage 冷重启后进入 awaiting_review 且幂等保持零批准", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-coverage-ready-"));
@@ -310,6 +379,103 @@ test("pause、resume、cancel、retry 幂等且章节事件仅在暂停时可修
     assert.equal(retrySeriesPipelineRun(database, run.id).status, "configured");
     assert.equal(cancelSeriesPipelineRun(database, run.id).status, "cancelled");
     assert.equal(cancelSeriesPipelineRun(database, run.id).status, "cancelled");
+  } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
+});
+
+test("planning contract v2 queues stable per-episode jobs and freezes only after every local result", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-pipeline-local-plan-"));
+  const connection = await seed(dataRoot);
+  try {
+    const database = connection.database;
+    for (const index of [1, 2]) {
+      const eventId = `event_local_${index}`;
+      const chapter = database.prepare(
+        "SELECT byte_start,byte_end,content_hash FROM chapters WHERE id=?",
+      ).get(`chapter_a_${index}`) as { byte_start: number; byte_end: number; content_hash: string };
+      database.prepare(`INSERT INTO chapter_events
+        (id,chapter_id,event_index,occurrence,event_type,payload_json,created_at)
+        VALUES (?,?,?,?,?,?,1)`).run(
+        eventId, `chapter_a_${index}`, 0, 0, "revelation", JSON.stringify({ summary: `event ${index}` }),
+      );
+      database.prepare(`INSERT INTO chapter_event_sources
+        (event_id,source_index,source_byte_start,source_byte_end,source_hash) VALUES (?,0,?,?,?)`)
+        .run(eventId, chapter.byte_start, chapter.byte_end, chapter.content_hash);
+    }
+    const bible = createBookStoryBible(database, {
+      bookId: "book_a", scope: "final", sourceStartChapterId: "chapter_a_1",
+      sourceEndChapterId: "chapter_a_2", sourceEventIds: ["event_local_1", "event_local_2"],
+      parentBibleIds: [], providerId: provider.providerId, model: provider.model,
+      content: {
+        characters: [], relationships: [], locations: [], organizations: [], items: [], concepts: [],
+        timeline: [
+          { summary: "event 1", chapterIds: ["chapter_a_1"], sourceEventIds: ["event_local_1"] },
+          { summary: "event 2", chapterIds: ["chapter_a_2"], sourceEventIds: ["event_local_2"] },
+        ],
+        flashbacks: [], plotThreads: [], confusingFacts: [], spoilerRestrictions: [], properNouns: [],
+      },
+    });
+    const run = createSeriesPipelineRun(database, {
+      ...input(), episodeCount: 2, targetDurationSeconds: 240,
+      episodeRanges: [
+        { episodeIndex: 1, startChapterId: "chapter_a_1", endChapterId: "chapter_a_1" },
+        { episodeIndex: 2, startChapterId: "chapter_a_2", endChapterId: "chapter_a_2" },
+      ],
+    });
+    database.prepare(
+      "UPDATE series_pipeline_runs SET status='planning_episodes',story_bible_id=? WHERE id=?",
+    ).run(bible.id, run.id);
+    const service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
+    await service.reconcile();
+    const mappings = getMappedLocalEpisodePlanJobs(database, run.id);
+    assert.equal(mappings.length, 2);
+    assert.deepEqual(mappings.map(({ subject_id }) => subject_id.slice(0, 5)), ["0001:", "0002:"]);
+    assert.ok(mappings.every(({ job_id }) => getJob(database, job_id)?.type === EPISODE_PLAN_JOB_TYPE));
+    assert.equal(getMappedEpisodePlanJob(database, run.id), undefined);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM episodes").get()!.total, 0);
+    await service.reconcile();
+    assert.deepEqual(getMappedLocalEpisodePlanJobs(database, run.id), mappings);
+
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { input: string };
+      const eventId = request.input.includes("event_local_1") ? "event_local_1" : "event_local_2";
+      return new Response(JSON.stringify({ output_text: JSON.stringify({ episodes: [{
+        index: 1, title: eventId === "event_local_1" ? "Episode one" : "Episode two",
+        storyArc: eventId === "event_local_1" ? "Opening" : "Ending", sourceEventIds: [eventId],
+        recap: eventId === "event_local_1" ? null : "Previously", nextHook: eventId === "event_local_1" ? "Next" : null,
+      }] }) }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const worker = new JobWorker(database, {
+      [EPISODE_PLAN_JOB_TYPE]: createFullBookPlanJobHandler(provider, {
+        database, fetchImpl, jobType: EPISODE_PLAN_JOB_TYPE, retryDelayMs: 0,
+      }),
+    }, { workerId: "pipeline-local-plan", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM episodes").get()!.total, 0);
+    const checkpoints = database.prepare(
+      `SELECT stage,scope_key,input_hash,output_json IS NOT NULL AS has_output
+       FROM job_checkpoints WHERE job_id=? ORDER BY stage`,
+    ).all(mappings[0]!.job_id) as Array<{
+      stage: string; scope_key: string; input_hash: string; has_output: number;
+    }>;
+    assert.deepEqual(checkpoints.map(({ stage }) => stage), ["full-book-plan-final", "full-book-plan-interval"]);
+    assert.ok(checkpoints.every((checkpoint) => checkpoint.scope_key === checkpoint.input_hash &&
+      /^[0-9a-f]{64}$/u.test(checkpoint.input_hash) && checkpoint.has_output === 1));
+    assert.equal(await worker.runOne(), true);
+    await service.reconcile();
+    const completed = service.get(run.id)!;
+    assert.equal(completed.status, "generating_scripts");
+    assert.equal(completed.progress.episodePlan.completed, 2);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM episodes").get()!.total, 2);
+    assert.deepEqual(database.prepare(
+      "SELECT episode_index,title FROM episodes ORDER BY episode_index",
+    ).all().map((row) => ({ ...row })), [
+      { episode_index: 1, title: "Episode one" },
+      { episode_index: 2, title: "Episode two" },
+    ]);
+    assert.equal(database.prepare(
+      "SELECT COUNT(*) AS total FROM job_checkpoints WHERE job_id IN (?,?)",
+    ).get(mappings[0]!.job_id, mappings[1]!.job_id)!.total, 4);
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });
 

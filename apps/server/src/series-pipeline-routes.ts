@@ -8,6 +8,7 @@ interface CreateBody {
   episodeCount?: unknown; targetDurationSeconds?: unknown;
   sourceStartChapterId?: unknown; sourceEndChapterId?: unknown;
   chapterBatchSize?: unknown; chapterConcurrency?: unknown;
+  episodeRanges?: unknown;
 }
 
 function statusCode(error: unknown) {
@@ -24,6 +25,9 @@ export const registerSeriesPipelineRoutes: FastifyPluginAsync<Options> = async (
     "/api/series/:seriesId/pipeline-runs",
     async (request, reply) => {
       try {
+        if (!Array.isArray(request.body?.episodeRanges)) {
+          throw new SeriesPipelineError(400, "开始付费分析前必须先预览并确认全部分集章节范围");
+        }
         const run = await options.service.create({
           seriesProjectId: request.params.seriesId,
           episodeCount: request.body?.episodeCount as number,
@@ -32,12 +36,36 @@ export const registerSeriesPipelineRoutes: FastifyPluginAsync<Options> = async (
           sourceEndChapterId: request.body?.sourceEndChapterId as string,
           chapterBatchSize: request.body?.chapterBatchSize as number,
           chapterConcurrency: request.body?.chapterConcurrency as number,
+          episodeRanges: request.body?.episodeRanges as Array<{
+            episodeIndex: number; startChapterId: string; endChapterId: string;
+          }>,
         });
         options.worker.poke();
         return reply.code(201).send({ ok: true, message: "全本自动改写流水线已创建", run });
       } catch (error) {
         const code = statusCode(error);
         if (code) return reply.code(code).send({ ok: false, message: error instanceof Error ? error.message : "创建失败" });
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { seriesId: string }; Body: CreateBody }>(
+    "/api/series/:seriesId/pipeline-runs/episode-ranges/preview",
+    async (request, reply) => {
+      try {
+        return {
+          ok: true,
+          ranges: options.service.preview({
+            seriesProjectId: request.params.seriesId,
+            episodeCount: request.body?.episodeCount as number,
+            sourceStartChapterId: request.body?.sourceStartChapterId as string,
+            sourceEndChapterId: request.body?.sourceEndChapterId as string,
+          }),
+        };
+      } catch (error) {
+        const code = statusCode(error);
+        if (code) return reply.code(code).send({ ok: false, message: error instanceof Error ? error.message : "预览失败" });
         throw error;
       }
     },

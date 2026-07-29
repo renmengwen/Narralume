@@ -41,7 +41,7 @@ function pruneEpisodeSnapshot(database: Database, episodeId: string, timelineHas
     const bibleTrigger = database.prepare(
       "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'book_story_bibles_immutable'",
     ).get() as { sql: string } | undefined;
-    if (!bibleTrigger?.sql) throw new Error("书籍故事圣经不可变约束缺失");
+    if (!bibleTrigger?.sql) throw new Error("全书世界观不可变约束缺失");
     database.exec("DROP TRIGGER book_story_bibles_immutable");
     database.prepare("UPDATE book_story_bibles SET job_id = NULL WHERE job_id IS NOT NULL").run();
     database.exec(bibleTrigger.sql);

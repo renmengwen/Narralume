@@ -295,11 +295,25 @@ test("全本流水线 HTTP 创建、查询和控制保持幂等", async () => {
     });
     const seriesId = series.json().series.id as string;
     const payload = {
-      episodeCount: 10, targetDurationSeconds: 1200,
+      episodeCount: 1, targetDurationSeconds: 1200,
       sourceStartChapterId: chapterId, sourceEndChapterId: chapterId,
     };
-    const created = await app.inject({
+    const unconfirmed = await app.inject({
       method: "POST", url: `/api/series/${seriesId}/pipeline-runs`, payload,
+    });
+    assert.equal(unconfirmed.statusCode, 400);
+    const preview = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/pipeline-runs/episode-ranges/preview`, payload,
+    });
+    assert.equal(preview.statusCode, 200);
+    assert.deepEqual(preview.json().ranges.map((range: Record<string, unknown>) => ({
+      episodeIndex: range.episodeIndex,
+      startChapterId: range.startChapterId,
+      endChapterId: range.endChapterId,
+    })), [{ episodeIndex: 1, startChapterId: chapterId, endChapterId: chapterId }]);
+    const confirmedPayload = { ...payload, episodeRanges: preview.json().ranges };
+    const created = await app.inject({
+      method: "POST", url: `/api/series/${seriesId}/pipeline-runs`, payload: confirmedPayload,
     });
     assert.equal(created.statusCode, 201);
     const runId = created.json().run.id as string;
@@ -322,7 +336,7 @@ test("全本流水线 HTTP 创建、查询和控制保持幂等", async () => {
     });
     assert.equal(otherBookJob.statusCode, 201);
     const duplicate = await app.inject({
-      method: "POST", url: `/api/series/${seriesId}/pipeline-runs`, payload,
+      method: "POST", url: `/api/series/${seriesId}/pipeline-runs`, payload: confirmedPayload,
     });
     const current = await app.inject({ method: "GET", url: `/api/series/${seriesId}/pipeline-runs/current` });
     const byId = await app.inject({ method: "GET", url: `/api/pipeline-runs/${runId}` });

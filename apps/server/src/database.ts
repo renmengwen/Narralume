@@ -698,6 +698,44 @@ const MIGRATION_17 = `
       );
 `;
 
+const MIGRATION_18 = `
+  ALTER TABLE script_versions ADD COLUMN script_contract_version INTEGER NOT NULL DEFAULT 5
+    CHECK (script_contract_version IN (5, 6));
+  ALTER TABLE series_pipeline_runs ADD COLUMN planning_contract_version INTEGER NOT NULL DEFAULT 1
+    CHECK (planning_contract_version IN (1, 2));
+  ALTER TABLE series_pipeline_runs ADD COLUMN episode_ranges_json TEXT
+    CHECK (episode_ranges_json IS NULL OR json_valid(episode_ranges_json));
+  ALTER TABLE series_pipeline_runs ADD COLUMN script_contract_version INTEGER NOT NULL DEFAULT 5
+    CHECK (script_contract_version IN (5, 6));
+  ALTER TABLE series_pipeline_runs ADD COLUMN product_prompt_version TEXT
+    CHECK (product_prompt_version IS NULL OR length(product_prompt_version) BETWEEN 1 AND 100);
+  ALTER TABLE series_pipeline_runs ADD COLUMN book_prompt_profile_revision INTEGER
+    CHECK (book_prompt_profile_revision IS NULL OR book_prompt_profile_revision >= 1);
+  ALTER TABLE series_pipeline_runs ADD COLUMN book_prompt_profile_hash TEXT
+    CHECK (book_prompt_profile_hash IS NULL OR (
+      length(book_prompt_profile_hash) = 64 AND book_prompt_profile_hash NOT GLOB '*[^0-9a-f]*'
+    ));
+
+  CREATE TABLE book_prompt_profiles (
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    shared_instructions TEXT NOT NULL,
+    chapter_analysis_instructions TEXT NOT NULL,
+    story_bible_instructions TEXT NOT NULL,
+    episode_planning_instructions TEXT NOT NULL,
+    narration_instructions TEXT NOT NULL,
+    asset_instructions TEXT NOT NULL,
+    profile_hash TEXT NOT NULL CHECK (
+      length(profile_hash) = 64 AND profile_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (book_id, revision)
+  ) STRICT;
+
+  CREATE TRIGGER book_prompt_profiles_immutable BEFORE UPDATE ON book_prompt_profiles
+  BEGIN SELECT RAISE(ABORT, 'book prompt profile revisions are immutable'); END;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -709,6 +747,7 @@ const MIGRATIONS = [
   MIGRATION_15,
   MIGRATION_16,
   MIGRATION_17,
+  MIGRATION_18,
 ];
 
 export interface NarralumeDatabase {

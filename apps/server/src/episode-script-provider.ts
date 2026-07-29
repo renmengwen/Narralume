@@ -1,5 +1,6 @@
 import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import type { GenerateEpisodeScript } from "./episode-script-generation-job.js";
+import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
 import { streamedText } from "./text-model-stream.js";
 
 export function createOpenAiEpisodeScriptGenerator(
@@ -18,21 +19,35 @@ export function createOpenAiEpisodeScriptGenerator(
 冻结 sourceIndex→sourceEventId allowlist：${JSON.stringify(allowlist)}。
 每个 allowlist sourceIndex 必须在全部 beats 中全局恰好出现一次；sourceIndexes 必须按 allowlist 严格递增；不得遗漏、重复、伪造或越界。只输出 JSON。`
       : input.stage === "faithful"
-        ? `只根据本 beat 提供的原文写原著还原叙事，不添加事实。正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得用摘要代替完整叙事。输出严格 JSON：{\"text\":\"...\"}`
-        : `${input.correctionError
-          ? `上一次完整成片旁白稿被生成合同拒绝：${input.correctionError}。previousParagraphs 是被拒绝的完整稿，请在保持事实、来源和段落顺序的前提下针对上述错误定向改写，并重新输出完整 JSON。`
-          : "在不改变事实的前提下，把原著还原稿整理成可直接配音的成片旁白稿。"}必须对叙述节奏、段落衔接和口语表达进行实际改写，不得原样返回输入 paragraphs。全部正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得因润色或重组而压缩成摘要。每段只能引用输入已有 sourceIndexes。输出严格 JSON：{\"paragraphs\":[{\"text\":\"...\",\"sourceIndexes\":[0]}]}`;
+        ? `只根据本 beat 提供的原文写原著还原叙事，不添加事实。正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得用摘要代替完整叙事。输出严格 JSON：{"text":"..."}`
+        : input.stage === "finished"
+          ? `${input.correctionError
+            ? `上一次完整 JSON 被合同拒绝：${input.correctionError}。previousParagraphs 是被拒绝的完整输出；只纠正一次并重新输出完整 JSON。`
+            : "直接生成当前 beat 可配音的成片旁白。"}
+唯一输出 schema：{"paragraphs":[{"text":"...","sourceIndexes":[0]}]}。正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；每段只能引用当前 beat allowlist 中实际使用的 sourceIndexes，且全部来源必须至少覆盖一次。只输出 JSON。`
+          : `${input.correctionError
+            ? `上一次完整成片旁白稿被生成合同拒绝：${input.correctionError}。previousParagraphs 是被拒绝的完整稿，请在保持事实、来源和段落顺序的前提下针对上述错误定向改写，并重新输出完整 JSON。`
+            : "在不改变事实的前提下，把原著还原稿整理成可直接配音的成片旁白稿。"}必须对叙述节奏、段落衔接和口语表达进行实际改写，不得原样返回输入 paragraphs。全部正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得因润色或重组而压缩成摘要。每段只能引用输入已有 sourceIndexes。输出严格 JSON：{"paragraphs":[{"text":"...","sourceIndexes":[0]}]}`;
     const { signal, onActivity } = input;
-    const safeInput = input.stage === "skeleton" || input.stage === "packaged"
-      ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError, ...rest }) => rest)(input)
-      : (({ signal: _signal, onActivity: _onActivity, ...rest }) => rest)(input);
-    const request = textModelRequest(config, `${instructions}\n${JSON.stringify(safeInput)}`, 8192, true);
+    const safeInput = input.stage === "skeleton"
+      ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError,
+        prompt: _prompt, ...rest }) => rest)(input)
+      : input.stage === "finished"
+        ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError,
+          prompt: _prompt, paragraphs: _paragraphs, ...rest }) => rest)(input)
+        : input.stage === "packaged"
+          ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError, ...rest }) => rest)(input)
+          : (({ signal: _signal, onActivity: _onActivity, ...rest }) => rest)(input);
+    const prompt = input.stage === "finished"
+      ? `${instructions}\n\n${layeredPrompt(PRODUCT_PROMPTS.finishedNarrationBeat,
+        input.prompt.instructions, JSON.stringify(safeInput))}`
+      : input.stage === "skeleton" && input.prompt
+        ? `${instructions}\n\n${layeredPrompt(PRODUCT_PROMPTS.episodeSkeleton,
+          input.prompt.instructions, JSON.stringify(safeInput))}`
+        : `${instructions}\n${JSON.stringify(safeInput)}`;
+    const request = textModelRequest(config, prompt, 8192, true);
     const response = await fetchImpl(request.endpoint, {
-      method: "POST",
-      signal,
-      redirect: "error",
-      headers: request.headers,
-      body: request.body,
+      method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
     });
     if (!response.ok) {
       await response.body?.cancel();
@@ -41,10 +56,7 @@ export function createOpenAiEpisodeScriptGenerator(
     const raw = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
       ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
       : responseText(await limitedJson(response));
-    try {
-      return JSON.parse(raw) as Awaited<ReturnType<GenerateEpisodeScript>>;
-    } catch {
-      throw new Error("长稿生成模型返回了无效 JSON");
-    }
+    try { return JSON.parse(raw) as Awaited<ReturnType<GenerateEpisodeScript>>; }
+    catch { throw new Error("长稿生成模型返回了无效 JSON"); }
   };
 }

@@ -12,6 +12,7 @@ import {
   createEpisodeScriptGenerationJobHandler,
   enqueueEpisodeScriptGenerationJob,
   EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION,
+  EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION,
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
   EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS,
   EPISODE_SCRIPT_GENERATION_TIMEOUT_MS,
@@ -215,11 +216,12 @@ async function run(
   context: Awaited<ReturnType<typeof fixture>>,
   generate: GenerateEpisodeScript,
   maxAttempts = 1,
+  contract?: Parameters<typeof enqueueEpisodeScriptGenerationJob>[5],
 ) {
   const queued = await enqueueEpisodeScriptGenerationJob(context.database, context.dataRoot, config, {
     payload: request,
     maxAttempts,
-  });
+  }, undefined, contract);
   const worker = new JobWorker(context.database, {
     [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
       context.database,
@@ -247,6 +249,71 @@ function successfulGenerator(observe?: (input: Parameters<GenerateEpisodeScript>
     })) };
   };
 }
+
+test("v6 逐 beat 持久恢复并只创建 standalone 成片旁白", async () => {
+  const context = await fixture();
+  const prompt = {
+    skeletonProductVersion: "episode-skeleton-product-v1" as const,
+    beatProductVersion: "finished-narration-beat-product-v1" as const,
+    profileRevision: 1,
+    profileHash: "a".repeat(64),
+    instructions: "保持第一人称。",
+  };
+  try {
+    let failSecond = true;
+    const firstCalls: number[][] = [];
+    const generator: GenerateEpisodeScript = async (input) => {
+      if (input.stage === "skeleton") return { beats: [
+        { intent: "进入", sourceIndexes: [0, 1], targetDurationSeconds: 80 },
+        { intent: "揭示", sourceIndexes: [2], targetDurationSeconds: 40 },
+      ] };
+      assert.equal(input.stage, "finished");
+      firstCalls.push(input.beat.sourceIndexes);
+      if (input.beat.sourceIndexes[0] === 2 && failSecond) throw new Error("模拟第二 beat 中断");
+      return { paragraphs: [{
+        text: textForBudget(input.characterBudget, input.sources.map((source) => source.sourceText).join("；")),
+        sourceIndexes: input.beat.sourceIndexes,
+      }] };
+    };
+    const first = await run(context, generator, 1, {
+      version: EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION,
+      prompt,
+    });
+    assert.equal(first.job.status, "failed");
+    assert.deepEqual(firstCalls, [[0, 1], [2]]);
+    assert.equal(Number(context.database.prepare(
+      "SELECT COUNT(*) AS total FROM job_checkpoints WHERE job_id = ? AND stage = 'episode-script-finished-beat'",
+    ).get(first.job.id)?.total), 1);
+
+    context.database.prepare(
+      `UPDATE jobs SET status='queued', attempts=0, error_code=NULL, error_message=NULL,
+       lease_owner=NULL, lease_expires_at=NULL, started_at=NULL, finished_at=NULL WHERE id=?`,
+    ).run(first.job.id);
+    failSecond = false;
+    firstCalls.length = 0;
+    const worker = new JobWorker(context.database, {
+      [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
+        context.database, context.dataRoot, config, generator,
+      ),
+    }, { workerId: "script-v6-resume", leaseMs: 10_000, heartbeatMs: 1_000, retryDelayMs: 0 });
+    await worker.runOne();
+    const succeeded = getJob(context.database, first.job.id)!;
+    assert.equal(succeeded.status, "succeeded");
+    assert.deepEqual(firstCalls, [[2]]);
+    const versions = listScriptVersions(context.database, "episode");
+    assert.equal(versions.length, 1);
+    assert.equal(versions[0]!.kind, "packaged");
+    assert.equal(versions[0]!.parentVersionId, null);
+    assert.equal((succeeded.result as { packagedVersionId: string }).packagedVersionId, versions[0]!.id);
+    assert.equal((succeeded.result as { faithfulVersionId?: string }).faithfulVersionId, undefined);
+    assert.equal(Number(context.database.prepare(
+      "SELECT COUNT(*) AS total FROM job_checkpoints WHERE job_id = ? AND stage = 'episode-script-finished-beat'",
+    ).get(first.job.id)?.total), 2);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
 
 test("流水线稿件按本书配置并发忠实稿 beat，包装稿等待全部忠实稿", async () => {
   const context = await fixture();

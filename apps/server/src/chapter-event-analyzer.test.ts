@@ -24,6 +24,17 @@ test("文本模型请求默认保持非流式，只有显式选择才发送 stre
   assert.equal(streamed.stream, true);
 });
 
+test("新章节分析在冻结输入前按固定优先级追加产品要求与本书要求", () => {
+  const prepared = prepareChapterBatchPrompt([{
+    chapterId: "chapter-1",
+    atoms: [{ id: "source", byteStart: 0, byteEnd: 3, text: "原文" }],
+  }], "保留本书第一人称叙事距离");
+  const product = prepared.prompt.indexOf("你负责把小说章节转换为可追溯的结构化事件");
+  const book = prepared.prompt.indexOf("保留本书第一人称叙事距离");
+  const input = prepared.prompt.indexOf("章节原文证据");
+  assert.ok(product >= 0 && product < book && book < input);
+});
+
 const atoms: ChapterEvidenceAtom[] = [
   { id: "evidence_a", byteStart: 100, byteEnd: 112, text: "吴邪进入墓道" },
   { id: "evidence_b", byteStart: 120, byteEnd: 132, text: "血尸突然出现" },

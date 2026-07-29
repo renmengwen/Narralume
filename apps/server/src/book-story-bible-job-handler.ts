@@ -30,6 +30,7 @@ import { createBookStoryBible, findBookStoryBibleForJob } from "./book-story-bib
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
+import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 export const BOOK_STORY_BIBLE_JOB_TYPE = "book_story_bible_build";
 export const BOOK_STORY_BIBLE_TIMEOUT_MS = 180_000;
@@ -45,6 +46,15 @@ export interface BookStoryBibleJobPayload {
   providerId: string;
   model: string;
   requestHash: string;
+  prompt?: StoryBiblePromptSnapshot;
+}
+
+export interface StoryBiblePromptSnapshot {
+  intervalProductVersion: typeof PRODUCT_PROMPT_VERSIONS.storyBibleInterval;
+  finalProductVersion: typeof PRODUCT_PROMPT_VERSIONS.storyBibleFinal;
+  profileRevision: number;
+  profileHash: string;
+  instructions: string;
 }
 
 interface StoredBible {
@@ -96,7 +106,7 @@ function parseModelContent(
     ...content.plotThreads.flatMap((thread) => thread.chapterIds),
   ];
   const unknown = referenced.find((chapterId) => !allowed.has(chapterId));
-  if (unknown) throw new BookStoryBibleContractError(`故事圣经引用了未获准章节：${unknown}`);
+  if (unknown) throw new BookStoryBibleContractError(`全书世界观引用了未获准章节：${unknown}`);
   return content;
 }
 
@@ -112,7 +122,7 @@ function canonical(value: unknown): string {
     return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
       .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`;
   }
-  throw new Error("故事圣经任务参数必须是有限 JSON");
+  throw new Error("全书世界观任务参数必须是有限 JSON");
 }
 
 export function storyBibleJobRequestHash(payload: Omit<BookStoryBibleJobPayload, "providerId" | "model" | "requestHash">) {
@@ -122,37 +132,55 @@ export function storyBibleJobRequestHash(payload: Omit<BookStoryBibleJobPayload,
     intervalIdentityHashes: payload.intervals.map((interval) => interval.identityHash),
     limits: payload.limits,
     forceRebuild: payload.forceRebuild,
+    prompt: payload.prompt ?? null,
   }));
+}
+
+function parsePromptSnapshot(value: unknown): StoryBiblePromptSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("全书世界观任务提示词身份无效");
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).sort().join(",") !== ["finalProductVersion", "instructions", "intervalProductVersion",
+    "profileHash", "profileRevision"].sort().join(",") ||
+      input.intervalProductVersion !== PRODUCT_PROMPT_VERSIONS.storyBibleInterval ||
+      input.finalProductVersion !== PRODUCT_PROMPT_VERSIONS.storyBibleFinal ||
+      !Number.isSafeInteger(input.profileRevision) || (input.profileRevision as number) < 1 ||
+      typeof input.profileHash !== "string" || !HASH.test(input.profileHash) ||
+      typeof input.instructions !== "string" || input.instructions.length > 40_000) {
+    throw new Error("全书世界观任务提示词身份无效");
+  }
+  return input as unknown as StoryBiblePromptSnapshot;
 }
 
 function parsePayload(value: unknown, config: ChapterTextModelConfig): BookStoryBibleJobPayload {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new Error("故事圣经任务冻结参数无效");
+    throw new Error("全书世界观任务冻结参数无效");
   }
   const row = value as Record<string, unknown>;
   const expected = ["bookId", "contractVersion", "forceRebuild", "intervals", "limits", "model", "providerId", "requestHash"];
-  if (Object.keys(row).sort().join(",") !== expected.sort().join(",") ||
+  const keys = Object.keys(row).filter((key) => key !== "prompt");
+  if (keys.sort().join(",") !== expected.sort().join(",") ||
       row.contractVersion !== BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION || typeof row.bookId !== "string" ||
       !row.bookId.trim() || !Array.isArray(row.intervals) || row.intervals.length === 0 ||
       typeof row.forceRebuild !== "boolean" || typeof row.providerId !== "string" || typeof row.model !== "string" ||
       typeof row.requestHash !== "string" || !HASH.test(row.requestHash) ||
       !row.limits || typeof row.limits !== "object" || Array.isArray(row.limits)) {
-    throw new Error("故事圣经任务冻结参数无效");
+    throw new Error("全书世界观任务冻结参数无效");
   }
   const payload = row as unknown as BookStoryBibleJobPayload;
+  if (row.prompt !== undefined) payload.prompt = parsePromptSnapshot(row.prompt);
   const limitKeys = ["maxChaptersPerInterval", "maxEventsPerInterval", "maxFinalInputBytes",
     "maxFinalIntervals", "maxInputBytesPerInterval"];
   if (Object.keys(payload.limits).sort().join(",") !== limitKeys.sort().join(",") ||
       Object.values(payload.limits).some((limit) => !Number.isSafeInteger(limit) || limit < 1) ||
       payload.intervals.length > payload.limits.maxFinalIntervals || canonical(payload).length > 10_000_000) {
-    throw new Error("故事圣经任务冻结参数无效");
+    throw new Error("全书世界观任务冻结参数无效");
   }
   if (payload.bookId !== payload.bookId.trim() || payload.providerId !== config.providerId.trim() ||
       payload.model !== config.model.trim() || payload.intervals.some((request) =>
         request?.kind !== "interval" || request.identity?.bookId !== payload.bookId ||
         request.provenance?.providerId !== payload.providerId || request.provenance?.model !== payload.model) ||
       storyBibleJobRequestHash(payload) !== payload.requestHash) {
-    throw new Error("故事圣经任务冻结身份不一致");
+    throw new Error("全书世界观任务冻结身份不一致");
   }
   return payload;
 }
@@ -168,11 +196,11 @@ function sourceEvents(database: DatabaseSync, request: StoryBibleIntervalRequest
   return request.sourceEventIds.map((id) => {
     const event = byId.get(id);
     if (!event || !request.chapterIds.includes(event.chapter_id)) {
-      throw new Error("故事圣经任务来源事件不存在或已越出冻结章节范围");
+      throw new Error("全书世界观任务来源事件不存在或已越出冻结章节范围");
     }
     let payload: unknown;
     try { payload = JSON.parse(event.payload_json); }
-    catch { throw new Error("故事圣经任务来源事件不是有效 JSON"); }
+    catch { throw new Error("全书世界观任务来源事件不是有效 JSON"); }
     return { id, chapterId: event.chapter_id, eventType: event.event_type, payload };
   });
 }
@@ -183,24 +211,31 @@ async function callModel(
   input: unknown,
   signal: AbortSignal,
   onActivity: () => void,
+  promptSnapshot?: StoryBiblePromptSnapshot,
+  promptStage: "interval" | "final" = "interval",
   correctionError?: string,
 ) {
-  const request = textModelRequest(config, correctionError
-    ? `你是书籍故事圣经汇总器。上一次输出被严格合同拒绝，请只纠正一次并重新输出完整 JSON。\n错误：${correctionError}\n精确输出 schema：\n${OUTPUT_SCHEMA}\ninterval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n原任务：${canonical(input)}`
-    : `你是书籍故事圣经汇总器。interval 与 final 使用完全相同的输出 schema，只输出 JSON。interval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n精确输出 schema：\n${OUTPUT_SCHEMA}\n原任务：${canonical(input)}`, 8192, true);
+  const frozenInput = correctionError
+    ? `你是书籍全书世界观汇总器。上一次输出被严格合同拒绝，请只纠正一次并重新输出完整 JSON。\n错误：${correctionError}\n精确输出 schema：\n${OUTPUT_SCHEMA}\ninterval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n原任务：${canonical(input)}`
+    : `你是书籍全书世界观汇总器。interval 与 final 使用完全相同的输出 schema，只输出 JSON。interval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n精确输出 schema：\n${OUTPUT_SCHEMA}\n原任务：${canonical(input)}`;
+  const prompt = promptSnapshot
+    ? layeredPrompt(promptStage === "interval" ? PRODUCT_PROMPTS.storyBibleInterval : PRODUCT_PROMPTS.storyBibleFinal,
+      promptSnapshot.instructions, frozenInput)
+    : frozenInput;
+  const request = textModelRequest(config, prompt, 8192, true);
   const response = await fetchImpl(request.endpoint, {
     method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`故事圣经模型请求失败（HTTP ${response.status}）`);
+    throw new Error(`全书世界观模型请求失败（HTTP ${response.status}）`);
   }
   const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
     ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
     : responseText(await limitedJson(response));
   try {
     return JSON.parse(text) as unknown;
-  } catch { throw new Error("故事圣经模型返回了无效 JSON"); }
+  } catch { throw new Error("全书世界观模型返回了无效 JSON"); }
 }
 
 async function callModelAndParse<T>(
@@ -212,15 +247,19 @@ async function callModelAndParse<T>(
   allowedChapterIds: readonly string[],
   parse: (value: unknown) => T,
   groupSignal?: AbortSignal,
+  promptSnapshot?: StoryBiblePromptSnapshot,
+  promptStage: "interval" | "final" = "interval",
 ) {
   const raw = await withCancellation(context,
-    (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity), groupSignal);
+    (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity,
+      promptSnapshot, promptStage), groupSignal);
   try {
     parseModelContent(raw, allowedSourceEventIds, allowedChapterIds);
   } catch (error) {
     if (!(error instanceof BookStoryBibleContractError)) throw error;
     const corrected = await withCancellation(context,
-      (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, error.message), groupSignal);
+      (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity,
+        promptSnapshot, promptStage, error.message), groupSignal);
     parseModelContent(corrected, allowedSourceEventIds, allowedChapterIds);
     return parse(corrected);
   }
@@ -254,7 +293,7 @@ async function withCancellation<T>(
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (groupSignal?.aborted) throw groupSignal.reason ?? error;
-    if (error instanceof Error && error.name === "TimeoutError") throw new Error("故事圣经模型请求超时");
+    if (error instanceof Error && error.name === "TimeoutError") throw new Error("全书世界观模型请求超时");
     throw error;
   } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
 }
@@ -268,7 +307,7 @@ export function createBookStoryBibleJobHandler(
   const createBible = options.createBible ?? createBookStoryBible;
   const findBible = options.findBible ?? findBookStoryBibleForJob;
   return async (context) => {
-    if (context.job.type !== BOOK_STORY_BIBLE_JOB_TYPE) throw new Error("故事圣经任务类型无效");
+    if (context.job.type !== BOOK_STORY_BIBLE_JOB_TYPE) throw new Error("全书世界观任务类型无效");
     const task = parsePayload(context.job.payload, config);
     const verified = new Array<ReturnType<typeof parseStoryBibleIntervalResponse>>(task.intervals.length);
     const intervalBibles = new Array<StoredBible>(task.intervals.length);
@@ -287,9 +326,9 @@ export function createBookStoryBibleJobHandler(
         sourceStartChapterId: request.chapterIds[0]!, sourceEndChapterId: request.chapterIds.at(-1)!,
         sourceEventIds: request.sourceEventIds,
       });
-      if (!bible) throw new Error(`故事圣经区间检查点缺少持久结果：${request.identityHash}`);
+      if (!bible) throw new Error(`全书世界观区间检查点缺少持久结果：${request.identityHash}`);
       const parsed = parseStoryBibleIntervalResponse(request, bible.content);
-      if (parsed.contentHash !== bible.contentHash) throw new Error("故事圣经区间检查点内容哈希不一致");
+      if (parsed.contentHash !== bible.contentHash) throw new Error("全书世界观区间检查点内容哈希不一致");
       verified[index] = parsed;
       intervalBibles[index] = bible;
       completed += 1;
@@ -303,7 +342,8 @@ export function createBookStoryBibleJobHandler(
             kind: "interval", chapterIds: request.chapterIds, sourceEvents: sourceEvents(database, request),
           };
           const parsed = await callModelAndParse(context, config, fetchImpl, input, request.sourceEventIds,
-            request.chapterIds, (raw) => parseStoryBibleIntervalResponse(request, raw), groupController.signal);
+            request.chapterIds, (raw) => parseStoryBibleIntervalResponse(request, raw), groupController.signal,
+            task.prompt, "interval");
           context.throwIfCancellationRequested();
           const bible = createBible(database, {
             bookId: task.bookId, scope: "interval", sourceStartChapterId: request.chapterIds[0]!,
@@ -349,7 +389,7 @@ export function createBookStoryBibleJobHandler(
               sourceStartChapterId: reductionChapterIds[0]!, sourceEndChapterId: reductionChapterIds.at(-1)!,
               sourceEventIds: reductionSourceEventIds, parentBibleIds,
             });
-            if (!bible) throw new Error(`故事圣经归并检查点缺少持久结果：${reductionKey}`);
+            if (!bible) throw new Error(`全书世界观归并检查点缺少持久结果：${reductionKey}`);
             const content = parseModelContent(bible.content, reductionSourceEventIds, reductionChapterIds);
             reduced[index] = { bible, content, chapterIds: reductionChapterIds, sourceEventIds: reductionSourceEventIds };
             completed += 1;
@@ -360,7 +400,8 @@ export function createBookStoryBibleJobHandler(
               kind: "final", chapterIds: reductionChapterIds,
               intervals: group.map((node) => ({ content: node.content })),
             }, reductionSourceEventIds, reductionChapterIds,
-            (raw) => parseBookStoryBibleContent(raw, new Set(reductionSourceEventIds)), groupController.signal);
+            (raw) => parseBookStoryBibleContent(raw, new Set(reductionSourceEventIds)), groupController.signal,
+            task.prompt, "final");
             context.throwIfCancellationRequested();
             const bible = createBible(database, {
               bookId: task.bookId, scope: "interval", sourceStartChapterId: reductionChapterIds[0]!,
@@ -387,9 +428,9 @@ export function createBookStoryBibleJobHandler(
         sourceStartChapterId: chapterIds[0]!, sourceEndChapterId: chapterIds.at(-1)!,
         sourceEventIds: finalRequest.sourceEventIds, parentBibleIds: finalParentBibleIds,
       });
-      if (!bible) throw new Error(`故事圣经最终检查点缺少持久结果：${finalRequest.identityHash}`);
+      if (!bible) throw new Error(`全书世界观最终检查点缺少持久结果：${finalRequest.identityHash}`);
       const parsed = parseStoryBibleFinalResponse(finalRequest, bible.content);
-      if (parsed.contentHash !== bible.contentHash) throw new Error("故事圣经最终检查点内容哈希不一致");
+      if (parsed.contentHash !== bible.contentHash) throw new Error("全书世界观最终检查点内容哈希不一致");
       context.reportProgress(1);
       return { storyBibleId: bible.id, contentHash: bible.contentHash,
         intervalBibleIds: intervalBibles.map((item) => item.id) };
@@ -399,7 +440,7 @@ export function createBookStoryBibleJobHandler(
     };
     const final = await callModelAndParse(context, config, fetchImpl, input, finalRequest.sourceEventIds,
       chapterIds,
-      (raw) => parseStoryBibleFinalResponse(finalRequest, raw));
+      (raw) => parseStoryBibleFinalResponse(finalRequest, raw), undefined, task.prompt, "final");
     context.throwIfCancellationRequested();
     const bible = createBible(database, {
       bookId: task.bookId, scope: "final", sourceStartChapterId: task.intervals[0]!.chapterIds[0]!,

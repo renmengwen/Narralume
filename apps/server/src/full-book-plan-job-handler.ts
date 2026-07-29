@@ -21,8 +21,10 @@ import { FullBookPlanContractError } from "./full-book-plan-contract.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
+import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 export const FULL_BOOK_PLAN_JOB_TYPE = "full_book_plan_build";
+export const EPISODE_PLAN_JOB_TYPE = "episode_plan_build";
 export const FULL_BOOK_PLAN_TIMEOUT_MS = 180_000;
 export const FULL_BOOK_PLAN_IDLE_TIMEOUT_MS = 180_000;
 export const FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS = 900_000;
@@ -39,9 +41,20 @@ export interface FullBookPlanJobPayload {
   providerId: string;
   model: string;
   requestHash: string;
+  prompt?: {
+    productVersion: typeof PRODUCT_PROMPT_VERSIONS.episodePlanning;
+    profileRevision: number;
+    profileHash: string;
+    instructions: string;
+  };
 }
 
-interface HandlerOptions { fetchImpl?: typeof fetch; database?: DatabaseSync; retryDelayMs?: number }
+interface HandlerOptions {
+  fetchImpl?: typeof fetch;
+  database?: DatabaseSync;
+  retryDelayMs?: number;
+  jobType?: typeof FULL_BOOK_PLAN_JOB_TYPE | typeof EPISODE_PLAN_JOB_TYPE;
+}
 
 class TransientFullBookPlanModelError extends Error {}
 
@@ -74,6 +87,7 @@ export function fullBookPlanJobRequestHash(
     episodeCount: payload.episodeCount,
     intervalIdentityHashes: payload.intervals.map(({ identityHash }) => identityHash),
     limits: payload.limits,
+    prompt: payload.prompt ?? null,
   }));
 }
 
@@ -115,9 +129,11 @@ function validateIntervals(payload: FullBookPlanJobPayload) {
 }
 
 function parsePayload(value: unknown, config: ChapterTextModelConfig): FullBookPlanJobPayload {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
+  const hasPrompt = keys.includes("prompt");
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype ||
       !strictKeys(value, ["bookId", "contractVersion", "episodeCount", "intervals", "limits", "model",
-        "providerId", "requestHash", "storyBible"])) {
+        "providerId", "requestHash", "storyBible", ...(hasPrompt ? ["prompt"] : [])])) {
     throw new Error("全书规划任务冻结参数无效");
   }
   const payload = value as FullBookPlanJobPayload;
@@ -138,6 +154,13 @@ function parsePayload(value: unknown, config: ChapterTextModelConfig): FullBookP
       fullBookPlanJobRequestHash(payload) !== payload.requestHash) {
     throw new Error("全书规划任务冻结参数无效");
   }
+  if (hasPrompt && (!payload.prompt || !strictKeys(payload.prompt, ["instructions", "productVersion", "profileHash", "profileRevision"]) ||
+      payload.prompt.productVersion !== PRODUCT_PROMPT_VERSIONS.episodePlanning ||
+      !Number.isSafeInteger(payload.prompt.profileRevision) || payload.prompt.profileRevision < 1 ||
+      !HASH.test(payload.prompt.profileHash) || typeof payload.prompt.instructions !== "string" ||
+      payload.prompt.instructions.length > 40_000)) {
+    throw new Error("逐集局部规划提示词快照无效");
+  }
   validateIntervals(payload);
   return payload;
 }
@@ -146,8 +169,8 @@ const OUTPUT_SCHEMA = "{episodes:[{index:number,title:string,storyArc:string," +
   "sourceEventIds:string[],recap:string|null,nextHook:string|null}]}";
 
 function modelPrompt(input: unknown, correction?: string) {
-  const request = input as { kind: "interval"; request: FullBookPlanIntervalRequest };
-  return [
+  const request = input as { kind: "interval"; request: FullBookPlanIntervalRequest; prompt?: FullBookPlanJobPayload["prompt"] };
+  const contract = [
     "你是全书分集规划器。只输出一个严格 JSON 对象，不要输出 Markdown、解释或代码围栏。",
     `唯一允许的输出 schema（不得增加包装字段或任何其他字段）：${OUTPUT_SCHEMA}`,
     "index 必须是从 1 开始的连续整数；title 和 storyArc 必须是非空字符串；recap 和 nextHook 必须是字符串或 null。",
@@ -156,8 +179,11 @@ function modelPrompt(input: unknown, correction?: string) {
     "各集及集内事件必须按原文和章节顺序连续排列，并覆盖当前 request 的全部章节范围。",
     "不得输出或推测字节范围，也不得回显 kind、request、identityHash、章节范围或集数包装字段。",
     ...(correction ? [`上一次完整 JSON 输出未通过合同校验：${correction}`, "请针对同一原任务仅纠正输出合同；不要改变任务输入。"] : []),
-    canonical(input),
   ].join("\n");
+  const frozen = canonical({ kind: request.kind, request: request.request });
+  return request.prompt
+    ? [contract, layeredPrompt(PRODUCT_PROMPTS.episodePlanning, request.prompt.instructions, frozen)].join("\n\n")
+    : [contract, frozen].join("\n");
 }
 
 async function callModel(
@@ -284,8 +310,9 @@ export function createFullBookPlanJobHandler(
   options: HandlerOptions = {},
 ): JobHandler {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const jobType = options.jobType ?? FULL_BOOK_PLAN_JOB_TYPE;
   return async (context) => {
-    if (context.job.type !== FULL_BOOK_PLAN_JOB_TYPE) throw new Error("全书规划任务类型无效");
+    if (context.job.type !== jobType) throw new Error("规划任务类型无效");
     const task = parsePayload(context.job.payload, config);
     const verified = new Array<VerifiedFullBookPlanInterval>(task.intervals.length);
     const groupController = new AbortController();
@@ -309,7 +336,7 @@ export function createFullBookPlanJobHandler(
       async (index) => {
         const request = task.intervals[index]!;
         try {
-          const input = { kind: "interval" as const, request };
+          const input = { kind: "interval" as const, request, ...(task.prompt ? { prompt: task.prompt } : {}) };
           const parse = fullBookPlanIntervalResponseParser(request);
           verified[index] = await callAndParse(context,
             (signal, correction, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, correction),

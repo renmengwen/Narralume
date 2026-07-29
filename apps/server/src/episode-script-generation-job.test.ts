@@ -383,6 +383,36 @@ test("原著还原稿与成片旁白稿必须落在动态字符预算区间内�
   });
 });
 
+test("成片旁白稿长度越界时只定向重写一次且不重复生成原著还原稿", async () => {
+  const context = await fixture();
+  const prompts: string[] = [];
+  let calls = 0;
+  const outputs = [
+    { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] },
+    { text: textForBudget(432, "原著还原稿") },
+    { paragraphs: [{ text: "长".repeat(477), sourceIndexes: [0, 1, 2] }] },
+    { paragraphs: [{ text: textForBudget(432, "成片旁白稿"), sourceIndexes: [0, 1, 2] }] },
+  ];
+  try {
+    const generate = createOpenAiEpisodeScriptGenerator(config, (async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { input: string };
+      prompts.push(body.input);
+      return Response.json({ output_text: JSON.stringify(outputs[calls++]!) });
+    }) as typeof fetch);
+    const result = await run(context, generate);
+    assert.equal(result.job.status, "succeeded");
+    assert.equal(calls, 4);
+    assert.match(prompts[3]!, /上一次完整成片旁白稿被长度合同拒绝/u);
+    assert.match(prompts[3]!, /实际 477 字，最多允许 476 字/u);
+    assert.match(prompts[3]!, /"previousParagraphs":\[\{"text":"长长/u);
+    assert.equal(prompts.filter((prompt) => prompt.includes('"stage":"faithful"')).length, 1);
+    assert.equal(listScriptVersions(context.database, "episode").length, 2);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("骨架完整 JSON 漏来源后仅纠正一次并原子写入双稿", async () => {
   const context = await fixture();
   const skeletonPrompts: string[] = [];

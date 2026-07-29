@@ -19,9 +19,11 @@ export function createOpenAiEpisodeScriptGenerator(
 每个 allowlist sourceIndex 必须在全部 beats 中全局恰好出现一次；sourceIndexes 必须按 allowlist 严格递增；不得遗漏、重复、伪造或越界。只输出 JSON。`
       : input.stage === "faithful"
         ? `只根据本 beat 提供的原文写原著还原叙事，不添加事实。正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得用摘要代替完整叙事。输出严格 JSON：{\"text\":\"...\"}`
-        : `在不改变事实的前提下，把原著还原稿整理成可直接配音的成片旁白稿。全部正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得因润色或重组而压缩成摘要。每段只能引用输入已有 sourceIndexes。输出严格 JSON：{\"paragraphs\":[{\"text\":\"...\",\"sourceIndexes\":[0]}]}`;
+        : `${input.correctionError
+          ? `上一次完整成片旁白稿被长度合同拒绝：${input.correctionError}。previousParagraphs 是被拒绝的完整稿，请在保持事实、来源和段落顺序的前提下定向压缩或扩写，只重写一次并重新输出完整 JSON。`
+          : "在不改变事实的前提下，把原著还原稿整理成可直接配音的成片旁白稿。"}全部正文必须在 ${input.minimumCharacterCount} 至 ${input.maximumCharacterCount} 字之间，并尽量接近 ${input.characterBudget} 字；不得因润色或重组而压缩成摘要。每段只能引用输入已有 sourceIndexes。输出严格 JSON：{\"paragraphs\":[{\"text\":\"...\",\"sourceIndexes\":[0]}]}`;
     const { signal, onActivity } = input;
-    const safeInput = input.stage === "skeleton"
+    const safeInput = input.stage === "skeleton" || input.stage === "packaged"
       ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError, ...rest }) => rest)(input)
       : (({ signal: _signal, onActivity: _onActivity, ...rest }) => rest)(input);
     const request = textModelRequest(config, `${instructions}\n${JSON.stringify(safeInput)}`, 8192, true);

@@ -105,6 +105,8 @@ interface PackagedInput {
   minimumCharacterCount: number;
   maximumCharacterCount: number;
   paragraphs: Array<{ text: string; sourceIndexes: number[] }>;
+  correctionError?: string;
+  previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>;
   onActivity?: () => void;
   signal: AbortSignal;
 }
@@ -443,6 +445,8 @@ function scriptCharacterLimits(characterBudget: number) {
   return { minimumCharacterCount, maximumCharacterCount };
 }
 
+class ScriptLengthError extends Error {}
+
 function validateScriptLength(
   label: string,
   paragraphs: ReadonlyArray<{ text: string }>,
@@ -450,10 +454,10 @@ function validateScriptLength(
 ) {
   const actualCharacterCount = paragraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0);
   if (actualCharacterCount < limits.minimumCharacterCount) {
-    throw new Error(`${label}字数不足：实际 ${actualCharacterCount} 字，至少需要 ${limits.minimumCharacterCount} 字`);
+    throw new ScriptLengthError(`${label}字数不足：实际 ${actualCharacterCount} 字，至少需要 ${limits.minimumCharacterCount} 字`);
   }
   if (actualCharacterCount > limits.maximumCharacterCount) {
-    throw new Error(`${label}字数过多：实际 ${actualCharacterCount} 字，最多允许 ${limits.maximumCharacterCount} 字`);
+    throw new ScriptLengthError(`${label}字数过多：实际 ${actualCharacterCount} 字，最多允许 ${limits.maximumCharacterCount} 字`);
   }
   return actualCharacterCount;
 }
@@ -630,17 +634,35 @@ export function createEpisodeScriptGenerationJobHandler(
     const faithfulCharacterCount = validateScriptLength("原著还原稿", faithfulParagraphs, characterLimits);
 
     const faithfulSources = new Set(faithfulParagraphs.flatMap((paragraph) => paragraph.sourceIndexes));
-    const packagedResult = await callWithCancellation(context, (signal, onActivity) => generate({
+    const packagedInput: Omit<PackagedInput, "signal" | "onActivity" | "correctionError" | "previousParagraphs"> = {
       stage: "packaged",
       targetDurationSeconds: task.targetDurationSeconds,
       characterBudget,
       ...characterLimits,
       paragraphs: faithfulParagraphs,
+    };
+    const generatePackaged = (
+      correctionError?: string,
+      previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>,
+    ) => callWithCancellation(context, (signal, onActivity) => generate({
+      ...packagedInput,
+      ...(correctionError ? { correctionError } : {}),
+      ...(previousParagraphs ? { previousParagraphs } : {}),
       signal,
       onActivity,
     }));
-    const packagedParagraphs = validatePackagedResult(packagedResult, faithfulSources);
-    const actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
+    let packagedParagraphs = validatePackagedResult(await generatePackaged(), faithfulSources);
+    let actualCharacterCount: number;
+    try {
+      actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
+    } catch (error) {
+      if (!(error instanceof ScriptLengthError)) throw error;
+      packagedParagraphs = validatePackagedResult(
+        await generatePackaged(error.message, packagedParagraphs),
+        faithfulSources,
+      );
+      actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
+    }
     context.reportProgress(0.9);
 
     await requireCurrentEpisode(database, dataRoot, task);

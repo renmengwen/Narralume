@@ -274,7 +274,7 @@ test("历史 v13 封存模式拒绝批准或持久分片身份漂移，v14/v17 �
       });
       await assert.rejects(
         restoreProjectPackage(packagePath, join(current.root, `restored-${kind}`)),
-        kind === "approval" ? /历史最终清单不是封存时的最新批准包装稿/ : /最终清单分片与当前数据库不一致/,
+        kind === "approval" ? /历史最终清单不是封存时最新批准的成片旁白稿/ : /最终清单分片与当前数据库不一致/,
       );
     } finally { await cleanup(current); }
   });
@@ -318,12 +318,12 @@ test("历史 v13 sealed restore 拒绝稿件、批准和分片时长的同步伪
     ["deterministic-script-id", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
       database.prepare("UPDATE script_versions SET version = 7 WHERE id = ?").run(current.packagedScriptId), /稿件/],
     ["packaged-parent", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
-      database.prepare("UPDATE script_versions SET parent_version_id = NULL WHERE id = ?").run(current.packagedScriptId), /包装稿/],
+      database.prepare("UPDATE script_versions SET parent_version_id = NULL WHERE id = ?").run(current.packagedScriptId), /成片旁白稿/],
     ["frozen-sources", (database: DatabaseSync, current: Awaited<ReturnType<typeof fixture>>) =>
       database.prepare("UPDATE script_version_sources SET source_hash = ? WHERE script_version_id = ?")
         .run("0".repeat(64), current.packagedScriptId), /冻结来源/],
     ["approval-id", (database: DatabaseSync) =>
-      database.prepare("UPDATE script_approval_events SET id = 'approval_forged'").run(), /最新批准包装稿/],
+      database.prepare("UPDATE script_approval_events SET id = 'approval_forged'").run(), /最新批准的成片旁白稿/],
     ["chunk-duration", (database: DatabaseSync) =>
       database.prepare("UPDATE render_chunks SET duration_ms = duration_ms - 1").run(), /分片与当前数据库不一致/],
   ] as const;

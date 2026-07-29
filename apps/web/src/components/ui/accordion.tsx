@@ -11,13 +11,14 @@ export function AccordionTrigger({ className, children, ...props }: React.Compon
     <AccordionPrimitive.Header className="flex">
       <AccordionPrimitive.Trigger
         className={cn(
-          "flex min-h-11 flex-1 items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-[var(--bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] data-[state=open]:bg-[var(--bg-subtle)]",
+          "group flex min-h-11 flex-1 items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-[var(--bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus)] data-[state=open]:bg-[var(--bg-subtle)]",
           className,
         )}
         {...props}
       >
         {children}
-        <span className="font-mono text-[11px] text-[var(--fg-tertiary)]" aria-hidden="true">展开</span>
+        <span className="font-mono text-[11px] text-[var(--fg-tertiary)] group-data-[state=open]:hidden" aria-hidden="true">展开</span>
+        <span className="hidden font-mono text-[11px] text-[var(--fg-tertiary)] group-data-[state=open]:inline" aria-hidden="true">收起</span>
       </AccordionPrimitive.Trigger>
     </AccordionPrimitive.Header>
   );

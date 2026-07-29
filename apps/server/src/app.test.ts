@@ -628,7 +628,7 @@ test("故事弧分集 API 保存服务端证据快照并可重启查询", async 
       payload: { action: "approve", expectedRevision: 0, scriptVersionId: packaged.json().script.id },
     });
     assert.equal(approved.statusCode, 200);
-    assert.equal(approved.json().message, "包装稿已人工批准");
+    assert.equal(approved.json().message, "成片旁白稿已人工批准");
     assert.equal(approved.json().approval.status, "approved");
     assert.equal(approved.json().approval.revision, 1);
     const staleApproval = await app.inject({

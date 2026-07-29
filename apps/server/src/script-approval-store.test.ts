@@ -72,14 +72,14 @@ test("批准与撤回追加不可变 revision，并控制语音和图片生产",
         action: "approve", expectedRevision: 0, scriptVersionId: "faithful_1",
       }),
       409,
-      /包装稿/,
+      /成片旁白稿/,
     );
     expectApprovalError(
       () => changeScriptApproval(connection.database, "episode_1", {
         action: "approve", expectedRevision: 0, scriptVersionId: "packaged_2",
       }),
       409,
-      /包装稿/,
+      /成片旁白稿/,
     );
 
     const approved = changeScriptApproval(connection.database, "episode_1", {

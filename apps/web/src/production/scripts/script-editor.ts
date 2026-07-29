@@ -46,7 +46,7 @@ export function allowedSourceIndexes(kind: ScriptVersionKind, episodeSourceIndex
 }
 
 export function scriptPostPayload(kind: ScriptVersionKind, paragraphs: ScriptParagraphDraft[], parent?: ScriptVersion) {
-  if (kind === "packaged" && (!parent || parent.kind !== "faithful")) throw new Error("包装稿必须选择同一分集的忠实稿父版本");
+  if (kind === "packaged" && (!parent || parent.kind !== "faithful")) throw new Error("成片旁白稿必须选择同一分集的原著还原稿版本");
   const allowed = new Set(allowedSourceIndexes(kind, [], parent));
   const normalized = paragraphs.map((paragraph) => ({
     text: paragraph.text.trim(),
@@ -55,7 +55,7 @@ export function scriptPostPayload(kind: ScriptVersionKind, paragraphs: ScriptPar
   if (!normalized.length || normalized.some((paragraph) => !paragraph.text)) throw new Error("每个稿件分段都必须填写正文");
   if (normalized.some((paragraph) => !paragraph.sourceIndexes.length)) throw new Error("每个稿件分段至少选择一个来源");
   if (kind === "packaged" && normalized.some((paragraph) => paragraph.sourceIndexes.some((index) => !allowed.has(index)))) {
-    throw new Error("包装稿只能引用忠实父稿冻结的来源");
+    throw new Error("成片旁白稿只能引用对应原著还原稿冻结的来源");
   }
   return {
     kind,
@@ -65,7 +65,7 @@ export function scriptPostPayload(kind: ScriptVersionKind, paragraphs: ScriptPar
 }
 
 export function approvalPutPayload(action: "approve" | "withdraw", approval: ScriptApproval, scriptVersionId?: string) {
-  if (action === "approve" && !scriptVersionId) throw new Error("请选择要批准的包装稿版本");
+  if (action === "approve" && !scriptVersionId) throw new Error("请选择要批准的成片旁白稿版本");
   return {
     action,
     expectedRevision: approval.revision,

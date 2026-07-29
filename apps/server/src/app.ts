@@ -968,7 +968,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       } as ScriptApprovalInput);
       return {
         ok: true,
-        message: approval.status === "approved" ? "包装稿已人工批准" : "稿件批准已撤回",
+        message: approval.status === "approved" ? "成片旁白稿已人工批准" : "稿件批准已撤回",
         approval,
       };
     } catch (error) {

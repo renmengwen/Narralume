@@ -11,6 +11,7 @@ import { openDatabase } from "./database.js";
 import {
   createEpisodeScriptGenerationJobHandler,
   enqueueEpisodeScriptGenerationJob,
+  EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION,
   EPISODE_SCRIPT_GENERATION_JOB_TYPE,
   EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS,
   EPISODE_SCRIPT_GENERATION_TIMEOUT_MS,
@@ -85,6 +86,12 @@ const request = {
   calibration: { identity: "provisional" as const },
 };
 
+function textForBudget(characterBudget: number, prefix = "稿") {
+  return [...prefix].length >= characterBudget
+    ? [...prefix].slice(0, characterBudget).join("")
+    : `${prefix}${"文".repeat(characterBudget - [...prefix].length)}`;
+}
+
 test("Responses 三阶段请求不发送不兼容的 json_object format", async () => {
   const outputs = [
     { beats: [{ intent: "进入墓道", sourceIndexes: [0] }] },
@@ -92,8 +99,10 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
     { paragraphs: [{ text: "包装稿", sourceIndexes: [0] }] },
   ];
   let calls = 0;
+  const prompts: string[] = [];
   const generate = createOpenAiEpisodeScriptGenerator(config, (async (_url, init) => {
     const body = JSON.parse(String(init?.body)) as { input: string; text?: unknown };
+    prompts.push(body.input);
     assert.match(body.input, /JSON/u);
     assert.equal(body.text, undefined);
     assert.equal((body as { stream?: unknown }).stream, true);
@@ -107,10 +116,16 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
     characterBudget: 400, calibration: { identity: "provisional" }, sources: [], signal,
   });
   await generate({ stage: "faithful", beat: { intent: "进入墓道", sourceIndexes: [0] }, characterBudget: 200,
+    minimumCharacterCount: 180, maximumCharacterCount: 220,
     sources: [{ sourceIndex: 0, sourceText: "原文" }], signal });
   await generate({ stage: "packaged", targetDurationSeconds: 120, characterBudget: 400,
+    minimumCharacterCount: 360, maximumCharacterCount: 440,
     paragraphs: [{ text: "忠实稿", sourceIndexes: [0] }], signal });
   assert.equal(calls, 3);
+  assert.match(prompts[1]!, /180 至 220 字/u);
+  assert.match(prompts[1]!, /不得用摘要代替完整叙事/u);
+  assert.match(prompts[2]!, /360 至 440 字/u);
+  assert.match(prompts[2]!, /不得因润色或重组而压缩成摘要/u);
 });
 
 test("骨架 prompt 注入完整来源 allowlist 与唯一输出 schema", async () => {
@@ -222,11 +237,9 @@ function successfulGenerator(observe?: (input: Parameters<GenerateEpisodeScript>
       { intent: "进入", sourceIndexes: [0, 1], targetDurationSeconds: 80 },
       { intent: "揭示", sourceIndexes: [2], targetDurationSeconds: 40 },
     ] };
-    if (input.stage === "faithful") return { text: input.sources.map((source) => source.sourceText).join("；") };
-    return { paragraphs: input.paragraphs.map((paragraph) => ({
-      text: `包装：${paragraph.text}`,
-      sourceIndexes: paragraph.sourceIndexes,
-    })) };
+    if (input.stage === "faithful") return { text: textForBudget(input.characterBudget,
+      input.sources.map((source) => source.sourceText).join("；")) };
+    return { paragraphs: input.paragraphs };
   };
 }
 
@@ -274,7 +287,7 @@ test("流水线稿件按本书配置并发忠实稿 beat，包装稿等待全部
       await gate;
       inFlight -= 1;
       completed += 1;
-      return { text: input.sources[0]!.sourceText };
+      return { text: textForBudget(input.characterBudget, input.sources[0]!.sourceText) };
     };
     const worker = new JobWorker(context.database, {
       [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(
@@ -322,14 +335,17 @@ test("长稿 Job 骨架不接收原文，faithful 按 beat 隔离原文并写入
     });
     assert.throws(() => requireApprovedScriptForProduction(context.database, "episode", "tts"), /未人工批准/);
     const payload = result.job.payload as Record<string, unknown>;
+    assert.equal(payload.contractVersion, EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION);
     assert.equal(payload.targetDurationSeconds, 120);
     assert.equal(payload.voice, request.voice);
     assert.deepEqual(payload.calibration, request.calibration);
     const jobResult = result.job.result as {
-      characterBudget: number;
+      characterBudget: number; minimumCharacterCount: number; maximumCharacterCount: number;
       scriptHandoff: { summary: string; continuityNotes: string[] };
     };
     assert.equal(jobResult.characterBudget, 432);
+    assert.equal(jobResult.minimumCharacterCount, 388);
+    assert.equal(jobResult.maximumCharacterCount, 476);
     assert.deepEqual(jobResult.scriptHandoff, {
       summary: "进入墓道",
       continuityNotes: ["发现机关", "进入", "揭示"],
@@ -340,6 +356,33 @@ test("长稿 Job 骨架不接收原文，faithful 按 beat 隔离原文并写入
   }
 });
 
+test("原著还原稿与成片旁白稿必须落在动态字符预算区间内且失败不落库", async (t) => {
+  for (const [name, generate, error] of [
+    ["还原稿过短", async (input: Parameters<GenerateEpisodeScript>[0]) => input.stage === "skeleton"
+      ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+      : input.stage === "faithful" ? { text: "过短" } : { paragraphs: input.paragraphs }, /原著还原稿字数不足/],
+    ["旁白稿过短", async (input: Parameters<GenerateEpisodeScript>[0]) => input.stage === "skeleton"
+      ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+      : input.stage === "faithful" ? { text: textForBudget(input.characterBudget) }
+        : { paragraphs: [{ text: "过短", sourceIndexes: [0, 1, 2] }] }, /成片旁白稿字数不足/],
+    ["旁白稿过长", async (input: Parameters<GenerateEpisodeScript>[0]) => input.stage === "skeleton"
+      ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+      : input.stage === "faithful" ? { text: textForBudget(input.characterBudget) }
+        : { paragraphs: [{ text: "长".repeat(input.maximumCharacterCount + 1), sourceIndexes: [0, 1, 2] }] }, /成片旁白稿字数过多/],
+  ] as const) await t.test(name, async () => {
+    const context = await fixture();
+    try {
+      const result = await run(context, generate as GenerateEpisodeScript);
+      assert.equal(result.job.status, "failed");
+      assert.match(result.job.errorMessage ?? "", error);
+      assert.equal(listScriptVersions(context.database, "episode").length, 0);
+    } finally {
+      context.connection.close();
+      await rm(context.dataRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 test("骨架完整 JSON 漏来源后仅纠正一次并原子写入双稿", async () => {
   const context = await fixture();
   const skeletonPrompts: string[] = [];
@@ -347,8 +390,8 @@ test("骨架完整 JSON 漏来源后仅纠正一次并原子写入双稿", async
   const outputs = [
     { beats: [{ intent: "漏项", sourceIndexes: [0, 1] }] },
     { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] },
-    { text: "忠实稿" },
-    { paragraphs: [{ text: "包装稿", sourceIndexes: [0, 1, 2] }] },
+    { text: textForBudget(432, "原著还原稿") },
+    { paragraphs: [{ text: textForBudget(432, "成片旁白稿"), sourceIndexes: [0, 1, 2] }] },
   ];
   try {
     const generate = createOpenAiEpisodeScriptGenerator(config, (async (_url, init) => {
@@ -488,11 +531,12 @@ test("首次失败后重试 faithful 文本变化也只落成功的一组版本"
       if (input.stage === "skeleton") return { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] };
       if (input.stage === "faithful") {
         faithfulAttempts += 1;
-        return { text: `${faithfulAttempts === 1 ? "失败批次" : "成功批次"}：${input.sources.map((source) => source.sourceText).join("；")}` };
+        return { text: textForBudget(input.characterBudget,
+          `${faithfulAttempts === 1 ? "失败批次" : "成功批次"}：${input.sources.map((source) => source.sourceText).join("；")}`) };
       }
       packagedAttempts += 1;
       if (packagedAttempts === 1) throw new Error("模拟 packaged 暂时失败");
-      return { paragraphs: [{ text: "重试后的包装稿", sourceIndexes: [0, 1, 2] }] };
+      return { paragraphs: [{ text: textForBudget(input.characterBudget, "重试后的成片旁白稿"), sourceIndexes: [0, 1, 2] }] };
     };
     const first = await run(context, generate, 2);
     assert.equal(first.job.status, "queued");
@@ -512,16 +556,16 @@ test("首次失败后重试 faithful 文本变化也只落成功的一组版本"
   }
 });
 
-test("包装稿拒绝忠实父稿冻结集合之外的来源", async () => {
+test("成片旁白稿拒绝对应原著还原稿冻结集合之外的来源", async () => {
   const context = await fixture();
   try {
     const result = await run(context, async (input) => {
       if (input.stage === "skeleton") return { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] };
-      if (input.stage === "faithful") return { text: "忠实稿" };
+      if (input.stage === "faithful") return { text: textForBudget(input.characterBudget, "原著还原稿") };
       return { paragraphs: [{ text: "越界包装稿", sourceIndexes: [3] }] };
     });
     assert.equal(result.job.status, "failed");
-    assert.match(result.job.errorMessage ?? "", /忠实父稿之外/);
+    assert.match(result.job.errorMessage ?? "", /对应原著还原稿之外/);
     assert.equal(listScriptVersions(context.database, "episode").length, 0);
   } finally {
     context.connection.close();
@@ -621,7 +665,7 @@ test("packaged 生成期间取消不会提前写入 faithful", async () => {
     });
     const generate: GenerateEpisodeScript = async (input) => {
       if (input.stage === "skeleton") return { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] };
-      if (input.stage === "faithful") return { text: "内存忠实稿" };
+      if (input.stage === "faithful") return { text: textForBudget(input.characterBudget, "内存原著还原稿") };
       packagedStarted();
       return new Promise((_resolve, reject) => input.signal.addEventListener(
         "abort", () => reject(input.signal.reason), { once: true },

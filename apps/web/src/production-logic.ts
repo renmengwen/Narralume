@@ -1,7 +1,7 @@
 export const PRODUCTION_STAGES = [
   { id: "events", label: "章节事件", dependsOn: [], jobTypes: ["chapter_events_replace", "chapter_events_analyze"] },
   { id: "episode", label: "故事弧与分集", dependsOn: ["events"], jobTypes: [] },
-  { id: "scripts", label: "忠实稿与包装稿", dependsOn: ["episode"], jobTypes: [] },
+  { id: "scripts", label: "原著还原与成片旁白", dependsOn: ["episode"], jobTypes: [] },
   { id: "assets", label: "资产与候选图", dependsOn: ["scripts"], jobTypes: ["image_candidate_generate"] },
   { id: "audio", label: "TTS 与字幕", dependsOn: ["scripts"], jobTypes: ["tts_calibration", "tts_timeline"] },
   { id: "visual", label: "视觉段与渲染", dependsOn: ["assets", "audio"], jobTypes: ["render_chunks"] },

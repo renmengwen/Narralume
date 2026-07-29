@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { act, createElement, StrictMode, useEffect, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -223,6 +224,18 @@ test("Accordion 组件可导出并用于页面折叠结构", () => {
   ));
   assert.match(html, /事件摘要/);
   assert.match(html, /编辑字段/);
+  assert.match(html, /展开.*收起/s);
+});
+
+test("稿件段落默认折叠长引用并使用面向用户的两版稿件名称", () => {
+  const source = readFileSync(new URL("../src/production/scripts/ScriptStage.tsx", import.meta.url), "utf8");
+  assert.match(source, /<Accordion type="single" collapsible/u);
+  assert.match(source, /已选 \{paragraph\.sourceIndexes\.length\} \/ \{sources\.length\}/u);
+  assert.match(source, /max-h-80.*overflow-y-auto/u);
+  assert.match(source, /原著还原稿/u);
+  assert.match(source, /成片旁白稿/u);
+  assert.equal(source.includes("忠实稿版本"), false);
+  assert.equal(source.includes("包装稿版本"), false);
 });
 
 test("生图提示词按事实、资产、画幅和风格分段组装", () => {

@@ -57,7 +57,7 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
         <ProgressRow label="章节事件分析" count={`${chapter.completed}/${chapter.total}`} detail={`复用 ${chapter.reused} · 排队 ${chapter.queued} · 执行中 ${chapter.running} · 失败 ${chapter.failed}`} />
         <ProgressRow label="故事圣经构建" count={story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} />
         <ProgressRow label="全书分集规划" count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
-        <ProgressRow label="忠实稿与包装稿" count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
+        <ProgressRow label="原著还原稿与成片旁白稿" count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
       </div>
 
       {run.failures.length ? <section className="border border-[var(--danger)] bg-[var(--danger-soft)]" aria-labelledby="pipeline-failures-heading">
@@ -131,7 +131,7 @@ function currentJobDetail(run: SeriesPipelineRun, stage: "storyBible" | "episode
   if (stage === "episodePlan") return `当前规划任务 ${progress}${attempt}；并发上限 ${run.chapterConcurrency}`;
   if (stage === "scripts") {
     const episode = Math.min(run.episodeCount, Math.floor(run.progress.scripts.completed / 2) + 1);
-    return `正在生成第 ${episode}/${run.episodeCount} 集；当前单集任务 ${progress}${attempt}；忠实稿并发上限 ${run.chapterConcurrency}`;
+    return `正在生成第 ${episode}/${run.episodeCount} 集；当前单集任务 ${progress}${attempt}；还原稿分段并发上限 ${run.chapterConcurrency}`;
   }
   return `当前任务 ${progress}${attempt}`;
 }

@@ -109,7 +109,7 @@ function currentApproval(database: DatabaseSync, episodeId: string) {
     `SELECT revision, action, script_version_id
      FROM script_approval_events WHERE episode_id = ? ORDER BY revision DESC LIMIT 1`,
   ).get(episodeId) as { revision: number; action: "approve" | "withdraw"; script_version_id: string } | undefined;
-  if (!row || row.action !== "approve") throw new VisualSegmentStoreError(409, "当前分集没有已批准包装稿");
+  if (!row || row.action !== "approve") throw new VisualSegmentStoreError(409, "当前分集没有已批准的成片旁白稿");
   return row;
 }
 

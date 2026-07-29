@@ -583,11 +583,29 @@ export class SeriesPipelineService {
     if (episodes.length !== run.episodeCount || episodes.some((episode, index) => episode.episode_index !== index + 1)) {
       throw new Error("冻结分集与全书计划不一致");
     }
-    const mappings = getMappedScriptJobs(this.options.database, run.id);
-    const byEpisode = new Map(mappings.map((mapping) => [mapping.subject_id, getJob(this.options.database, mapping.job_id)]));
+    const provider = await this.options.resolveChapterTextProvider();
+    if (!provider) {
+      setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
+      return;
+    }
+    const defaults = this.options.scriptGenerationDefaults ?? {
+      voice: "Microsoft Huihui Desktop", rate: 0, charactersPerSecond: 4.5,
+      narrationOccupancy: 0.8, calibration: { identity: "provisional" as const },
+    };
     let previousHandoff: ScriptHandoff | null = null;
     for (const episode of episodes) {
-      const job = byEpisode.get(episode.id);
+      const queued = await enqueueEpisodeScriptGenerationJob(this.options.database, this.options.dataRoot, provider, {
+        payload: {
+          seriesId: run.seriesProjectId,
+          episodeIndex: episode.episode_index,
+          ...defaults,
+          previousScriptHandoff: previousHandoff,
+        },
+        maxAttempts: 3,
+      }, () => getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts");
+      if (getSeriesPipelineRun(this.options.database, run.id)?.status !== "generating_scripts") return;
+      mapSeriesPipelineScriptJob(this.options.database, run.id, episode.id, queued.job.id);
+      const job = queued.job;
       if (job?.status === "failed" || job?.status === "cancelled") {
         setSeriesPipelineFailure(this.options.database, run.id,
           job.status === "cancelled" ? "job_cancelled" : job.errorCode ?? "script_generation_failed",
@@ -598,27 +616,6 @@ export class SeriesPipelineService {
       if (job?.status === "succeeded") {
         previousHandoff = this.scriptHandoff(job);
         continue;
-      }
-      const provider = await this.options.resolveChapterTextProvider();
-      if (!provider) {
-        setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
-        return;
-      }
-      const defaults = this.options.scriptGenerationDefaults ?? {
-        voice: "Microsoft Huihui Desktop", rate: 0, charactersPerSecond: 4.5,
-        narrationOccupancy: 0.8, calibration: { identity: "provisional" as const },
-      };
-      const queued = await enqueueEpisodeScriptGenerationJob(this.options.database, this.options.dataRoot, provider, {
-        payload: {
-          seriesId: run.seriesProjectId,
-          episodeIndex: episode.episode_index,
-          ...defaults,
-          previousScriptHandoff: previousHandoff,
-        },
-        maxAttempts: 3,
-      }, () => getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts");
-      if (getSeriesPipelineRun(this.options.database, run.id)?.status === "generating_scripts") {
-        mapSeriesPipelineScriptJob(this.options.database, run.id, episode.id, queued.job.id);
       }
       return;
     }

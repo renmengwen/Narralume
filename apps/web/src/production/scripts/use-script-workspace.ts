@@ -242,7 +242,7 @@ export function useScriptWorkspace({
     void refreshAfterWrite(expectedRoute).then(() => {
       if (!mounted.current || currentRoute.current !== expectedRoute) return;
       consumedJobId.current = currentJob!.id;
-      setStatus("忠实稿与包装稿已生成并从持久层回读；仍需人工批准包装稿");
+      setStatus("原著还原稿与成片旁白稿已生成并从持久层回读；仍需人工批准成片旁白稿");
     }).catch((error) => {
       if (mounted.current && currentRoute.current === expectedRoute) setStatus(`长稿生成成功，但稿件回读失败：${(error as Error).message}`);
     }).finally(() => {
@@ -282,7 +282,7 @@ export function useScriptWorkspace({
       }));
       applyIfCurrentScriptRoute(mounted.current, currentRoute, expectedRoute, () => {
         onJobCreated(body.job.id);
-        setStatus(`${body.message}；生成完成后仍需人工批准包装稿`);
+        setStatus(`${body.message}；生成完成后仍需人工批准成片旁白稿`);
       });
     } catch (error) {
       applyIfCurrentScriptRoute(mounted.current, currentRoute, expectedRoute, () => {
@@ -298,7 +298,7 @@ export function useScriptWorkspace({
     if (writing.current || !episode) return;
     writing.current = true;
     const expectedRoute = routeKey;
-    setBusy(true); setStatus(`正在创建第 ${episodeIndex} 集${kind === "faithful" ? "忠实稿" : "包装稿"}不可变新版本…`);
+    setBusy(true); setStatus(`正在创建第 ${episodeIndex} 集${kind === "faithful" ? "原著还原稿" : "成片旁白稿"}不可变新版本…`);
     let message = "";
     try {
       const parent = scripts.find((item) => item.id === parentVersionId);

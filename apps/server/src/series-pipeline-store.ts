@@ -418,7 +418,10 @@ export function mapSeriesPipelineScriptJob(
   database.prepare(
     `INSERT INTO series_pipeline_jobs (run_id, stage, subject_type, subject_id, job_id, created_at)
      VALUES (?, 'script_generation', 'episode', ?, ?, ?)
-     ON CONFLICT(run_id, stage, subject_type, subject_id) DO NOTHING`,
+     ON CONFLICT(run_id, stage, subject_type, subject_id) DO UPDATE SET
+       job_id = excluded.job_id,
+       created_at = excluded.created_at
+     WHERE series_pipeline_jobs.job_id <> excluded.job_id`,
   ).run(runId, episodeId, jobId, now);
 }
 

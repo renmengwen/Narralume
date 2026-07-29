@@ -52,6 +52,10 @@ const provider: ChapterTextModelConfig = {
   baseUrl: "http://local.invalid", apiKey: "test", model: "test-model", providerId: "test-provider",
 };
 
+function textForBudget(characterBudget: number, prefix = "稿") {
+  return `${prefix}${"文".repeat(Math.max(0, characterBudget - [...prefix].length))}`;
+}
+
 test("全书规划按目标集数动态合并长篇章节且保持有界输入", () => {
   const chapters = Array.from({ length: 1_794 }, (_, chapterIndex) => ({
     chapterId: `chapter_${chapterIndex}`,
@@ -1216,6 +1220,16 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
     }
     const run = createSeriesPipelineRun(database, { ...input(), episodeCount: 3 });
     setSeriesPipelineStatus(database, run.id, "configured", "generating_scripts");
+    const legacy = createJob(database, {
+      id: "job_episode_scripts_legacy_v2",
+      type: EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+      payload: { contractVersion: 2, seriesId: "series_a", episodeIndex: 1 },
+      maxAttempts: 1,
+    });
+    database.prepare(
+      "UPDATE jobs SET status = 'succeeded', progress = 1, result_json = '{}', finished_at = 1, updated_at = 1 WHERE id = ?",
+    ).run(legacy.id);
+    mapSeriesPipelineScriptJob(database, run.id, "episode_1", legacy.id);
     let service = new SeriesPipelineService({ database, dataRoot, resolveChapterTextProvider: async () => provider });
     const seenHandoffs: Array<{ episodeId: string; handoff: unknown }> = [];
     let generatingEpisodeId = "";
@@ -1225,7 +1239,7 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
         seenHandoffs.push({ episodeId: stage.episode.id, handoff: stage.previousScriptHandoff });
         return { beats: [{ intent: stage.episode.storyArc, sourceIndexes: [0] }] };
       }
-      if (stage.stage === "faithful") return { text: stage.sources[0]!.sourceText };
+      if (stage.stage === "faithful") return { text: textForBudget(stage.characterBudget, stage.sources[0]!.sourceText) };
       if (failSecond && generatingEpisodeId === "episode_2") throw new Error("第二集暂时失败");
       return { paragraphs: stage.paragraphs };
     };
@@ -1237,6 +1251,7 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
 
     await service.reconcile();
     assert.deepEqual(getMappedScriptJobs(database, run.id).map((item) => item.subject_id), ["episode_1"]);
+    assert.notEqual(getMappedScriptJobs(database, run.id)[0]!.job_id, legacy.id);
     assert.equal(await worker.runOne(), true);
     await service.reconcile();
     assert.deepEqual(getMappedScriptJobs(database, run.id).map((item) => item.subject_id), ["episode_1", "episode_2"]);

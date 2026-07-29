@@ -74,7 +74,7 @@ export function changeScriptApproval(
     throw new ScriptApprovalStoreError(400, "批准版本号无效");
   }
   if (input.action === "approve" && (typeof input.scriptVersionId !== "string" || !input.scriptVersionId)) {
-    throw new ScriptApprovalStoreError(400, "批准时必须指定包装稿版本");
+    throw new ScriptApprovalStoreError(400, "批准时必须指定成片旁白稿版本");
   }
   if (input.action === "withdraw" && input.scriptVersionId != null) {
     throw new ScriptApprovalStoreError(400, "撤回批准时不能指定稿件版本");
@@ -97,7 +97,7 @@ export function changeScriptApproval(
         "SELECT episode_id, kind FROM script_versions WHERE id = ?",
       ).get(input.scriptVersionId!) as { episode_id: string; kind: string } | undefined;
       if (!script || script.episode_id !== episodeId || script.kind !== "packaged") {
-        throw new ScriptApprovalStoreError(409, "只能批准当前分集的包装稿");
+        throw new ScriptApprovalStoreError(409, "只能批准当前分集的成片旁白稿");
       }
       scriptVersionId = input.scriptVersionId!;
     } else {

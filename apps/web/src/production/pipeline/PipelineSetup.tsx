@@ -65,7 +65,7 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
       <div className="max-w-3xl">
         <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.14em] text-[var(--accent)]">全本改写 / 设置</p>
         <h2 id="pipeline-setup-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">确认范围、成片规格与分析速度</h2>
-        <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">启动一次后，固定流水线将依次补齐章节分析、故事圣经、全书计划、忠实稿和包装稿。稿件与媒体仍由你逐集审核。</p>
+        <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">启动一次后，固定流水线将依次补齐章节分析、故事圣经、全书计划、原著还原稿和成片旁白稿。稿件与媒体仍由你逐集审核。</p>
       </div>
 
       <div className="min-h-11 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-secondary)]" role="status" aria-live="polite">

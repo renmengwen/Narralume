@@ -22,7 +22,7 @@ function pruneEpisodeSnapshot(database: Database, episodeId: string, timelineHas
       SELECT script_version_id AS scriptVersionId, action
       FROM script_approval_events WHERE episode_id = ? ORDER BY revision DESC LIMIT 1
     `).get(episodeId) as { scriptVersionId: string; action: string } | undefined;
-    if (!approval || approval.action !== "approve") throw new Error("目标分集没有当前批准包装稿");
+    if (!approval || approval.action !== "approve") throw new Error("目标分集没有当前批准的成片旁白稿");
 
     database.exec(`
       CREATE TEMP TABLE keep_scripts (id TEXT PRIMARY KEY) WITHOUT ROWID;

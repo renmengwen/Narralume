@@ -140,14 +140,14 @@ export function validateStoredScriptVersion(database: DatabaseSync, id: string) 
   const paragraphs = (content as { paragraphs?: unknown })?.paragraphs as ScriptVersionInput["paragraphs"];
   const normalized = normalizedContent(paragraphs);
   if (row.kind === "faithful" && row.parent_version_id) {
-    throw new ScriptVersionStoreError(409, "忠实稿不能指定父版本");
+    throw new ScriptVersionStoreError(409, "原著还原稿不能指定父版本");
   }
   if (row.kind === "packaged") {
     const parent = row.parent_version_id && database.prepare(
       "SELECT episode_id, kind FROM script_versions WHERE id = ?",
     ).get(row.parent_version_id) as { episode_id: string; kind: string } | undefined;
     if (!parent || parent.kind !== "faithful" || parent.episode_id !== row.episode_id) {
-      throw new ScriptVersionStoreError(409, "包装稿必须引用同一分集的忠实稿");
+      throw new ScriptVersionStoreError(409, "成片旁白稿必须引用同一分集的原著还原稿");
     }
     validateStoredScriptVersion(database, row.parent_version_id!);
   }
@@ -194,14 +194,14 @@ function createScriptVersionInTransaction(
   validateParagraphs(input.paragraphs);
   const parentVersionId = input.parentVersionId ?? null;
   if (input.kind === "faithful" && parentVersionId) {
-    throw new ScriptVersionStoreError(400, "忠实稿不能指定父版本");
+    throw new ScriptVersionStoreError(400, "原著还原稿不能指定父版本");
   }
   if (input.kind === "packaged") {
     const parent = parentVersionId && database.prepare(
       "SELECT episode_id, kind FROM script_versions WHERE id = ?",
     ).get(parentVersionId) as { episode_id: string; kind: string } | undefined;
     if (!parent || parent.kind !== "faithful" || parent.episode_id !== episodeId) {
-      throw new ScriptVersionStoreError(409, "包装稿必须引用同一分集的忠实稿");
+      throw new ScriptVersionStoreError(409, "成片旁白稿必须引用同一分集的原著还原稿");
     }
   }
 

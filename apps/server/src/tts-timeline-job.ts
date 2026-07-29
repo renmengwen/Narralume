@@ -130,7 +130,7 @@ export function createTtsTimelineJobHandler(
     const effectiveVoice = runtime?.voiceId || voice;
     const permit = requireApprovedScriptForProduction(database, episodeId, "tts");
     const script = getScriptVersion(database, permit.scriptVersionId);
-    if (!script || script.kind !== "packaged") throw new Error("批准包装稿不存在");
+    if (!script || script.kind !== "packaged") throw new Error("已批准的成片旁白稿不存在");
     const audioDirectory = resolve(dataRoot, "episodes", episodeId, "audio");
     await mkdir(resolve(audioDirectory, "segments"), { recursive: true });
     const segments: SegmentArtifact[] = [];

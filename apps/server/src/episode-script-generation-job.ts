@@ -10,6 +10,9 @@ import { createScriptVersionPair } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
+export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = 3;
+export const EPISODE_SCRIPT_MINIMUM_CHARACTER_RATIO = 0.9;
+export const EPISODE_SCRIPT_MAXIMUM_CHARACTER_RATIO = 1.1;
 export const EPISODE_SCRIPT_GENERATION_TIMEOUT_MS = 180_000;
 export const EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS = 180_000;
 export const EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS = 900_000;
@@ -42,6 +45,7 @@ interface FrozenSource {
 }
 
 interface FrozenPayload extends EpisodeScriptGenerationRequest {
+  contractVersion: typeof EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION;
   episodeId: string;
   targetDurationSeconds: number;
   storyArc: string;
@@ -87,6 +91,8 @@ interface FaithfulInput {
   stage: "faithful";
   beat: ScriptBeat;
   characterBudget: number;
+  minimumCharacterCount: number;
+  maximumCharacterCount: number;
   sources: Array<{ sourceIndex: number; sourceText: string }>;
   onActivity?: () => void;
   signal: AbortSignal;
@@ -96,6 +102,8 @@ interface PackagedInput {
   stage: "packaged";
   targetDurationSeconds: number;
   characterBudget: number;
+  minimumCharacterCount: number;
+  maximumCharacterCount: number;
   paragraphs: Array<{ text: string; sourceIndexes: number[] }>;
   onActivity?: () => void;
   signal: AbortSignal;
@@ -259,12 +267,15 @@ function frozenIdentity(database: DatabaseSync, episode: Awaited<ReturnType<type
 }
 
 function requestHash(input: Omit<FrozenPayload, "requestHash">) {
-  return sha256(JSON.stringify({ contract: "episode-scripts-generate-v2", ...input }));
+  return sha256(JSON.stringify(input));
 }
 
 function parseFrozenPayload(value: unknown): FrozenPayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("长稿生成任务冻结参数无效");
   const input = value as FrozenPayload;
+  if (input.contractVersion !== EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION) {
+    throw new Error("长稿生成任务合同版本已过期");
+  }
   const request = validateRequest(input);
   const episodeId = text(input.episodeId, "分集 ID");
   const providerId = text(input.providerId, "模型提供方", 100);
@@ -275,6 +286,7 @@ function parseFrozenPayload(value: unknown): FrozenPayload {
   }
   const payload: FrozenPayload = {
     ...request,
+    contractVersion: EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION,
     episodeId,
     targetDurationSeconds: input.targetDurationSeconds,
     storyArc: text(input.storyArc, "故事弧", 100_000),
@@ -411,17 +423,39 @@ function validateTextResult(value: unknown, label: string) {
 
 function validatePackagedResult(value: unknown, allowed: ReadonlySet<number>) {
   const paragraphs = (value as { paragraphs?: unknown })?.paragraphs;
-  if (!Array.isArray(paragraphs) || paragraphs.length === 0) throw new Error("包装稿必须包含至少一个段落");
+  if (!Array.isArray(paragraphs) || paragraphs.length === 0) throw new Error("成片旁白稿必须包含至少一个段落");
   return paragraphs.map((candidate) => {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("包装稿段落无效");
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("成片旁白稿段落无效");
     const paragraph = candidate as { text?: unknown; sourceIndexes?: unknown };
     if (!Array.isArray(paragraph.sourceIndexes) || paragraph.sourceIndexes.length === 0 ||
         new Set(paragraph.sourceIndexes).size !== paragraph.sourceIndexes.length ||
         paragraph.sourceIndexes.some((index) => !Number.isSafeInteger(index) || !allowed.has(index))) {
-      throw new Error("包装稿引用了忠实父稿之外的来源");
+      throw new Error("成片旁白稿引用了对应原著还原稿之外的来源");
     }
-    return { text: text(paragraph.text, "包装稿正文", 1_000_000), sourceIndexes: paragraph.sourceIndexes as number[] };
+    return { text: text(paragraph.text, "成片旁白稿正文", 1_000_000), sourceIndexes: paragraph.sourceIndexes as number[] };
   });
+}
+
+function scriptCharacterLimits(characterBudget: number) {
+  const minimumCharacterCount = Math.max(1, Math.floor(characterBudget * EPISODE_SCRIPT_MINIMUM_CHARACTER_RATIO));
+  const maximumCharacterCount = Math.max(minimumCharacterCount,
+    Math.ceil(characterBudget * EPISODE_SCRIPT_MAXIMUM_CHARACTER_RATIO));
+  return { minimumCharacterCount, maximumCharacterCount };
+}
+
+function validateScriptLength(
+  label: string,
+  paragraphs: ReadonlyArray<{ text: string }>,
+  limits: ReturnType<typeof scriptCharacterLimits>,
+) {
+  const actualCharacterCount = paragraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0);
+  if (actualCharacterCount < limits.minimumCharacterCount) {
+    throw new Error(`${label}字数不足：实际 ${actualCharacterCount} 字，至少需要 ${limits.minimumCharacterCount} 字`);
+  }
+  if (actualCharacterCount > limits.maximumCharacterCount) {
+    throw new Error(`${label}字数过多：实际 ${actualCharacterCount} 字，最多允许 ${limits.maximumCharacterCount} 字`);
+  }
+  return actualCharacterCount;
 }
 
 async function callWithCancellation<T>(
@@ -473,8 +507,9 @@ export async function enqueueEpisodeScriptGenerationJob(
   const episode = await getEpisode(database, dataRoot, request.seriesId, request.episodeIndex);
   if (episode.sources.length === 0) throw new Error("分集没有可用于生成长稿的冻结来源");
   assertCalibration(database, episode.id, request);
-  const payloadWithoutHash = {
+  const payloadWithoutHash: Omit<FrozenPayload, "requestHash"> = {
     ...request,
+    contractVersion: EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION,
     ...frozenIdentity(database, episode),
     providerId: text(config.providerId, "模型提供方", 100),
     model: text(config.model, "模型", 150),
@@ -518,6 +553,7 @@ export function createEpisodeScriptGenerationJobHandler(
     const episode = await requireCurrentEpisode(database, dataRoot, task);
     assertCalibration(database, task.episodeId, task);
     const characterBudget = Math.floor(task.targetDurationSeconds * task.charactersPerSecond * task.narrationOccupancy);
+    const characterLimits = scriptCharacterLimits(characterBudget);
     const skeletonInput: Omit<SkeletonInput, "signal" | "onActivity" | "correctionError"> = {
       stage: "skeleton",
       episode: {
@@ -564,12 +600,14 @@ export function createEpisodeScriptGenerationJobHandler(
       mappedPipelineJobConcurrency(database, context.job.id, "script_generation"),
       async (index) => {
         const beat = beats[index]!;
+        const beatCharacterBudget = Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
+          task.targetDurationSeconds / beats.length) / task.targetDurationSeconds)));
         try {
           const result = await callWithCancellation(context, (signal, onActivity) => generate({
             stage: "faithful",
             beat,
-            characterBudget: Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
-              task.targetDurationSeconds / beats.length) / task.targetDurationSeconds))),
+            characterBudget: beatCharacterBudget,
+            ...scriptCharacterLimits(beatCharacterBudget),
             sources: beat.sourceIndexes.map((sourceIndex) => ({
               sourceIndex,
               sourceText: sourceMap.get(sourceIndex)!.sourceText,
@@ -578,7 +616,7 @@ export function createEpisodeScriptGenerationJobHandler(
             onActivity,
           }), groupController.signal);
           faithfulParagraphs[index] = {
-            text: validateTextResult(result, "忠实稿正文"),
+            text: validateTextResult(result, "原著还原稿正文"),
             sourceIndexes: beat.sourceIndexes,
           };
           faithfulCompleted += 1;
@@ -589,17 +627,20 @@ export function createEpisodeScriptGenerationJobHandler(
         }
       },
     );
+    const faithfulCharacterCount = validateScriptLength("原著还原稿", faithfulParagraphs, characterLimits);
 
     const faithfulSources = new Set(faithfulParagraphs.flatMap((paragraph) => paragraph.sourceIndexes));
     const packagedResult = await callWithCancellation(context, (signal, onActivity) => generate({
       stage: "packaged",
       targetDurationSeconds: task.targetDurationSeconds,
       characterBudget,
+      ...characterLimits,
       paragraphs: faithfulParagraphs,
       signal,
       onActivity,
     }));
     const packagedParagraphs = validatePackagedResult(packagedResult, faithfulSources);
+    const actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
     context.reportProgress(0.9);
 
     await requireCurrentEpisode(database, dataRoot, task);
@@ -612,15 +653,16 @@ export function createEpisodeScriptGenerationJobHandler(
       assertCurrentDatabaseIdentity(database, task);
       assertCalibration(database, task.episodeId, task);
     });
-    const actualCharacterCount = packagedParagraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0);
     context.reportProgress(1);
     return {
       episodeId: task.episodeId,
       beats,
       characterBudget,
+      ...characterLimits,
       calibration: task.calibration,
       faithfulVersionId: versions.faithful.id,
       packagedVersionId: versions.packaged.id,
+      faithfulCharacterCount,
       actualCharacterCount,
       compressionSuggested: actualCharacterCount > characterBudget,
       scriptHandoff: createScriptHandoff(task, beats),

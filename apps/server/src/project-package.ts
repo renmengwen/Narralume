@@ -302,11 +302,11 @@ function enumerateProject(
         approval.script_version_id !== finalManifest.scriptVersionId ||
         approval.id !== scriptApprovalEventId({ episodeId: finalManifest.episodeId, revision: approval.revision,
           action: "approve", scriptVersionId: approval.script_version_id })) {
-      throw new Error("历史最终清单不是封存时的最新批准包装稿");
+      throw new Error("历史最终清单不是封存时最新批准的成片旁白稿");
     }
     const script = validateStoredScriptVersion(database, finalManifest.scriptVersionId);
     if (script.episode_id !== finalManifest.episodeId || script.kind !== "packaged") {
-      throw new Error("历史最终清单不是封存时的最新批准包装稿");
+      throw new Error("历史最终清单不是封存时最新批准的成片旁白稿");
     }
   } else {
     const snapshot = loadRenderPlanSnapshot(database, finalManifest.episodeId, finalManifest.timelineHash);

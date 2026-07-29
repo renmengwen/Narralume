@@ -110,7 +110,7 @@ export function useAudioWorkspace({ seriesId, episodeIndex, timelineHash, curren
       }
       setStatus(!snapshot.episode ? `第 ${episodeIndex} 集尚未创建` : snapshot.timeline
         ? `第 ${episodeIndex} 集语音时间轴已从持久层恢复`
-        : snapshot.approval?.status === "approved" ? "当前批准稿尚未生成语音时间轴" : "当前分集没有已批准的包装稿");
+        : snapshot.approval?.status === "approved" ? "当前批准稿尚未生成语音时间轴" : "当前分集没有已批准的成片旁白稿");
     }).catch((error) => {
       if (mounted.current && currentRoute.current === expectedRoute) setStatus(`语音工作区恢复失败：${(error as Error).message}`);
     }).finally(() => {

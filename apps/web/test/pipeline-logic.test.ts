@@ -238,7 +238,7 @@ test("稿件阶段同时展示已持久双稿数与当前单集 Job 真实进度
   assert.match(html, /2\/40/);
   assert.match(html, /正在生成第 2\/20 集/);
   assert.match(html, /当前单集任务 50%/);
-  assert.match(html, /忠实稿并发上限 4/);
+  assert.match(html, /还原稿分段并发上限 4/);
 });
 
 test("覆盖检查保持处理中语义，自动生产完成后明确等待逐集审核", () => {

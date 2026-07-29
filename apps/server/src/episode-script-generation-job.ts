@@ -10,7 +10,7 @@ import { createScriptVersionPair } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
-export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = 4;
+export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = 5;
 export const EPISODE_SCRIPT_MINIMUM_CHARACTER_RATIO = 0.9;
 export const EPISODE_SCRIPT_MAXIMUM_CHARACTER_RATIO = 1.1;
 export const EPISODE_SCRIPT_GENERATION_TIMEOUT_MS = 180_000;
@@ -663,17 +663,18 @@ export function createEpisodeScriptGenerationJobHandler(
     }));
     let packagedParagraphs = validatePackagedResult(await generatePackaged(), faithfulSources);
     let actualCharacterCount: number;
-    try {
-      validatePackagedDifference(faithfulParagraphs, packagedParagraphs);
-      actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
-    } catch (error) {
-      if (!(error instanceof CorrectableScriptError)) throw error;
-      packagedParagraphs = validatePackagedResult(
-        await generatePackaged(error.message, packagedParagraphs),
-        faithfulSources,
-      );
-      validatePackagedDifference(faithfulParagraphs, packagedParagraphs);
-      actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
+    for (let correctionAttempt = 0; ; correctionAttempt += 1) {
+      try {
+        validatePackagedDifference(faithfulParagraphs, packagedParagraphs);
+        actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
+        break;
+      } catch (error) {
+        if (!(error instanceof CorrectableScriptError) || correctionAttempt >= 2) throw error;
+        packagedParagraphs = validatePackagedResult(
+          await generatePackaged(error.message, packagedParagraphs),
+          faithfulSources,
+        );
+      }
     }
     context.reportProgress(0.9);
 

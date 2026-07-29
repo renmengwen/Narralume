@@ -174,7 +174,7 @@ test("Responses SSE 仅在明确成功终态后返回完整骨架", async () => 
 });
 
 test("长稿模型调用使用 180 秒首包与空闲、900 秒总上限", () => {
-  assert.equal(EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION, 4);
+  assert.equal(EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION, 5);
   assert.equal(EPISODE_SCRIPT_GENERATION_TIMEOUT_MS, 180_000);
   assert.equal(EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS, 180_000);
   assert.equal(EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS, 900_000);
@@ -442,6 +442,37 @@ test("成片旁白稿与原著还原稿完全相同时只定向改写一次", as
     assert.equal(packagedCalls, 2);
     const versions = listScriptVersions(context.database, "episode");
     assert.notEqual(versions[0]!.contentHash, versions[1]!.contentHash);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("成片旁白稿改写后超长时再定向压缩且不重复生成原著还原稿", async () => {
+  const context = await fixture();
+  let faithfulCalls = 0;
+  let packagedCalls = 0;
+  try {
+    const result = await run(context, async (input) => {
+      if (input.stage === "skeleton") return { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] };
+      if (input.stage === "faithful") {
+        faithfulCalls += 1;
+        return { text: textForBudget(input.characterBudget, "原著还原稿") };
+      }
+      packagedCalls += 1;
+      if (packagedCalls === 1) return { paragraphs: input.paragraphs };
+      if (packagedCalls === 2) {
+        assert.match(input.correctionError ?? "", /正文完全相同/u);
+        return { paragraphs: [{ text: "长".repeat(input.maximumCharacterCount + 1), sourceIndexes: [0, 1, 2] }] };
+      }
+      assert.match(input.correctionError ?? "", /字数过多/u);
+      assert.equal(input.previousParagraphs?.[0]?.text.length, input.maximumCharacterCount + 1);
+      return { paragraphs: [{ text: textForBudget(input.characterBudget, "成片旁白稿"), sourceIndexes: [0, 1, 2] }] };
+    });
+    assert.equal(result.job.status, "succeeded");
+    assert.equal(faithfulCalls, 1);
+    assert.equal(packagedCalls, 3);
+    assert.equal(listScriptVersions(context.database, "episode").length, 2);
   } finally {
     context.connection.close();
     await rm(context.dataRoot, { recursive: true, force: true });

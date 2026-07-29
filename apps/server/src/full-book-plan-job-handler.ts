@@ -11,6 +11,7 @@ import {
   FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
   buildFullBookPlanFinalRequest,
   buildFullBookPlanIntervalRequests,
+  fullBookPlanIntervalModelInput,
   fullBookPlanFinalResponseParser,
   fullBookPlanIntervalResponseParser,
   type FullBookPlanBuildLimits,
@@ -21,6 +22,7 @@ import { FullBookPlanContractError } from "./full-book-plan-contract.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 export const FULL_BOOK_PLAN_JOB_TYPE = "full_book_plan_build";
@@ -180,7 +182,7 @@ function modelPrompt(input: unknown, correction?: string) {
     "不得输出或推测字节范围，也不得回显 kind、request、identityHash、章节范围或集数包装字段。",
     ...(correction ? [`上一次完整 JSON 输出未通过合同校验：${correction}`, "请针对同一原任务仅纠正输出合同；不要改变任务输入。"] : []),
   ].join("\n");
-  const frozen = canonical({ kind: request.kind, request: request.request });
+  const frozen = canonical(fullBookPlanIntervalModelInput(request.request));
   return request.prompt
     ? [contract, layeredPrompt(PRODUCT_PROMPTS.episodePlanning, request.prompt.instructions, frozen)].join("\n\n")
     : [contract, frozen].join("\n");
@@ -197,9 +199,9 @@ async function callModel(
   const request = textModelRequest(config, [
     modelPrompt(input, correction),
   ].join("\n"), 8192, true);
-  const response = await fetchImpl(request.endpoint, {
+  const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
     method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-  });
+  }));
   if (!response.ok) {
     await response.body?.cancel();
     const message = `全书规划模型请求失败（HTTP ${response.status}）`;

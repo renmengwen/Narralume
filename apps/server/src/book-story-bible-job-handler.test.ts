@@ -20,6 +20,7 @@ import {
 } from "./book-story-bible-job.js";
 import { JobCancelledError, type JobExecutionContext } from "./job-worker.js";
 import { PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 
 const limits: StoryBibleBuildLimits = {
   maxChaptersPerInterval: 1, maxEventsPerInterval: 1, maxInputBytesPerInterval: 1_000,
@@ -140,7 +141,11 @@ function context(task: BookStoryBibleJobPayload, isCancelled: () => boolean = ()
   return { value, checkpoints, progress };
 }
 
-test("严格执行 interval 后独立 final，并将模型身份仅保存为溯源", async () => {
+test("严格执行 interval 后独立 final，并将模型身份仅保存为溯源", async (t) => {
+  let gateRuns = 0;
+  t.mock.method(textModelConcurrencyGate, "run", async (_signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    gateRuns += 1; return task();
+  });
   const task = payload();
   const calls: string[] = [];
   const streamFlags: unknown[] = [];
@@ -159,6 +164,7 @@ test("严格执行 interval 后独立 final，并将模型身份仅保存为溯�
   const execution = context(task);
   const result = await createBookStoryBibleJobHandler(database(), config, { fetchImpl: fetchImpl as typeof fetch, createBible })(execution.value);
   assert.equal(calls.length, 2);
+  assert.equal(gateRuns, 2);
   assert.deepEqual(streamFlags, [true, true]);
   assert.match(calls[0]!, /顶层必须恰好包含以下 12 个数组/);
   for (const key of ["characters", "relationships", "locations", "organizations", "items", "concepts", "timeline",

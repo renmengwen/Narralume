@@ -19,6 +19,7 @@ import {
   type FullBookPlanBuildLimits,
 } from "./full-book-plan-job.js";
 import type { JobExecutionContext } from "./job-worker.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 
 const config = {
   baseUrl: "https://model.invalid/v1", apiKey: "test", model: "model-a", providerId: "provider-a",
@@ -43,6 +44,7 @@ function payload(): FullBookPlanJobPayload {
     chapterId: `chapter_${chapterIndex}`, chapterIndex,
     sourceEvents: [{
       id: `event_${chapterIndex}`, contentHash: `${chapterIndex + 1}`.repeat(64), inputBytes: 10,
+      eventType: "revelation", payload: { summary: `第 ${chapterIndex} 章事件` },
       chapterId: `chapter_${chapterIndex}`, chapterIndex,
       byteRanges: [{ byteStart: chapterIndex * 10, byteEnd: chapterIndex * 10 + 9 }],
     }],
@@ -91,9 +93,14 @@ function context(task: FullBookPlanJobPayload, saved = new Map<string, {
   };
 }
 
-test("依次执行 interval 并确定性归并恰好 N 集的服务端验证计划", async () => {
+test("依次执行 interval 并确定性归并恰好 N 集的服务端验证计划", async (t) => {
+  let gateRuns = 0;
+  t.mock.method(textModelConcurrencyGate, "run", async (_signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    gateRuns += 1; return task();
+  });
   const task = payload();
   const calls: string[] = [];
+  const modelInputs: unknown[] = [];
   const streamFlags: unknown[] = [];
   const responses = [plan(["event_0"]), plan(["event_1"])];
   let index = 0;
@@ -101,7 +108,9 @@ test("依次执行 interval 并确定性归并恰好 N 集的服务端验证计�
     const request = JSON.parse(String(init?.body)) as { input: string };
     streamFlags.push((request as { stream?: unknown }).stream);
     const prompt = request.input.split("\n").at(-1)!;
-    calls.push((JSON.parse(prompt) as { kind: string }).kind);
+    const modelInput = JSON.parse(prompt) as { kind: string };
+    modelInputs.push(modelInput);
+    calls.push(modelInput.kind);
     return new Response(JSON.stringify({ output_text: JSON.stringify(responses[index++]) }), { status: 200 });
   };
   const execution = context(task);
@@ -109,6 +118,13 @@ test("依次执行 interval 并确定性归并恰好 N 集的服务端验证计�
     plan: { episodes: unknown[] }; validation: { episodeCount: number; intervalQuotas: unknown[] };
   };
   assert.deepEqual(calls, ["interval", "interval"]);
+  assert.equal(gateRuns, 2);
+  const modelBody = JSON.stringify(modelInputs);
+  assert.match(modelBody, /"eventType":"revelation"/u);
+  assert.match(modelBody, /"payload":\{"summary":"第 0 章事件"\}/u);
+  for (const forbidden of ["contentHash", "inputBytes", "byteRanges", "identityHash", "provenance", "chapterId"]) {
+    assert.doesNotMatch(modelBody, new RegExp(forbidden, "u"));
+  }
   assert.deepEqual(streamFlags, [true, true]);
   assert.equal(result.plan.episodes.length, 2);
   assert.equal(result.validation.episodeCount, 2);
@@ -135,7 +151,7 @@ test("按当前书籍流水线配置并发 interval，全部完成后才执行 f
     const request = JSON.parse(String(init?.body)) as { input: string };
     const input = JSON.parse(request.input.split("\n").at(-1)!) as {
       kind: "interval";
-      request: { sourceEvents?: Array<{ id: string }> };
+      sourceEvents?: Array<{ id: string }>;
     };
     inFlight += 1;
     peak = Math.max(peak, inFlight);
@@ -143,7 +159,7 @@ test("按当前书籍流水线配置并发 interval，全部完成后才执行 f
     if (intervalStarted === task.intervals.length) release();
     await gate;
     inFlight -= 1;
-    return Response.json({ output_text: JSON.stringify(plan([input.request.sourceEvents![0]!.id])) });
+    return Response.json({ output_text: JSON.stringify(plan([input.sourceEvents![0]!.id])) });
   };
   await createFullBookPlanJobHandler(config, { database, fetchImpl: fetchImpl as typeof fetch })(execution.value);
   assert.equal(peak, 2);
@@ -174,9 +190,9 @@ test("瞬时 HTTP 与上游流失败在单区间内有界重试", async () => {
       if (calls < FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS) return failure();
       const body = JSON.parse(String(init?.body)) as { input: string };
       const input = JSON.parse(body.input.split("\n").at(-1)!) as {
-        kind: "interval"; request: { sourceEvents: Array<{ id: string }> };
+        kind: "interval"; sourceEvents: Array<{ id: string }>;
       };
-      const events = [input.request.sourceEvents[0]!.id];
+      const events = [input.sourceEvents[0]!.id];
       return Response.json({ output_text: JSON.stringify(plan(events)) });
     }) as typeof fetch;
     await createFullBookPlanJobHandler(config, { fetchImpl, retryDelayMs: 0 })(context(payload()).value);

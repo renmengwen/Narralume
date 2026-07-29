@@ -38,6 +38,7 @@ import {
 import {
   FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
   buildFullBookPlanIntervalRequests,
+  fullBookPlanIntervalModelInput,
   type FullBookPlanBuildLimits,
   type FullBookPlanChapterInput,
 } from "./full-book-plan-job.js";
@@ -479,9 +480,9 @@ export class SeriesPipelineService {
       bookId, { id: bible.id, contentHash: bible.content_hash }, chapters, run.episodeCount,
       { providerId: provider.providerId, model: provider.model }, limits,
     );
-    const oversized = intervals.find((interval) => Buffer.byteLength(JSON.stringify({
-      kind: "interval", request: interval,
-    }), "utf8") > MAX_CHAPTER_BATCH_INPUT_BYTES);
+    const oversized = intervals.find((interval) => Buffer.byteLength(
+      JSON.stringify(fullBookPlanIntervalModelInput(interval)), "utf8",
+    ) > MAX_CHAPTER_BATCH_INPUT_BYTES);
     if (oversized) throw new Error(`全书规划区间 ${oversized.identityHash} 的模型输入超过 512 KiB 安全上限`);
     const base: Omit<FullBookPlanJobPayload, "providerId" | "model" | "requestHash"> = {
       contractVersion: FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
@@ -610,7 +611,7 @@ export class SeriesPipelineService {
         bookId, { id: bible.id, contentHash: bible.content_hash }, chapters, 1,
         { providerId: provider.providerId, model: provider.model }, limits,
       );
-      if (intervals.length !== 1 || Buffer.byteLength(JSON.stringify({ kind: "interval", request: intervals[0] }), "utf8") >
+      if (intervals.length !== 1 || Buffer.byteLength(JSON.stringify(fullBookPlanIntervalModelInput(intervals[0]!)), "utf8") >
           MAX_CHAPTER_BATCH_INPUT_BYTES) {
         throw new Error(`第 ${range.episodeIndex} 集局部规划输入超过 512 KiB 安全上限`);
       }
@@ -737,7 +738,7 @@ export class SeriesPipelineService {
          JOIN chapter_event_sources source ON source.event_id = event.id
          WHERE event.chapter_id = ? ORDER BY event.event_index, event.id, source.source_index`,
       ).all(chapter.id) as unknown as Array<Record<string, unknown> & {
-        id: string; source_byte_start: number; source_byte_end: number;
+        id: string; event_type: string; payload_json: string; source_byte_start: number; source_byte_end: number;
       }>;
       const byId = new Map<string, typeof rows>();
       for (const row of rows) byId.set(row.id, [...(byId.get(row.id) ?? []), row]);
@@ -746,8 +747,11 @@ export class SeriesPipelineService {
         chapterIndex: chapter.index,
         sourceEvents: [...byId].map(([id, eventRows]) => {
           const json = JSON.stringify(eventRows);
+          const event = eventRows[0]!;
           return {
             id, chapterId: chapter.id, chapterIndex: chapter.index,
+            eventType: event.event_type,
+            payload: JSON.parse(event.payload_json) as unknown,
             byteRanges: eventRows.map((row) => ({ byteStart: row.source_byte_start, byteEnd: row.source_byte_end })),
             contentHash: createHash("sha256").update(json).digest("hex"),
             inputBytes: Buffer.byteLength(json),

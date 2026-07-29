@@ -30,6 +30,7 @@ import { createBookStoryBible, findBookStoryBibleForJob } from "./book-story-bib
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
 export const BOOK_STORY_BIBLE_JOB_TYPE = "book_story_bible_build";
@@ -223,9 +224,9 @@ async function callModel(
       promptSnapshot.instructions, frozenInput)
     : frozenInput;
   const request = textModelRequest(config, prompt, 8192, true);
-  const response = await fetchImpl(request.endpoint, {
+  const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
     method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-  });
+  }));
   if (!response.ok) {
     await response.body?.cancel();
     throw new Error(`全书世界观模型请求失败（HTTP ${response.status}）`);

@@ -15,6 +15,7 @@ import {
 } from "./episode-recommendation-job.js";
 import { getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 
 const config: ChapterTextModelConfig = {
   baseUrl: "https://example.invalid/v1",
@@ -23,7 +24,11 @@ const config: ChapterTextModelConfig = {
   providerId: "test-provider",
 };
 
-test("分集来源推荐显式请求流式输出并逐块读取 SSE", async () => {
+test("分集来源推荐显式请求流式输出并逐块读取 SSE", async (t) => {
+  let gateRuns = 0;
+  t.mock.method(textModelConcurrencyGate, "run", async (_signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    gateRuns += 1; return task();
+  });
   const expected = {
     chapterIds: ["chapter_1"], eventIds: ["event_1"], estimatedCharacterCount: 1200, advice: "\u4fdd\u7559",
   } as const;
@@ -40,6 +45,7 @@ test("分集来源推荐显式请求流式输出并逐块读取 SSE", async () =
     targetDurationSeconds: 1200, endingPreference: null, chapters: [],
   }), expected);
   assert.equal(requestBody?.stream, true);
+  assert.equal(gateRuns, 1);
 });
 
 async function fixture(missingSecond = false) {

@@ -1,6 +1,7 @@
 import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import type { GenerateEpisodeScript } from "./episode-script-generation-job.js";
 import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { streamedText } from "./text-model-stream.js";
 
 export function createOpenAiEpisodeScriptGenerator(
@@ -46,9 +47,9 @@ export function createOpenAiEpisodeScriptGenerator(
           input.prompt.instructions, JSON.stringify(safeInput))}`
         : `${instructions}\n${JSON.stringify(safeInput)}`;
     const request = textModelRequest(config, prompt, 8192, true);
-    const response = await fetchImpl(request.endpoint, {
+    const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
       method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
-    });
+    }));
     if (!response.ok) {
       await response.body?.cancel();
       throw new Error(`长稿生成模型请求失败（HTTP ${response.status}）`);

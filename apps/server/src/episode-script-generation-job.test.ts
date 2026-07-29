@@ -26,6 +26,7 @@ import { writeModelConfig } from "./model-config.js";
 import { getScriptApproval, requireApprovedScriptForProduction } from "./script-approval-store.js";
 import { createSeriesPipelineRun, mapSeriesPipelineScriptJob } from "./series-pipeline-store.js";
 import { listScriptVersions } from "./script-version-store.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 
 const config: ChapterTextModelConfig = {
   baseUrl: "https://example.invalid/v1",
@@ -93,7 +94,11 @@ function textForBudget(characterBudget: number, prefix = "稿") {
     : `${prefix}${"文".repeat(characterBudget - [...prefix].length)}`;
 }
 
-test("Responses 三阶段请求不发送不兼容的 json_object format", async () => {
+test("Responses 三阶段请求不发送不兼容的 json_object format", async (t) => {
+  let gateRuns = 0;
+  t.mock.method(textModelConcurrencyGate, "run", async (_signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    gateRuns += 1; return task();
+  });
   const outputs = [
     { beats: [{ intent: "进入墓道", sourceIndexes: [0] }] },
     { text: "忠实稿" },
@@ -123,6 +128,7 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
     minimumCharacterCount: 360, maximumCharacterCount: 440,
     paragraphs: [{ text: "忠实稿", sourceIndexes: [0] }], signal });
   assert.equal(calls, 3);
+  assert.equal(gateRuns, 3);
   assert.match(prompts[1]!, /180 至 220 字/u);
   assert.match(prompts[1]!, /不得用摘要代替完整叙事/u);
   assert.match(prompts[2]!, /360 至 440 字/u);

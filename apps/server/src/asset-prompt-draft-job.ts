@@ -10,6 +10,7 @@ import { PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS, layeredPrompt } from "./produ
 import { requireApprovedScriptForProduction } from "./script-approval-store.js";
 import { getScriptVersion } from "./script-version-store.js";
 import { streamedText } from "./text-model-stream.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 
 export const ASSET_PROMPT_DRAFT_JOB_TYPE = "asset_prompt_draft_generate";
@@ -254,7 +255,9 @@ export function createAssetPromptDraftJobHandler(
 export function createOpenAiAssetPromptDraftGenerator(config: ChapterTextModelConfig, fetchImpl: typeof fetch = fetch): GenerateAssetPromptDraft {
   return async ({ prompt, signal, onActivity }) => {
     const request = textModelRequest(config, `${prompt}\n\n只输出符合 outputSchema �� JSON 对象，不得增加字段或 Markdown。`, 8192, true);
-    const response = await fetchImpl(request.endpoint, { method: "POST", signal, redirect: "error", headers: request.headers, body: request.body });
+    const response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
+      method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+    }));
     if (!response.ok) { await response.body?.cancel(); throw new Error(`资产 Prompt 草稿模型请求失败（HTTP ${response.status}）`); }
     const raw = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
       ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })

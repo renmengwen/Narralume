@@ -68,6 +68,8 @@ test("全书规划按目标集数动态合并长篇章节且保持有界输入",
     chapterIndex,
     sourceEvents: [{
       id: `event_${chapterIndex}`,
+      eventType: "revelation",
+      payload: { summary: `第 ${chapterIndex} 章事件` },
       chapterId: `chapter_${chapterIndex}`,
       chapterIndex,
       byteRanges: [{ byteStart: chapterIndex * 10, byteEnd: chapterIndex * 10 + 9 }],

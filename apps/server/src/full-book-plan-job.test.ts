@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
   FULL_BOOK_PLAN_PROMPT_VERSION,
   FullBookPlanJobContractError,
   buildFullBookPlanFinalRequest,
   buildFullBookPlanIntervalRequests,
+  fullBookPlanIntervalModelInput,
   fullBookPlanFinalResponseParser,
   parseFullBookPlanFinalResponse,
   parseFullBookPlanIntervalResponse,
@@ -28,6 +30,8 @@ function chapters(): FullBookPlanChapterInput[] {
     chapterIndex,
     sourceEvents: [{
       id: `event_${chapterIndex}`,
+      eventType: "revelation",
+      payload: { summary: `第 ${chapterIndex} 章事件` },
       contentHash: `${chapterIndex}`.repeat(64),
       inputBytes: chapterIndex < 2 ? 100 : 200,
       chapterId: `chapter_${chapterIndex}`,
@@ -58,6 +62,22 @@ test("确定性切分有界区间并分配正整数配额，总和恰好为 N", 
   assert.deepEqual(requests.map(({ identity }) => identity.episodeCount), [2, 2]);
   assert.equal(requests.reduce((sum, request) => sum + request.identity.episodeCount, 0), 4);
   assert.ok(requests.every((request) => request.identity.episodeCount > 0));
+});
+
+test("模型输入只包含规划所需事件语义，冻结身份元数据仍留在服务端", () => {
+  const request = buildFullBookPlanIntervalRequests(
+    "book_1", bible, chapters(), 4, { providerId: "p", model: "m" }, limits,
+  )[0]!;
+  const input = fullBookPlanIntervalModelInput(request);
+  assert.deepEqual(input.sourceEvents[0], {
+    id: "event_0", chapterIndex: 0, eventType: "revelation", payload: { summary: "第 0 章事件" },
+  });
+  const body = JSON.stringify(input);
+  for (const forbidden of ["contentHash", "inputBytes", "byteRanges", "identityHash", "provenance", "chapterId"]) {
+    assert.doesNotMatch(body, new RegExp(forbidden, "u"));
+  }
+  assert.match(JSON.stringify(request), /contentHash/u);
+  assert.match(JSON.stringify(request), /byteRanges/u);
 });
 
 test("切换 provider/model 只改变 provenance，不改变 interval/final identity", () => {
@@ -145,14 +165,15 @@ test("错误类型稳定", () => {
   );
 });
 
-test("prompt v2 进入确定性 identity，旧版本 identity 不再可复用", () => {
+test("prompt v3 进入确定性 identity，旧版本 identity 不再可复用", () => {
+  assert.equal(FULL_BOOK_PLAN_JOB_CONTRACT_VERSION, "full-book-plan-job-v2");
   const request = buildFullBookPlanIntervalRequests(
     "book_1", bible, chapters(), 4, { providerId: "p", model: "m" }, limits,
   )[0]!;
-  assert.equal(FULL_BOOK_PLAN_PROMPT_VERSION, "full-book-plan-prompt-v2");
+  assert.equal(FULL_BOOK_PLAN_PROMPT_VERSION, "full-book-plan-prompt-v3");
   assert.equal(request.identity.promptVersion, FULL_BOOK_PLAN_PROMPT_VERSION);
   const oldVersion = structuredClone(request);
-  oldVersion.identity.promptVersion = "full-book-plan-prompt-v1";
+  oldVersion.identity.promptVersion = "full-book-plan-prompt-v2";
   assert.throws(() => parseFullBookPlanIntervalResponse(oldVersion, plan(0, 2)), /请求身份无效/u);
 });
 
@@ -166,4 +187,17 @@ test("已验证 interval 在 final 响应校验器创建前损坏会按本地身
   );
   finalRequest.intervals[0]!.content.episodes[0]!.title = "篡改";
   assert.throws(() => fullBookPlanFinalResponseParser(finalRequest), FullBookPlanJobContractError);
+});
+
+test("事件语义变化会生成新 identity，不能复用旧 checkpoint", () => {
+  const original = buildFullBookPlanIntervalRequests(
+    "book_1", bible, chapters(), 4, { providerId: "p", model: "m" }, limits,
+  );
+  const changedChapters = chapters();
+  changedChapters[0]!.sourceEvents[0]!.payload = { summary: "事件语义已变化" };
+  const changed = buildFullBookPlanIntervalRequests(
+    "book_1", bible, changedChapters, 4, { providerId: "p", model: "m" }, limits,
+  );
+  assert.notEqual(changed[0]!.identityHash, original[0]!.identityHash);
+  assert.notEqual(changed[0]!.identity.sourceEventsHash, original[0]!.identity.sourceEventsHash);
 });

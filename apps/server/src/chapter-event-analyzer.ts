@@ -10,6 +10,7 @@ import {
   type ChapterEventType,
 } from "./chapter-event-store.js";
 import { streamedText } from "./text-model-stream.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
 
 const MAX_CHAPTER_BYTES = 128 * 1024;
@@ -217,7 +218,7 @@ export function textModelRequest(config: ChapterTextModelConfig, input: string, 
     headers,
     body: JSON.stringify(anthropic
       ? { model: config.model, max_tokens: maxTokens, messages: [{ role: "user", content: input }], ...(stream ? { stream: true } : {}) }
-      : { model: config.model, input, ...(stream ? { stream: true } : {}) }),
+      : { model: config.model, input, max_output_tokens: maxTokens, ...(stream ? { stream: true } : {}) }),
   };
 }
 
@@ -338,9 +339,9 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
     const request = textModelRequest(config, prepared.prompt, 32768, true);
     let response: Response;
     try {
-      response = await fetchImpl(request.endpoint, {
+      response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
         method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-      });
+      }));
     } catch (error) {
       if (signal?.aborted) throw error;
       throw new Error("章节分析模型请求失败");
@@ -373,13 +374,13 @@ export function createOpenAiResponsesChapterAnalyzer(
       const request = textModelRequest(config, input, 8192, true);
       let response: Response;
       try {
-        response = await fetchImpl(request.endpoint, {
+        response = await textModelConcurrencyGate.run(signal, () => fetchImpl(request.endpoint, {
           method: "POST",
           headers: request.headers,
           body: request.body,
           signal,
           redirect: "error",
-        });
+        }));
       } catch (error) {
         if (signal?.aborted) throw error;
         throw new Error("章节分析模型请求失败");

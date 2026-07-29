@@ -9,8 +9,8 @@ import {
   type FullBookPlanSourceEvent,
 } from "./full-book-plan-contract.js";
 
-export const FULL_BOOK_PLAN_JOB_CONTRACT_VERSION = "full-book-plan-job-v1";
-export const FULL_BOOK_PLAN_PROMPT_VERSION = "full-book-plan-prompt-v2";
+export const FULL_BOOK_PLAN_JOB_CONTRACT_VERSION = "full-book-plan-job-v2";
+export const FULL_BOOK_PLAN_PROMPT_VERSION = "full-book-plan-prompt-v3";
 export const FULL_BOOK_PLAN_PARSER_VERSION = "full-book-plan-parser-v1";
 
 export class FullBookPlanJobContractError extends Error {}
@@ -22,6 +22,8 @@ export interface FullBookPlanModelProvenance {
 
 export interface FullBookPlanJobSourceEvent extends FullBookPlanSourceEvent {
   id: string;
+  eventType: string;
+  payload: unknown;
   contentHash: string;
   inputBytes: number;
 }
@@ -68,6 +70,21 @@ export interface VerifiedFullBookPlanInterval {
   request: FullBookPlanIntervalRequest;
   content: FullBookPlan;
   contentHash: string;
+}
+
+export interface FullBookPlanIntervalModelInput {
+  kind: "interval";
+  chapterRange: {
+    startChapterIndex: number;
+    endChapterIndex: number;
+  };
+  episodeCount: number;
+  sourceEvents: Array<{
+    id: string;
+    chapterIndex: number;
+    eventType: string;
+    payload: unknown;
+  }>;
 }
 
 export interface FullBookPlanFinalRequest {
@@ -129,6 +146,12 @@ function validHash(value: string, label: string) {
   return value;
 }
 
+function validEventType(value: string) {
+  const normalized = value?.trim();
+  if (!normalized || normalized.length > 200) throw new FullBookPlanJobContractError("sourceEventType 无效");
+  return normalized;
+}
+
 function positiveInteger(value: number, label: string) {
   if (!Number.isSafeInteger(value) || value < 1) throw new FullBookPlanJobContractError(`${label} 必须是正整数`);
   return value;
@@ -154,7 +177,10 @@ function validateLimits(limits: FullBookPlanBuildLimits) {
 function eventIdentity(event: FullBookPlanJobSourceEvent) {
   return {
     id: event.id,
+    eventType: event.eventType,
+    payload: event.payload,
     contentHash: event.contentHash,
+    inputBytes: event.inputBytes,
     chapterId: event.chapterId,
     chapterIndex: event.chapterIndex,
     byteRanges: event.byteRanges,
@@ -218,6 +244,8 @@ export function buildFullBookPlanIntervalRequests(
     let chapterBytes = 0;
     for (const event of chapter.sourceEvents) {
       validId(event.id, "sourceEventId");
+      validEventType(event.eventType);
+      canonical(event.payload);
       validHash(event.contentHash, "sourceEventContentHash");
       positiveInteger(event.inputBytes, "事件输入字节数");
       if (event.chapterId !== chapter.chapterId || event.chapterIndex !== chapter.chapterIndex) {
@@ -264,6 +292,8 @@ export function buildFullBookPlanIntervalRequests(
   return groups.map((chaptersInGroup, index) => {
     const sourceEvents = chaptersInGroup.flatMap((chapter) => chapter.sourceEvents).map((event) => ({
       ...event,
+      eventType: validEventType(event.eventType),
+      payload: JSON.parse(canonical(event.payload)) as unknown,
       byteRanges: event.byteRanges.map((range) => ({ ...range })),
     }));
     const identity = {
@@ -285,6 +315,21 @@ export function buildFullBookPlanIntervalRequests(
       provenance: validProvenance(provenance),
     };
   });
+}
+
+export function fullBookPlanIntervalModelInput(request: FullBookPlanIntervalRequest): FullBookPlanIntervalModelInput {
+  validateIntervalRequest(request);
+  return {
+    kind: "interval",
+    chapterRange: {
+      startChapterIndex: request.identity.startChapterIndex,
+      endChapterIndex: request.identity.endChapterIndex,
+    },
+    episodeCount: request.identity.episodeCount,
+    sourceEvents: request.sourceEvents.map(({ id, chapterIndex, eventType, payload }) => ({
+      id, chapterIndex, eventType, payload,
+    })),
+  };
 }
 
 function validateIntervalRequest(request: FullBookPlanIntervalRequest) {

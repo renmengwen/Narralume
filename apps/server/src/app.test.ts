@@ -6,10 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { buildApp } from "./app.js";
+import { buildApp, TEXT_JOB_WORKER_COUNT } from "./app.js";
 import { openDatabase } from "./database.js";
-import { getJob } from "./job-store.js";
+import { createJob, getJob } from "./job-store.js";
 import { IMAGE_CANDIDATE_JOB_TYPE } from "./image-candidate-job.js";
+import { FULL_BOOK_PLAN_JOB_TYPE } from "./full-book-plan-job-handler.js";
+import { PLACEHOLDER_VIDEO_JOB_TYPE } from "./placeholder-video-job.js";
 import { writeModelConfig } from "./model-config.js";
 import { changeScriptApproval } from "./script-approval-store.js";
 import { TTS_LISTENING_REVIEW_JOB_TYPE } from "./tts-listening-review.js";
@@ -22,6 +24,59 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("文本任务由专用有界 Worker 池并行领取，非文本任务仍由单个通用 Worker 领取", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-text-workers-"));
+  const seed = openDatabase(dataRoot);
+  try {
+    for (let index = 1; index <= TEXT_JOB_WORKER_COUNT + 1; index += 1) {
+      createJob(seed.database, { id: `text_${index}`, type: FULL_BOOK_PLAN_JOB_TYPE, payload: {} }, index);
+      createJob(seed.database, { id: `media_${index}`, type: PLACEHOLDER_VIDEO_JOB_TYPE, payload: {} }, 100 + index);
+    }
+  } finally {
+    seed.close();
+  }
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => { release = resolve; });
+  const textOwners = new Set<string>();
+  const mediaOwners = new Set<string>();
+  const app = buildApp({
+    dataRoot,
+    logger: false,
+    jobPollMs: 5,
+    jobWorker: { workerId: "pool", leaseMs: 1_000, heartbeatMs: 100 },
+    jobHandlers: {
+      [FULL_BOOK_PLAN_JOB_TYPE]: async (context) => {
+        textOwners.add(context.job.leaseOwner!);
+        await wait;
+        return {};
+      },
+      [PLACEHOLDER_VIDEO_JOB_TYPE]: async (context) => {
+        mediaOwners.add(context.job.leaseOwner!);
+        await wait;
+        return {};
+      },
+    },
+  });
+  try {
+    await app.ready();
+    await waitUntil(() => textOwners.size === TEXT_JOB_WORKER_COUNT && mediaOwners.size === 1);
+    assert.ok([...textOwners].every((owner) => owner.startsWith("pool_text_")));
+    assert.deepEqual([...mediaOwners], ["pool"]);
+    assert.equal(textOwners.size, 4);
+    assert.equal(mediaOwners.size, 1);
+    let closed = false;
+    const closing = app.close().then(() => { closed = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closed, false);
+    release();
+    await closing;
+  } finally {
+    release?.();
+    await app.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
 
 test("健康检查返回服务状态", async () => {
   const dataRoot = await mkdtemp(join(tmpdir(), "narralume-app-"));

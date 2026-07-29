@@ -11,17 +11,29 @@ import {
   textModelRequest,
   type ChapterEvidenceAtom,
 } from "./chapter-event-analyzer.js";
+import { TEXT_MODEL_REQUEST_CONCURRENCY } from "./text-model-concurrency.js";
 
 test("文本模型请求默认保持非流式，只有显式选择才发送 stream", () => {
   const normal = JSON.parse(textModelRequest({
     baseUrl: "https://model.example/v1", apiKey: "key", model: "model", providerId: "provider",
   }, "input").body) as Record<string, unknown>;
-  const streamed = JSON.parse(textModelRequest({
+  assert.equal("stream" in normal, false);
+});
+
+test("文本模型请求按协议发送任务级输出上限并保持流式", () => {
+  const responses = JSON.parse(textModelRequest({
+    baseUrl: "https://model.example/v1", apiKey: "key", model: "model", providerId: "provider",
+  }, "input", 32768, true).body) as Record<string, unknown>;
+  const messages = JSON.parse(textModelRequest({
     baseUrl: "https://model.example/v1", apiKey: "key", model: "model", providerId: "provider",
     protocol: "anthropic-message",
   }, "input", 8192, true).body) as Record<string, unknown>;
-  assert.equal("stream" in normal, false);
-  assert.equal(streamed.stream, true);
+  assert.equal(responses.max_output_tokens, 32768);
+  assert.equal(responses.stream, true);
+  assert.equal("max_tokens" in responses, false);
+  assert.equal(messages.max_tokens, 8192);
+  assert.equal(messages.stream, true);
+  assert.equal("max_output_tokens" in messages, false);
 });
 
 test("新章节分析在冻结输入前按固定优先级追加产品要求与本书要求", () => {
@@ -148,6 +160,27 @@ test("Abort 后不触发证据纠错请求", async () => {
 
   await assert.rejects(() => analyzer({ chapterId: "chapter", atoms, signal: controller.signal }), /未知证据 ID/);
   assert.equal(calls, 1);
+});
+
+test("文本模型闸门排队取消后不发送章节分析请求", async () => {
+  const releases: Array<() => void> = [];
+  let calls = 0;
+  const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async () => {
+    calls += 1;
+    await new Promise<void>((resolve) => releases.push(resolve));
+    return streamedModelResponse({ events: [] });
+  }) as typeof fetch);
+  const running = Array.from({ length: TEXT_MODEL_REQUEST_CONCURRENCY }, (_, index) => analyzer({ chapterId: `chapter-${index}`, atoms }));
+  while (calls < TEXT_MODEL_REQUEST_CONCURRENCY) await new Promise((resolve) => setImmediate(resolve));
+
+  const controller = new AbortController();
+  const queued = analyzer({ chapterId: "chapter-queued", atoms, signal: controller.signal });
+  controller.abort(new Error("cancelled while queued"));
+  await assert.rejects(queued, /cancelled while queued/);
+  assert.equal(calls, TEXT_MODEL_REQUEST_CONCURRENCY);
+
+  releases.splice(0).forEach((release) => release());
+  await Promise.all(running);
 });
 
 test("分批合并后为重复事件身份稳定分配 occurrence", async () => {

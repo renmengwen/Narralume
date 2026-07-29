@@ -8,12 +8,14 @@ import test from "node:test";
 import type { ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import {
   ASSET_PROMPT_DRAFT_JOB_TYPE,
+  createOpenAiAssetPromptDraftGenerator,
   createAssetPromptDraftJobHandler,
   enqueueAssetPromptDraftJob,
 } from "./asset-prompt-draft-job.js";
 import { openDatabase } from "./database.js";
 import { getJob } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
+import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 
 const config: ChapterTextModelConfig = {
   baseUrl: "https://unused.invalid/v1", apiKey: "unused", model: "fixture-model", providerId: "fixture-provider",
@@ -57,6 +59,21 @@ const output = {
   styleConstraints: "禁止水印、无来源文字和现代品牌",
   prompt: "中景正视石门缓慢打开，禁止水印、无来源文字和现代品牌",
 };
+
+test("资产 Prompt 草稿模型请求经过共享文本并发闸门", async (t) => {
+  let gateRuns = 0;
+  t.mock.method(textModelConcurrencyGate, "run", async (_signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    gateRuns += 1; return task();
+  });
+  const generate = createOpenAiAssetPromptDraftGenerator(config, (async () => new Response(
+    JSON.stringify({ output_text: JSON.stringify(output) }),
+    { headers: { "content-type": "application/json" } },
+  )) as typeof fetch);
+  assert.deepEqual(await generate({
+    prompt: "生成草稿", signal: new AbortController().signal, onActivity: () => undefined,
+  }), output);
+  assert.equal(gateRuns, 1);
+});
 
 test("资产 Prompt 草稿只写现有 Job/checkpoint，不创建图片、审核或视觉绑定", async () => {
   const setup = await fixture();

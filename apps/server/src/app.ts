@@ -164,6 +164,16 @@ import {
   SeriesPipelineError,
 } from "./series-pipeline-store.js";
 
+export const TEXT_JOB_WORKER_COUNT = 4;
+const TEXT_JOB_TYPES = new Set([
+  EPISODE_PLAN_JOB_TYPE,
+  FULL_BOOK_PLAN_JOB_TYPE,
+  BOOK_STORY_BIBLE_JOB_TYPE,
+  EPISODE_SCRIPT_GENERATION_JOB_TYPE,
+  EPISODE_RECOMMENDATION_JOB_TYPE,
+  ASSET_PROMPT_DRAFT_JOB_TYPE,
+]);
+
 interface BuildAppOptions {
   dataRoot?: string;
   logger?: boolean;
@@ -453,10 +463,12 @@ export function buildApp(options: BuildAppOptions = {}) {
   supportedJobTypes.add(TTS_CALIBRATION_JOB_TYPE);
   let worker: JobWorker;
   let chapterWorkers: JobWorker[];
+  let textWorkers: JobWorker[];
   let pipelineWorker: SeriesPipelineWorker;
   try {
     const generalJobHandlers = Object.fromEntries(
-      Object.entries(jobHandlers).filter(([type]) => type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE),
+      Object.entries(jobHandlers).filter(([type]) =>
+        type !== CHAPTER_EVENTS_ANALYZE_JOB_TYPE && !TEXT_JOB_TYPES.has(type)),
     );
     worker = new JobWorker(connection.database, generalJobHandlers, {
       workerId: options.jobWorker?.workerId ?? `local_${randomUUID()}`,
@@ -474,6 +486,20 @@ export function buildApp(options: BuildAppOptions = {}) {
         heartbeatMs: options.jobWorker?.heartbeatMs,
         retryDelayMs: options.jobWorker?.retryDelayMs,
         onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "章节分析 Worker 运行异常")),
+      },
+    ));
+    const textJobHandlers = Object.fromEntries(
+      Object.entries(jobHandlers).filter(([type]) => TEXT_JOB_TYPES.has(type)),
+    );
+    textWorkers = Array.from({ length: TEXT_JOB_WORKER_COUNT }, (_, index) => new JobWorker(
+      connection.database,
+      textJobHandlers,
+      {
+        workerId: `${options.jobWorker?.workerId ?? "local"}_text_${index + 1}_${randomUUID()}`,
+        leaseMs: options.jobWorker?.leaseMs,
+        heartbeatMs: options.jobWorker?.heartbeatMs,
+        retryDelayMs: options.jobWorker?.retryDelayMs,
+        onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "文本模型 Worker 运行异常")),
       },
     ));
     const pipelineService = new SeriesPipelineService({
@@ -498,11 +524,13 @@ export function buildApp(options: BuildAppOptions = {}) {
     pipelineWorker.start(options.pipelinePollMs);
     if (supportedJobTypes.size > 0) worker.start(options.jobPollMs);
     for (const chapterWorker of chapterWorkers) chapterWorker.start(options.jobPollMs);
+    for (const textWorker of textWorkers) textWorker.start(options.jobPollMs);
   });
   app.addHook("onClose", async () => {
     await pipelineWorker.stop();
     await worker.stop();
     await Promise.all(chapterWorkers.map((chapterWorker) => chapterWorker.stop()));
+    await Promise.all(textWorkers.map((textWorker) => textWorker.stop()));
     connection.close();
   });
   app.addContentTypeParser(

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { responseJson } from "../../client-logic";
 import { assembleImagePrompt } from "../../production-logic";
 import type { JobRecord } from "../types";
-import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "./asset-candidate-editor";
+import { assetGapCounts, assetPromptDraftFromJob, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "./asset-candidate-editor";
 import type { AssetGroup, AssetRecord, AssetType, CandidateRecord, CandidateReviewEvent, EpisodeRecord, PromptParts } from "./types";
 import { flattenAssets } from "./types";
 
@@ -28,6 +28,8 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
   const [promptParts, setPromptParts] = useState<PromptParts>({ evidence: "", sceneIntent: "", subjectAction: "", environment: "", lightingComposition: "", styleConstraints: "写实悬疑，人物与年代细节一致，不虚构原文没有的品牌和文字" });
   const [promptOverride, setPromptOverride] = useState<string>();
   const [derivedFromCandidateId, setDerivedFromCandidateId] = useState<string>();
+  const [draftKind, setDraftKind] = useState<"character" | "scene" | "prop" | "story">("character");
+  const appliedDraftJobId = useRef<string | undefined>(undefined);
   const [reviewHistory, setReviewHistory] = useState<Record<string, CandidateReviewEvent[]>>({});
   const allAssets = useMemo(() => flattenAssets(assets), [assets]);
   const selectedAsset = allAssets.find((asset) => asset.id === selectedAssetId);
@@ -54,6 +56,7 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
     setCandidatesByAsset(snapshot.candidates);
     const nextId = snapshot.flattened.some((asset) => asset.id === preferredId) ? preferredId : snapshot.flattened[0]?.id;
     setSelectedAssetId(nextId);
+    setDraftKind(snapshot.flattened.find((asset) => asset.id === nextId)?.type ?? "character");
     selectedAssetIdRef.current = nextId;
     onAssetChange(nextId);
     return snapshot.flattened.length;
@@ -105,6 +108,17 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
       .catch((error) => setStatus(`生图候选回读失败：${(error as Error).message}`));
   }, [currentJob?.id, completedAssetId, allAssets]);
 
+  useEffect(() => {
+    if (!selectedAsset || currentJob?.id === appliedDraftJobId.current) return;
+    const draft = assetPromptDraftFromJob(currentJob, selectedAsset.id);
+    if (!draft) return;
+    appliedDraftJobId.current = currentJob!.id;
+    setPromptParts(draft.parts);
+    setPromptOverride(draft.prompt);
+    setDerivedFromCandidateId(undefined);
+    setStatus("资产 Prompt 草稿已生成并回填，请修改确认后再创建生图任务");
+  }, [currentJob?.id, currentJob?.status, selectedAsset?.id]);
+
   function beginMutation(message: string) {
     if (externalBusy || mutationLatch.current) return false;
     mutationLatch.current = true;
@@ -118,7 +132,7 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
     setMutating(false);
   }
 
-  function chooseAsset(id: string) { selectedAssetIdRef.current = id; setSelectedAssetId(id); setPromptOverride(undefined); setDerivedFromCandidateId(undefined); onAssetChange(id); setStatus("已切换资产；候选图按该资产独立显示"); }
+  function chooseAsset(id: string) { const asset = allAssets.find((item) => item.id === id); selectedAssetIdRef.current = id; setSelectedAssetId(id); setDraftKind(asset?.type ?? "character"); setPromptOverride(undefined); setDerivedFromCandidateId(undefined); onAssetChange(id); setStatus("已切换资产；候选图按该资产独立显示"); }
   function updatePromptPart(key: keyof PromptParts, value: string) { setPromptOverride(undefined); setDerivedFromCandidateId(undefined); setPromptParts((current) => ({ ...current, [key]: value })); }
   function updatePrompt(value: string) { setPromptOverride(value); }
 
@@ -195,6 +209,19 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
     finally { endMutation(); }
   }
 
+  async function generatePromptDraft() {
+    if (!selectedAsset || !episode || !beginMutation("正在创建可恢复的资产 Prompt 草稿任务…")) return;
+    try {
+      const body = await responseJson<{ message: string; job: { id: string } }>(await fetch("/api/jobs", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "asset_prompt_draft_generate", payload: { episodeId: episode.id, assetId: selectedAsset.id, draftKind } }),
+      }));
+      onJobCreated(body.job.id);
+      setStatus(body.message);
+    } catch (error) { setStatus(`资产 Prompt 草稿创建失败：${(error as Error).message}`); }
+    finally { endMutation(); }
+  }
+
   async function reviewCandidate(candidate: CandidateRecord, action: "approve" | "reject" | "note", note?: string) {
     if (!beginMutation(action === "approve" ? "正在批准候选图…" : action === "reject" ? "正在淘汰候选图…" : "正在记录审核备注…")) return false;
     try {
@@ -215,5 +242,5 @@ export function useAssetWorkspace({ seriesId, episodeIndex, initialAssetId, busy
     finally { endMutation(); }
   }
 
-  return { assets, allAssets, episode, selectedAsset, candidates, gaps, busy, newAssetName, setNewAssetName, newAssetType, setNewAssetType, parentAssetId, setParentAssetId, stateLabel, setStateLabel, aliasDraft, setAliasDraft, promptParts, updatePromptPart, prompt, updatePrompt, derivedFromCandidateId, chooseAsset, createAsset, addAlias, uploadCandidate, generateCandidate, restoreCandidatePrompt, reviewHistory, loadReviewHistory, reviewCandidate };
+  return { assets, allAssets, episode, selectedAsset, candidates, gaps, busy, newAssetName, setNewAssetName, newAssetType, setNewAssetType, parentAssetId, setParentAssetId, stateLabel, setStateLabel, aliasDraft, setAliasDraft, promptParts, updatePromptPart, prompt, updatePrompt, derivedFromCandidateId, draftKind, setDraftKind, generatePromptDraft, chooseAsset, createAsset, addAlias, uploadCandidate, generateCandidate, restoreCandidatePrompt, reviewHistory, loadReviewHistory, reviewCandidate };
 }

@@ -45,6 +45,14 @@ export function allowedSourceIndexes(kind: ScriptVersionKind, episodeSourceIndex
     : [...new Set(parent?.paragraphs.flatMap((paragraph) => paragraph.sources.map((source) => source.episodeSourceIndex)) ?? [])];
 }
 
+export function isFinishedNarrationVersion(version: ScriptVersion | undefined) {
+  return version?.kind === "packaged" && version.contractVersion === 6 && version.parentVersionId === null;
+}
+
+export function scriptWorkspaceContractVersion(scripts: ScriptVersion[]): 5 | 6 {
+  return isFinishedNarrationVersion(scripts.filter((item) => item.kind === "packaged").at(-1)) ? 6 : 5;
+}
+
 export function scriptPostPayload(kind: ScriptVersionKind, paragraphs: ScriptParagraphDraft[], parent?: ScriptVersion) {
   if (kind === "packaged" && (!parent || parent.kind !== "faithful")) throw new Error("成片旁白稿必须选择同一分集的原著还原稿版本");
   const allowed = new Set(allowedSourceIndexes(kind, [], parent));
@@ -94,9 +102,16 @@ export function completedEpisodeScriptVersions(
   if (job?.status !== "succeeded" || !episodeScriptJobMatchesIdentity(job, seriesId, episodeIndex, episodeId)) {
     return undefined;
   }
-  const result = job.result as { faithfulVersionId?: unknown; packagedVersionId?: unknown } | null | undefined;
+  const result = job.result as {
+    contractVersion?: unknown; faithfulVersionId?: unknown; packagedVersionId?: unknown;
+    finishedNarrationVersionId?: unknown;
+  } | null | undefined;
+  if (result?.contractVersion === 6 && typeof result.packagedVersionId === "string" &&
+      result.finishedNarrationVersionId === result.packagedVersionId) {
+    return { contractVersion: 6 as const, packagedVersionId: result.packagedVersionId };
+  }
   return typeof result?.faithfulVersionId === "string" && typeof result.packagedVersionId === "string"
-    ? { faithfulVersionId: result.faithfulVersionId, packagedVersionId: result.packagedVersionId }
+    ? { contractVersion: 5 as const, faithfulVersionId: result.faithfulVersionId, packagedVersionId: result.packagedVersionId }
     : undefined;
 }
 

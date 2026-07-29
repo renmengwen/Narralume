@@ -53,6 +53,7 @@ export interface ScriptVersion {
   id: string;
   episodeId: string;
   kind: ScriptVersionKind;
+  contractVersion: 5 | 6;
   versionNumber: number;
   parentVersionId: string | null;
   contentHash: string;

@@ -44,7 +44,7 @@ import {
   updateWorkspaceStatusLayer,
 } from "../src/production-logic.ts";
 import { chapterAnalysisJobPayload, chapterEventDraft, chapterEventsJobPayload, remainingChapterEventPageOffsets } from "../src/production/chapter-event-editor.ts";
-import { assetGapCounts, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "../src/production/assets/asset-candidate-editor.ts";
+import { assetGapCounts, assetPromptDraftFromJob, canApplyCandidateRefresh, candidatePromptJobId, candidateUploadRequest, generatedCandidateAssetId, promptFromCandidateJob } from "../src/production/assets/asset-candidate-editor.ts";
 import type { AssetRecord, CandidateRecord } from "../src/production/assets/types.ts";
 import {
   consumeEpisodeRecommendation, createEpisodeHydrationCoordinator, emptyEpisodeDraft, episodeDraft,
@@ -67,11 +67,13 @@ import {
   completedEpisodeScriptVersions,
   episodeScriptJobMatchesIdentity,
   episodeScriptCalibration,
+  isFinishedNarrationVersion,
   isScriptDraftDirty,
   resolveEpisodeScriptWorkspaceStatus,
   scriptDraft,
   scriptDraftSignature,
   scriptPostPayload,
+  scriptWorkspaceContractVersion,
 } from "../src/production/scripts/script-editor.ts";
 import { visualCandidateState } from "../src/production/visual/visual-editor.ts";
 import { AudioStage } from "../src/production/audio/AudioStage.tsx";
@@ -230,12 +232,14 @@ test("Accordion 组件可导出并用于页面折叠结构", () => {
 test("稿件段落默认折叠长引用并使用面向用户的两版稿件名称", () => {
   const source = readFileSync(new URL("../src/production/scripts/ScriptStage.tsx", import.meta.url), "utf8");
   assert.match(source, /<Accordion type="single" collapsible/u);
-  assert.match(source, /已选 \{paragraph\.sourceIndexes\.length\} \/ \{sources\.length\}/u);
+  assert.match(source, /已选 \{paragraph\.sourceIndexes\.length\} \/ \{visibleSources\.length\}/u);
   assert.match(source, /max-h-80.*overflow-y-auto/u);
   assert.match(source, /原著还原稿/u);
   assert.match(source, /成片旁白稿/u);
   assert.equal(source.includes("忠实稿版本"), false);
   assert.equal(source.includes("包装稿版本"), false);
+  assert.match(source, /v6 单稿合同/u);
+  assert.match(source, /readOnly=\{finishedNarration\}/u);
 });
 
 test("生图提示词按事实、资产、画幅和风格分段组装", () => {
@@ -529,7 +533,7 @@ test("忠实稿裁剪正文、来源去重并拒绝空段落或空来源", () =>
 test("包装稿只允许忠实父稿冻结的来源", () => {
   const parent = {
     id: "faithful_1", episodeId: "episode_1", kind: "faithful" as const, versionNumber: 1,
-    parentVersionId: null, contentHash: "hash", paragraphs: [{ text: "忠实稿", sources: [
+    contractVersion: 5 as const, parentVersionId: null, contentHash: "hash", paragraphs: [{ text: "忠实稿", sources: [
       { episodeSourceIndex: 2, chapterId: "chapter_1", sourceEventId: "event_2", byteStart: 1, byteEnd: 2, sourceHash: "hash_2" },
       { episodeSourceIndex: 2, chapterId: "chapter_1", sourceEventId: "event_2", byteStart: 1, byteEnd: 2, sourceHash: "hash_2" },
     ] }],
@@ -545,7 +549,7 @@ test("包装稿只允许忠实父稿冻结的来源", () => {
 test("服务端稿件版本恢复草稿时按来源序号去重", () => {
   const version = {
     id: "script_1", episodeId: "episode_1", kind: "faithful" as const, versionNumber: 1,
-    parentVersionId: null, contentHash: "hash", paragraphs: [{ text: "正文", sources: [
+    contractVersion: 5 as const, parentVersionId: null, contentHash: "hash", paragraphs: [{ text: "正文", sources: [
       { episodeSourceIndex: 0, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 0, byteEnd: 3, sourceHash: "hash_1" },
       { episodeSourceIndex: 0, chapterId: "chapter_1", sourceEventId: "event_1", byteStart: 0, byteEnd: 3, sourceHash: "hash_1" },
     ] }],
@@ -559,6 +563,36 @@ test("稿件 dirty 判断覆盖取消或确认载入版本前的草稿保护", (
   assert.equal(isScriptDraftDirty(signature, "faithful", "", [{ key: "new", text: "原稿", sourceIndexes: [1, 2] }]), false);
   assert.equal(isScriptDraftDirty(signature, "faithful", "", [{ key: "p1", text: "已修改", sourceIndexes: [1, 2] }]), true);
   assert.equal(isScriptDraftDirty(signature, "packaged", "faithful_1", draft), true);
+});
+
+test("资产 Prompt 草稿只从匹配资产的成功任务回填可编辑字段", () => {
+  const result = {
+    evidence: "原文事实", sceneIntent: "场景意图", subjectAction: "主体动作",
+    environment: "环境", lightingComposition: "光线构图", styleConstraints: "风格约束", prompt: "完整草稿",
+  };
+  const job = {
+    id: "job_asset_prompt_1", type: "asset_prompt_draft_generate", status: "succeeded" as const,
+    progress: 1, attempts: 1, maxAttempts: 3, cancelRequested: false, errorMessage: null,
+    payload: { assetId: "asset_a" }, result,
+  };
+  assert.deepEqual(assetPromptDraftFromJob(job, "asset_a"), {
+    parts: { evidence: "原文事实", sceneIntent: "场景意图", subjectAction: "主体动作", environment: "环境", lightingComposition: "光线构图", styleConstraints: "风格约束" },
+    prompt: "完整草稿",
+  });
+  assert.equal(assetPromptDraftFromJob(job, "asset_b"), undefined);
+  assert.equal(assetPromptDraftFromJob({ ...job, status: "running" }, "asset_a"), undefined);
+});
+
+test("v6 单稿必须同时满足合同版本与无父稿身份，不能只靠 parent null 推断", () => {
+  const standalone = {
+    id: "packaged_v6", episodeId: "episode_1", kind: "packaged" as const, contractVersion: 6 as const,
+    versionNumber: 1, parentVersionId: null, contentHash: "hash", paragraphs: [],
+  };
+  assert.equal(isFinishedNarrationVersion(standalone), true);
+  assert.equal(scriptWorkspaceContractVersion([standalone]), 6);
+  assert.equal(isFinishedNarrationVersion({ ...standalone, contractVersion: 5 }), false);
+  assert.equal(isFinishedNarrationVersion({ ...standalone, parentVersionId: "faithful_1" }), false);
+  assert.equal(scriptWorkspaceContractVersion([{ ...standalone, contractVersion: 5 }]), 5);
 });
 
 test("批准与撤回 payload 始终携带当前 revision", () => {
@@ -601,9 +635,16 @@ test("长稿终态恢复只消费同 identity 的成功版本结果", () => {
     result: { faithfulVersionId: "faithful_1", packagedVersionId: "packaged_1" },
   };
   assert.deepEqual(completedEpisodeScriptVersions(job, "series_1", 2, "episode_2"), {
+    contractVersion: 5,
     faithfulVersionId: "faithful_1",
     packagedVersionId: "packaged_1",
   });
+  assert.deepEqual(completedEpisodeScriptVersions({ ...job, result: {
+    contractVersion: 6, packagedVersionId: "packaged_v6", finishedNarrationVersionId: "packaged_v6",
+  } }, "series_1", 2, "episode_2"), { contractVersion: 6, packagedVersionId: "packaged_v6" });
+  assert.equal(completedEpisodeScriptVersions({ ...job, result: {
+    contractVersion: 6, packagedVersionId: "packaged_v6", finishedNarrationVersionId: "other",
+  } }, "series_1", 2, "episode_2"), undefined);
   assert.equal(completedEpisodeScriptVersions({ ...job, status: "failed" }, "series_1", 2, "episode_2"), undefined);
   assert.equal(completedEpisodeScriptVersions(job, "series_1", 3, "episode_2"), undefined);
   assert.equal(completedEpisodeScriptVersions({ ...job, result: {} }, "series_1", 2, "episode_2"), undefined);

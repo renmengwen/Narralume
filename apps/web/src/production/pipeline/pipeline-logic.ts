@@ -19,6 +19,13 @@ export interface SeriesPipelineRun {
   sourceEndChapterId: string;
   failureCode: string | null;
   failureMessage: string | null;
+  storyBibleId: string | null;
+  planningContractVersion?: 1 | 2;
+  scriptContractVersion?: 5 | 6;
+  episodeRanges?: Array<{ episodeIndex: number; startChapterId: string; endChapterId: string }> | null;
+  productPromptVersion?: string | null;
+  bookPromptProfileRevision?: number | null;
+  bookPromptProfileHash?: string | null;
   progress: {
     chapterAnalysis: { completed: number; total: number; reused: number; queued: number; running: number; failed: number };
     storyBible: { completed: number; total: number; steps: { completed: number; total: number } | null };
@@ -51,15 +58,17 @@ export interface PipelineCreateInput {
   sourceEndChapterId: string;
 }
 
-export function pipelineStatusPresentation(status: SeriesPipelineStatus): {
+export function pipelineStatusPresentation(status: SeriesPipelineStatus, planningContractVersion: 1 | 2 = 1): {
   heading: string;
   label: string;
   activeStage?: "storyBible" | "episodePlan" | "scripts";
   stageDetail?: string;
 } {
   const labels: Record<SeriesPipelineStatus, string> = {
-    configured: "已配置", analyzing_chapters: "分析章节", building_story_bible: "构建故事圣经",
-    planning_episodes: "规划分集", validating_plan: "校验计划", freezing_plan: "冻结计划",
+    configured: "已配置", analyzing_chapters: "分析章节", building_story_bible: "构建全书世界观",
+    planning_episodes: planningContractVersion === 2 ? "逐集局部规划" : "规划分集",
+    validating_plan: planningContractVersion === 2 ? "校验局部规划" : "校验计划",
+    freezing_plan: planningContractVersion === 2 ? "冻结分集方案" : "冻结计划",
     generating_scripts: "生成稿件", checking_coverage: "检查覆盖", awaiting_review: "等待审核",
     paused: "已暂停", failed: "执行失败", cancelled: "已取消", completed: "已完成",
   };
@@ -131,9 +140,11 @@ export function pipelineStatusText(run: SeriesPipelineRun) {
   }
   if (run.status === "configured") return "全本改写任务已配置，等待开始章节分析。";
   if (run.status === "analyzing_chapters") return "正在准备下一章分析任务。";
-  if (run.status === "building_story_bible") return "章节分析已完成，等待故事圣经阶段。";
+  if (run.status === "building_story_bible") return "章节分析已完成，正在构建全书世界观。";
   if (run.status === "planning_episodes" || run.status === "validating_plan" || run.status === "freezing_plan") {
-    return "正在生成并校验全书分集方案。";
+    return run.planningContractVersion === 2
+      ? "正在逐集生成局部规划，全部校验通过后一次冻结分集方案。"
+      : "正在生成并校验全书分集方案。";
   }
   if (run.status === "generating_scripts") return "正在生成全本稿件。";
   if (run.status === "checking_coverage") return "稿件生成完成，正在检查完整性。";

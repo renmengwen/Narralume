@@ -1,5 +1,5 @@
 import type { JobRecord } from "../types";
-import type { AssetGapCounts, AssetRecord, CandidateRecord } from "./types";
+import type { AssetGapCounts, AssetRecord, CandidateRecord, PromptParts } from "./types";
 
 const ALLOWED_UPLOAD_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
@@ -48,4 +48,18 @@ export function promptFromCandidateJob(candidate: CandidateRecord, job: JobRecor
   if (payload.assetId !== candidate.assetId || payload.requestHash !== candidate.source.requestHash ||
       typeof payload.prompt !== "string" || !payload.prompt.trim()) return undefined;
   return payload.prompt;
+}
+
+export function assetPromptDraftFromJob(job: JobRecord | undefined, assetId: string) {
+  if (job?.type !== "asset_prompt_draft_generate" || job.status !== "succeeded" ||
+      !job.payload || typeof job.payload !== "object" || (job.payload as { assetId?: unknown }).assetId !== assetId ||
+      !job.result || typeof job.result !== "object") return undefined;
+  const result = job.result as Partial<PromptParts> & { prompt?: unknown };
+  const fields: Array<keyof PromptParts> = ["evidence", "sceneIntent", "subjectAction", "environment", "lightingComposition", "styleConstraints"];
+  if (fields.some((field) => typeof result[field] !== "string" || !result[field]!.trim()) ||
+      typeof result.prompt !== "string" || !result.prompt.trim()) return undefined;
+  return {
+    parts: Object.fromEntries(fields.map((field) => [field, result[field]])) as unknown as PromptParts,
+    prompt: result.prompt,
+  };
 }

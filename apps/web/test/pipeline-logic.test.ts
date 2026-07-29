@@ -6,6 +6,7 @@ import { renderToString } from "react-dom/server";
 import { ChapterEventsStage } from "../src/production/ChapterEventsStage.tsx";
 import { PipelineSetup } from "../src/production/pipeline/PipelineSetup.tsx";
 import { PipelineProgress } from "../src/production/pipeline/PipelineProgress.tsx";
+import { mapFullBookWorldview, readFullBookWorldview, type FullBookWorldviewContent } from "../src/production/pipeline/full-book-worldview.ts";
 import {
   formatPipelineDuration,
   pipelineChapterEventsReadOnly,
@@ -42,6 +43,7 @@ function run(change: Partial<SeriesPipelineRun> = {}): SeriesPipelineRun {
     sourceEndChapterId: "chapter_3",
     failureCode: null,
     failureMessage: null,
+    storyBibleId: null,
     progress: {
       chapterAnalysis: { completed: 1, total: 3, reused: 1, queued: 1, running: 1, failed: 0 },
       storyBible: { completed: 0, total: 1, steps: null },
@@ -154,7 +156,7 @@ test("运行页如实展示后端冻结的旧任务单批单并发设置", () =>
   assert.doesNotMatch(html, />10章|>8批/);
 });
 
-test("故事圣经构建展示后端返回的真实步骤进度", () => {
+test("全书世界观构建展示后端返回的真实步骤进度", () => {
   const current = run({
     status: "building_story_bible",
     progress: {
@@ -164,11 +166,67 @@ test("故事圣经构建展示后端返回的真实步骤进度", () => {
     current: { stage: "story_bible", subjectType: "bible_chunk", subjectId: "chunk_1", jobId: "job_bible" },
   });
   const html = renderToString(createElement(PipelineProgress, {
-    run: current, chapters, operation: "正在构建故事圣经。", onControl: () => undefined, onReset: () => undefined,
+    run: current, chapters, operation: "正在构建全书世界观。", onControl: () => undefined, onReset: () => undefined,
   }));
   assert.match(html, /1\/91/);
   assert.match(html, /已完成 1\/91 个构建步骤/);
   assert.doesNotMatch(html, /单次模型请求不显示虚构百分比/);
+});
+
+test("当前 final 提供只读查看入口，未完成时不伪造空内容", () => {
+  const ready = renderToString(createElement(PipelineProgress, {
+    run: run({ storyBibleId: "bible_current" }), chapters, operation: "全书世界观已完成。",
+    onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(ready, /查看全书世界观/);
+  assert.match(ready, /不会触发重建或审批/);
+  const building = renderToString(createElement(PipelineProgress, {
+    run: run({ status: "building_story_bible" }), chapters, operation: "正在构建全书世界观。",
+    onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(building, /全书世界观尚不可用/);
+  assert.doesNotMatch(building, /查看全书世界观/);
+  const failed = renderToString(createElement(PipelineProgress, {
+    run: run({ status: "failed", failureMessage: "供应商响应无效" }), chapters, operation: "流水线失败。",
+    onControl: () => undefined, onReset: () => undefined,
+  }));
+  assert.match(failed, /全书世界观构建失败：供应商响应无效/);
+  assert.match(failed, /role="alert"/);
+});
+
+test("12 类内容映射保留每条事实的章节与来源展开信息", () => {
+  const source = { sourceEventIds: ["event_1"] };
+  const content: FullBookWorldviewContent = {
+    characters: [{ canonicalName: "林舟", aliases: [], identities: [{ text: "调查员", ...source }], motivations: [], stateChanges: [{ state: "进入旧站", chapterIds: ["chapter_1"], ...source }], ...source }],
+    relationships: [{ subject: "林舟", object: "沈岚", relation: "同伴", chapterIds: ["chapter_1"], ...source }],
+    locations: [{ name: "旧站", aliases: [], detail: "封闭车站", ...source }], organizations: [], items: [], concepts: [],
+    timeline: [{ summary: "进入旧站", chapterIds: ["chapter_1"], ...source }],
+    flashbacks: [{ summary: "旧站停运", startChapterId: "chapter_1", endChapterId: "chapter_1", ...source }],
+    plotThreads: [{ kind: "suspense", setup: "回声", revealCondition: null, resolution: null, chapterIds: ["chapter_1"], ...source }],
+    confusingFacts: [{ statement: "时间异常", clarification: "原因未明", ...source }],
+    spoilerRestrictions: [{ information: "侧门真相", forbiddenUntil: "chapter_3", ...source }],
+    properNouns: [{ term: "回声层", pronunciation: "huí shēng céng", aliases: [], ...source }],
+  };
+  const sections = mapFullBookWorldview(content);
+  assert.deepEqual(sections.map((item) => item.label), ["人物", "关系", "地点", "组织", "器物", "概念", "时间线", "回忆", "情节线", "疑难事实", "剧透限制", "专有名词"]);
+  assert.deepEqual(sections[0]!.entries[0]!.details.at(-1), {
+    label: "状态变化", text: "进入旧站", chapterIds: ["chapter_1"], sourceEventIds: ["event_1"],
+  });
+});
+
+test("查看客户端只发送 GET，不提交 mutation", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method: string | undefined }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), method: init?.method });
+    return Response.json({ worldview: { content: {}, metadata: {} } });
+  };
+  try {
+    await readFullBookWorldview("run/1", new AbortController().signal);
+    assert.deepEqual(calls, [{ url: "/api/pipeline-runs/run%2F1/full-book-worldview", method: "GET" }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("全书规划保留冻结产物计数并展示当前 Job 真实进度", () => {
@@ -209,6 +267,20 @@ test("全书规划保留冻结产物计数并展示当前 Job 真实进度", () 
     onReset: () => undefined,
   }));
   assert.match(queuedHtml, /当前任务等待执行；已尝试 2\/3 次/);
+});
+
+test("新合同展示逐集局部规划与单一成片旁白，旧合同保留历史名称", () => {
+  const render = (planningContractVersion: 1 | 2, scriptContractVersion: 5 | 6) => renderToString(createElement(PipelineProgress, {
+    run: run({ planningContractVersion, scriptContractVersion }), chapters,
+    operation: "已恢复全本改写任务。", onControl: () => undefined, onReset: () => undefined,
+  }));
+  const current = render(2, 6);
+  assert.match(current, /逐集局部规划/);
+  assert.match(current, />成片旁白稿</);
+  assert.doesNotMatch(current, /原著还原稿与成片旁白稿/);
+  const legacy = render(1, 5);
+  assert.match(legacy, /全书分集规划/);
+  assert.match(legacy, /原著还原稿与成片旁白稿/);
 });
 
 test("稿件阶段同时展示已持久双稿数与当前单集 Job 真实进度", () => {

@@ -1,8 +1,11 @@
+import { useState } from "react";
+
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "../../components/ui/alert-dialog";
 import type { Chapter } from "../types";
+import { FullBookWorldviewPanel } from "./FullBookWorldviewPanel";
 import { pipelineIsTerminal, pipelineStatusPresentation, pipelineStatusText, type SeriesPipelineRun } from "./pipeline-logic";
 
 type ControlAction = "pause" | "resume" | "retry" | "cancel";
@@ -16,15 +19,21 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
   onControl: (action: ControlAction) => void;
   onReset: () => void;
 }) {
+  const [showWorldview, setShowWorldview] = useState(false);
   const chapterName = (id: string) => {
     const chapter = chapters.find((item) => item.id === id);
     return chapter ? `第 ${chapter.chapter_index + 1} 章 · ${chapter.title}` : id;
   };
   const chapter = run.progress.chapterAnalysis;
   const story = run.progress.storyBible;
-  const presentation = pipelineStatusPresentation(run.status);
+  const presentation = pipelineStatusPresentation(run.status, run.planningContractVersion);
   const primaryAction = run.actions.canResume ? "resume" : run.actions.canRetry ? "retry" : undefined;
   const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败章节";
+  const worldviewUnavailable = run.status === "failed"
+    ? `全书世界观构建失败${run.failureMessage ? `：${run.failureMessage}` : "，请检查失败项后重试。"}`
+    : run.status === "paused" || run.status === "cancelled"
+      ? "全书世界观构建已中断；恢复或重试完成后可查看详情。"
+      : "全书世界观尚不可用；完成构建后可查看详情。";
   const stateMessage = run.current
     ? `当前对象：${chapterName(run.current.subjectId)}；任务 ${run.current.jobId}`
     : pipelineStatusText(run);
@@ -55,10 +64,16 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
 
       <div className="grid border border-[var(--border-subtle)]" aria-label="全本改写阶段进度">
         <ProgressRow label="章节事件分析" count={`${chapter.completed}/${chapter.total}`} detail={`复用 ${chapter.reused} · 排队 ${chapter.queued} · 执行中 ${chapter.running} · 失败 ${chapter.failed}`} />
-        <ProgressRow label="故事圣经构建" count={story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} />
-        <ProgressRow label="全书分集规划" count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
-        <ProgressRow label="原著还原稿与成片旁白稿" count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
+        <ProgressRow label="全书世界观构建" count={story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} />
+        <ProgressRow label={run.planningContractVersion === 2 ? "逐集局部规划" : "全书分集规划"} count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
+        <ProgressRow label={run.scriptContractVersion === 6 ? "成片旁白稿" : "原著还原稿与成片旁白稿"} count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
       </div>
+
+      {run.storyBibleId ? <div className="flex flex-wrap items-center justify-between gap-3 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3">
+        <div><strong className="text-sm">全书世界观已可查看</strong><span className="mt-1 block text-xs text-[var(--fg-tertiary)]">展示当前最终结果，不会触发重建或审批。</span></div>
+        <button type="button" className="min-h-11 rounded border border-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50" disabled={showWorldview} onClick={() => setShowWorldview(true)}>{showWorldview ? "正在查看全书世界观" : "查看全书世界观"}</button>
+      </div> : <p className="m-0 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-tertiary)]" role={run.status === "failed" ? "alert" : "status"}>{worldviewUnavailable}</p>}
+      {showWorldview ? <FullBookWorldviewPanel runId={run.id} chapters={chapters} onClose={() => setShowWorldview(false)} /> : null}
 
       {run.failures.length ? <section className="border border-[var(--danger)] bg-[var(--danger-soft)]" aria-labelledby="pipeline-failures-heading">
         <h3 id="pipeline-failures-heading" className="m-0 border-b border-[var(--danger)] px-4 py-3 text-sm font-semibold text-[var(--danger)]">失败章节 {run.failures.length} 项</h3>
@@ -103,7 +118,7 @@ function stageDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan"
   if (run.status === "paused") return "已暂停；已完成结果保留";
   if (run.status === "cancelled") return "已取消；不再派发任务";
   if (run.status === "failed" || run.failureMessage) return "存在失败项，请检查后重试";
-  const presentation = pipelineStatusPresentation(run.status);
+  const presentation = pipelineStatusPresentation(run.status, run.planningContractVersion);
   if (stage === "scripts" && run.status === "checking_coverage") return "稿件生成完成；正在检查完整性";
   if (presentation.activeStage === stage) {
     const steps = stage === "storyBible" ? run.progress.storyBible.steps : null;

@@ -6,10 +6,32 @@ import {
   formatPipelineDuration,
   pipelineCreateInput,
   pipelineRangeCount,
-  type PipelineCreateInput,
 } from "./pipeline-logic";
+import { adjustEpisodeBoundary, type PipelineCreateRequest } from "./pipeline-setup-logic";
+import { usePipelineSetup, type BookPromptProfileContent } from "./use-pipeline-setup";
 
-export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitting, operation, error, onCreate }: {
+const PROFILE_FIELDS: Array<[keyof BookPromptProfileContent, string, string]> = [
+  ["sharedInstructions", "全书共同要求", "适用于本书全部阶段的叙事口径、禁区或术语要求。"],
+  ["chapterAnalysisInstructions", "章节分析要求", "追加本书的事件提取侧重点。"],
+  ["storyBibleInstructions", "全书世界观要求", "追加人物、关系、地点、器物、时间线、悬念与剧透边界要求。"],
+  ["episodePlanningInstructions", "单集规划要求", "追加标题、故事弧、前情和下集钩子的本书要求。"],
+  ["narrationInstructions", "成片旁白要求", "追加讲述距离、语言风格和可朗读性要求。"],
+  ["assetInstructions", "资产 Prompt 要求", "追加人物、场景、道具或剧情插图草稿要求。"],
+];
+
+const PRODUCT_PROMPT_TITLES: Record<string, string> = {
+  chapterAnalysis: "章节分析",
+  storyBibleInterval: "全书世界观（区间整理）",
+  storyBibleFinal: "全书世界观（全书归一）",
+  episodePlanning: "逐集局部规划",
+  episodeSkeleton: "旁白 Skeleton",
+  finishedNarrationBeat: "成片旁白 Beat",
+  assetPromptDraft: "资产 Prompt 草稿",
+};
+
+export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy, loading, submitting, operation, error, onCreate }: {
+  bookId: string;
+  seriesId: string;
   chapters: Chapter[];
   chapterTotal: number;
   policy?: EpisodeDurationPolicy;
@@ -17,8 +39,9 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
   submitting: boolean;
   operation: string;
   error?: string;
-  onCreate: (input: PipelineCreateInput) => void;
+  onCreate: (input: PipelineCreateRequest) => void;
 }) {
+  const setup = usePipelineSetup(bookId, seriesId);
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
   const [episodeCount, setEpisodeCount] = useState("");
@@ -39,22 +62,53 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
 
   const rangeCount = pipelineRangeCount(chapters, startId, endId);
   const totalDuration = Number(episodeCount) * (targetDurationSeconds ?? 0);
-  const disabled = loading || submitting || !policy || !chapters.length;
+  const disabled = loading || submitting || !!setup.busy || !setup.ready || !policy || !chapters.length;
+  const chapterById = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+
+  function baseInput() {
+    if (!policy) throw new Error("单集时长策略尚未加载");
+    return pipelineCreateInput({
+      episodeCount: Number(episodeCount),
+      targetDurationSeconds: targetDurationSeconds ?? Number.NaN,
+      chapterBatchSize,
+      chapterConcurrency,
+      sourceStartChapterId: startId,
+      sourceEndChapterId: endId,
+    }, chapters, policy);
+  }
+
+  function invalidatePreview(change: () => void) {
+    change();
+    setup.setRanges(undefined);
+    setup.setConfirmed(false);
+    setValidationError(undefined);
+  }
+
+  async function preview() {
+    if (disabled) return;
+    try {
+      const input = baseInput();
+      setValidationError(undefined);
+      await setup.preview(input);
+    } catch (cause) {
+      setValidationError((cause as Error).message);
+    }
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!policy || disabled) return;
+    if (disabled) return;
     try {
-      const input = pipelineCreateInput({
-        episodeCount: Number(episodeCount),
-        targetDurationSeconds: targetDurationSeconds ?? Number.NaN,
-        chapterBatchSize,
-        chapterConcurrency,
-        sourceStartChapterId: startId,
-        sourceEndChapterId: endId,
-      }, chapters, policy);
+      const input = baseInput();
+      if (!setup.ranges || !setup.confirmed) throw new Error("请先预览并确认全部分集章节范围");
+      if (setup.dirty) throw new Error("本书专属提示词有未保存修改，请先保存再创建任务");
       setValidationError(undefined);
-      onCreate(input);
+      onCreate({
+        ...input,
+        episodeRanges: setup.ranges.map(({ episodeIndex, startChapterId, endChapterId }) => ({
+          episodeIndex, startChapterId, endChapterId,
+        })),
+      });
     } catch (cause) {
       setValidationError((cause as Error).message);
     }
@@ -64,29 +118,67 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
     <div className="mx-auto grid max-w-6xl gap-6">
       <div className="max-w-3xl">
         <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.14em] text-[var(--accent)]">全本改写 / 设置</p>
-        <h2 id="pipeline-setup-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">确认范围、成片规格与分析速度</h2>
-        <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">启动一次后，固定流水线将依次补齐章节分析、故事圣经、全书计划、原著还原稿和成片旁白稿。稿件与媒体仍由你逐集审核。</p>
+        <h2 id="pipeline-setup-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">确认范围、提示词与成片规格</h2>
+        <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">新任务将依次完成章节分析、全书世界观、逐集局部规划和单一成片旁白。先预览并确认连续章节分配，确认创建后才会开始可能产生费用的模型分析；稿件与媒体仍由你逐集审核。</p>
       </div>
 
-      <div className="min-h-11 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-secondary)]" role="status" aria-live="polite">
-        <span className="font-semibold text-[var(--fg-primary)]">当前状态：</span>{operation}
+      <div className="grid gap-2">
+        <div className="min-h-11 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-secondary)]" role="status" aria-live="polite">
+          <span className="font-semibold text-[var(--fg-primary)]">流水线状态：</span>{operation}
+        </div>
+        <div className="min-h-11 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-secondary)]" role="status" aria-live="polite">
+          <span className="font-semibold text-[var(--fg-primary)]">设置状态：</span>{setup.status}
+        </div>
       </div>
-      {error || validationError ? <div className="border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]" role="alert">{validationError ?? error}</div> : null}
+      {error || setup.error || validationError ? <div className="border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]" role="alert">{validationError ?? setup.error ?? error}</div> : null}
+
+      <section className="grid gap-4 border border-[var(--border-subtle)] p-4" aria-labelledby="book-prompt-profile-heading">
+        <div className="flex items-start justify-between gap-4 max-md:flex-col">
+          <div>
+            <h3 id="book-prompt-profile-heading" className="m-0 text-base font-semibold">本书专属提示词</h3>
+            <p className="mt-1 text-xs leading-6 text-[var(--fg-tertiary)]">本书专属要求不会修改全局提示词，只影响之后新建或显式重新生成的任务，且不能覆盖 Schema、来源范围、时长、审批或安全合同。</p>
+          </div>
+          <span className="font-mono text-xs text-[var(--fg-tertiary)]">{setup.profileRevision ? `revision ${setup.profileRevision}` : "尚未保存版本"}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+          {PROFILE_FIELDS.map(([field, label, hint]) => <label key={field} className="grid gap-2 text-sm font-semibold">{label}
+            <textarea className="min-h-24 resize-y rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] p-3 text-sm font-normal leading-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]" maxLength={20_000} disabled={disabled} value={setup.profile[field]} placeholder={hint} onChange={(event) => setup.setProfile((current) => ({ ...current, [field]: event.target.value }))} />
+            <span className="text-xs font-normal text-[var(--fg-tertiary)]">{hint}</span>
+          </label>)}
+        </div>
+        <div className="flex items-center justify-between gap-4 max-md:flex-col max-md:items-stretch">
+          <span className="text-xs text-[var(--fg-tertiary)]">{setup.dirty ? "有未保存修改。创建任务前必须先保存。" : setup.profileRevision ? "当前本书专属提示词已保存。" : "当前没有未保存修改；首次创建任务时会冻结空白版本。"}</span>
+          <button className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={disabled || !setup.dirty} onClick={() => void setup.saveProfile()}>{setup.busy === "profile" ? "正在保存提示词…" : "保存本书专属提示词"}</button>
+        </div>
+      </section>
+
+      <details className="border border-[var(--border-subtle)] bg-[var(--bg-canvas)]">
+        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]">高级：查看产品级提示词（只读）</summary>
+        <div className="grid gap-4 border-t border-[var(--border-subtle)] p-4">
+          <p className="m-0 font-mono text-xs text-[var(--fg-tertiary)]">{setup.productPrompts?.setVersion ?? "正在读取产品提示词版本…"}</p>
+          {setup.productPrompts ? Object.entries(setup.productPrompts.prompts).map(([key, prompt]) => <section key={key} className="border-t border-[var(--border-subtle)] pt-3">
+            <h4 className="m-0 text-sm font-semibold">{PRODUCT_PROMPT_TITLES[key] ?? key}</h4>
+            <p className="mt-1 font-mono text-[11px] text-[var(--fg-tertiary)]">{setup.productPrompts!.versions[key]}</p>
+            <pre className="mt-3 whitespace-pre-wrap rounded bg-[var(--bg-subtle)] p-3 text-xs leading-6 text-[var(--fg-secondary)]">{prompt}</pre>
+          </section>) : null}
+        </div>
+      </details>
 
       <form className="grid gap-5" onSubmit={submit}>
         <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
           <label className="grid gap-2 text-sm font-semibold">起始章节
-            <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-normal" disabled={disabled} value={startId} onChange={(event) => setStartId(event.target.value)}>
+            <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-normal" disabled={disabled} value={startId} onChange={(event) => invalidatePreview(() => setStartId(event.target.value))}>
               {chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.chapter_index + 1} 章 · {chapter.title}</option>)}
             </select>
           </label>
           <label className="grid gap-2 text-sm font-semibold">结束章节
-            <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-normal" disabled={disabled} value={endId} onChange={(event) => setEndId(event.target.value)}>
+            <select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-normal" disabled={disabled} value={endId} onChange={(event) => invalidatePreview(() => setEndId(event.target.value))}>
               {chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.chapter_index + 1} 章 · {chapter.title}</option>)}
             </select>
           </label>
           <label className="grid gap-2 text-sm font-semibold">总集数
-            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="1000" step="1" inputMode="numeric" placeholder="例如 100" disabled={disabled} value={episodeCount} onChange={(event) => setEpisodeCount(event.target.value)} />
+            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max={Math.max(1, rangeCount)} step="1" inputMode="numeric" placeholder="例如 100" disabled={disabled} value={episodeCount} onChange={(event) => invalidatePreview(() => setEpisodeCount(event.target.value))} />
+            <span className="text-xs font-normal text-[var(--fg-tertiary)]">每集至少包含一章，因此总集数不能超过选中章节数。</span>
           </label>
           <label className="grid gap-2 text-sm font-semibold">单集目标时长（秒）
             <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min={policy?.minimumSeconds} max={policy?.maximumSeconds} step={policy?.stepSeconds} disabled={disabled} value={targetDurationSeconds ?? ""} onChange={(event) => setTargetDurationSeconds(Number(event.target.value))} />
@@ -107,10 +199,47 @@ export function PipelineSetup({ chapters, chapterTotal, policy, loading, submitt
           <Fact label="选中范围" value={rangeCount ? `${rangeCount} 章` : "范围待修正"} />
           <Fact label="总目标时长" value={formatPipelineDuration(totalDuration)} />
         </dl>
-        <p className="m-0 text-xs leading-6 text-[var(--fg-tertiary)]">已有章节事件将在启动后由服务端按真实输入身份复用；创建成功后显示实际复用数量。</p>
+
         <div className="flex justify-end">
-          <button className="min-h-11 rounded border border-transparent bg-[var(--accent)] px-5 text-sm font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={disabled || !episodeCount || !rangeCount}>
-            {submitting ? "正在创建全本改写任务…" : "开始全本改写"}
+          <button className="min-h-11 rounded border border-[var(--border-strong)] px-5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={disabled || !episodeCount || !rangeCount} onClick={() => void preview()}>{setup.busy === "preview" ? "正在预览分集范围…" : "预览分集范围"}</button>
+        </div>
+
+        {setup.ranges ? <section className="grid gap-3 border border-[var(--border-subtle)] p-4" aria-labelledby="episode-range-preview-heading">
+          <div>
+            <h3 id="episode-range-preview-heading" className="m-0 text-base font-semibold">连续章节分配预览</h3>
+            <p className="mt-1 text-xs leading-6 text-[var(--fg-tertiary)]">每行范围连续、无重叠并覆盖全部所选章节。可调整相邻两集的边界，不会移动其他边界。</p>
+          </div>
+          <ol className="m-0 grid list-none gap-2 p-0">
+            {setup.ranges.map((range, index) => {
+              const start = chapterById.get(range.startChapterId);
+              const end = chapterById.get(range.endChapterId);
+              const next = setup.ranges![index + 1];
+              const choices = next ? chapters.filter((chapter) => chapter.chapter_index >= range.startChapterIndex && chapter.chapter_index < next.endChapterIndex) : [];
+              return <li key={range.episodeIndex} className="grid grid-cols-[72px_1fr_auto] items-center gap-3 border-t border-[var(--border-subtle)] py-3 first:border-t-0 max-md:grid-cols-1">
+                <span className="font-mono text-xs font-semibold">第 {range.episodeIndex} 集</span>
+                <span className="text-sm text-[var(--fg-secondary)]">第 {(start?.chapter_index ?? range.startChapterIndex) + 1} 章 {start?.title} → </span>
+                {next ? <label className="flex items-center gap-2 text-xs"><span>结束于</span><select className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 text-sm" disabled={disabled} value={range.endChapterId} onChange={(event) => {
+                  try {
+                    setup.setRanges(adjustEpisodeBoundary(setup.ranges!, index, event.target.value, chapters));
+                    setup.setConfirmed(false);
+                    setValidationError(undefined);
+                  } catch (cause) { setValidationError((cause as Error).message); }
+                }}>{choices.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.chapter_index + 1} 章 · {chapter.title}</option>)}</select></label>
+                  : <span className="text-sm">第 {(end?.chapter_index ?? range.endChapterIndex) + 1} 章 · {end?.title}</span>}
+                <span className="col-start-2 font-mono text-xs text-[var(--fg-tertiary)] max-md:col-start-1">{range.characterCount.toLocaleString("zh-CN")} 字</span>
+              </li>;
+            })}
+          </ol>
+          <label className="flex min-h-11 items-center gap-3 border-t border-[var(--border-subtle)] pt-3 text-sm font-semibold">
+            <input type="checkbox" className="size-4" disabled={disabled} checked={setup.confirmed} onChange={(event) => setup.setConfirmed(event.target.checked)} />
+            我已确认全部分集范围；创建后才开始可能产生费用的模型分析
+          </label>
+        </section> : null}
+
+        <p className="m-0 text-xs leading-6 text-[var(--fg-tertiary)]">已有章节事件将在启动后由服务端按真实输入身份复用；本操作不会自动批准任何稿件或媒体。</p>
+        <div className="flex justify-end">
+          <button className="min-h-11 rounded border border-transparent bg-[var(--accent)] px-5 text-sm font-semibold text-[var(--accent-contrast)] hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={disabled || !setup.confirmed || setup.dirty}>
+            {submitting ? "正在创建全本改写任务…" : "确认范围并开始全本改写"}
           </button>
         </div>
       </form>

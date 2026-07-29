@@ -14,6 +14,7 @@ import {
   scriptDraft,
   scriptDraftSignature,
   scriptPostPayload,
+  scriptWorkspaceContractVersion,
   resolveEpisodeScriptWorkspaceStatus,
   type ScriptParagraphDraft,
 } from "./script-editor";
@@ -93,6 +94,7 @@ export function useScriptWorkspace({
 
   const baseUrl = `/api/series/${encodeURIComponent(seriesId)}/episodes/${episodeIndex}`;
   const draftDirty = isScriptDraftDirty(initialDraftSignature, kind, parentVersionId, paragraphs);
+  const contractVersion = scriptWorkspaceContractVersion(scripts);
 
   useEffect(() => {
     onDraftDirtyChange?.(draftDirty);
@@ -135,14 +137,19 @@ export function useScriptWorkspace({
       setInitialDraftSignature(scriptDraftSignature("faithful", "", empty));
       return;
     }
+    const snapshotContractVersion = scriptWorkspaceContractVersion(snapshot.scripts);
+    const effectiveDraftKind = snapshotContractVersion === 6 ? "packaged" : draftKind;
+    setKind(effectiveDraftKind);
     const latestFaithful = snapshot.scripts.filter((item) => item.kind === "faithful").at(-1);
     const packaged = snapshot.scripts.filter((item) => item.kind === "packaged");
-    const latest = draftKind === "faithful" ? latestFaithful : packaged.at(-1);
+    const latest = effectiveDraftKind === "faithful" ? latestFaithful : packaged.at(-1);
     const nextParagraphs = scriptDraft(latest);
-    const nextParentVersionId = draftKind === "packaged" ? latest?.parentVersionId ?? latestFaithful?.id ?? "" : "";
+    const nextParentVersionId = effectiveDraftKind === "packaged" && snapshotContractVersion === 5
+      ? latest?.parentVersionId ?? latestFaithful?.id ?? ""
+      : "";
     setParagraphs(nextParagraphs);
     setParentVersionId(nextParentVersionId);
-    setInitialDraftSignature(scriptDraftSignature(draftKind, nextParentVersionId, nextParagraphs));
+    setInitialDraftSignature(scriptDraftSignature(effectiveDraftKind, nextParentVersionId, nextParagraphs));
     setSelectedPackagedId((current) => packaged.some((item) => item.id === current)
       ? current
       : snapshot.approval.scriptVersionId ?? packaged.at(-1)?.id ?? "");
@@ -235,14 +242,16 @@ export function useScriptWorkspace({
   }
 
   useEffect(() => {
-    if (!episode || consumedJobId.current === currentJob?.id ||
-        !completedEpisodeScriptVersions(currentJob, seriesId, episodeIndex, episode.id)) return;
+    const completed = completedEpisodeScriptVersions(currentJob, seriesId, episodeIndex, episode?.id);
+    if (!episode || consumedJobId.current === currentJob?.id || !completed) return;
     const expectedRoute = routeKey;
     setBusy(true); setStatus("跨章骨架与长稿已生成，正在回读不可变稿件版本…");
     void refreshAfterWrite(expectedRoute).then(() => {
       if (!mounted.current || currentRoute.current !== expectedRoute) return;
       consumedJobId.current = currentJob!.id;
-      setStatus("原著还原稿与成片旁白稿已生成并从持久层回读；仍需人工批准成片旁白稿");
+      setStatus(completed.contractVersion === 6
+        ? "成片旁白稿已逐段生成并从持久层回读；仍需人工批准"
+        : "原著还原稿与成片旁白稿已生成并从持久层回读；仍需人工批准成片旁白稿");
     }).catch((error) => {
       if (mounted.current && currentRoute.current === expectedRoute) setStatus(`长稿生成成功，但稿件回读失败：${(error as Error).message}`);
     }).finally(() => {
@@ -296,6 +305,10 @@ export function useScriptWorkspace({
 
   async function saveVersion() {
     if (writing.current || !episode) return;
+    if (contractVersion === 6) {
+      setStatus("成片旁白 v6 版本由流水线逐段生成；如需修改侧重点，请更新本书专属要求后显式重新生成");
+      return;
+    }
     writing.current = true;
     const expectedRoute = routeKey;
     setBusy(true); setStatus(`正在创建第 ${episodeIndex} 集${kind === "faithful" ? "原著还原稿" : "成片旁白稿"}不可变新版本…`);
@@ -344,7 +357,7 @@ export function useScriptWorkspace({
   }
 
   return {
-    episode, scripts, approval, kind, parentVersionId, paragraphs, selectedPackagedId,
+    episode, scripts, approval, kind, parentVersionId, paragraphs, selectedPackagedId, contractVersion,
     pendingLoadVersion, pendingKind,
     voice, rate, charactersPerSecond, narrationOccupancy, calibration,
     setVoice, setRate, setCharactersPerSecond, setNarrationOccupancy,

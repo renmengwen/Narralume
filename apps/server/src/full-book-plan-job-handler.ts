@@ -26,6 +26,8 @@ export const FULL_BOOK_PLAN_JOB_TYPE = "full_book_plan_build";
 export const FULL_BOOK_PLAN_TIMEOUT_MS = 180_000;
 export const FULL_BOOK_PLAN_IDLE_TIMEOUT_MS = 180_000;
 export const FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS = 900_000;
+export const FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS = 3;
+export const FULL_BOOK_PLAN_RETRY_DELAY_MS = 1_000;
 
 export interface FullBookPlanJobPayload {
   contractVersion: typeof FULL_BOOK_PLAN_JOB_CONTRACT_VERSION;
@@ -39,7 +41,11 @@ export interface FullBookPlanJobPayload {
   requestHash: string;
 }
 
-interface HandlerOptions { fetchImpl?: typeof fetch; database?: DatabaseSync }
+interface HandlerOptions { fetchImpl?: typeof fetch; database?: DatabaseSync; retryDelayMs?: number }
+
+class TransientFullBookPlanModelError extends Error {}
+
+const TRANSIENT_HTTP_STATUSES = new Set([429, 502, 503, 504, 524]);
 
 const HASH = /^[0-9a-f]{64}$/u;
 
@@ -173,11 +179,21 @@ async function callModel(
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`全书规划模型请求失败（HTTP ${response.status}）`);
+    const message = `全书规划模型请求失败（HTTP ${response.status}）`;
+    if (TRANSIENT_HTTP_STATUSES.has(response.status)) throw new TransientFullBookPlanModelError(message);
+    throw new Error(message);
   }
-  const text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-    ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-    : responseText(await limitedJson(response));
+  let text: string;
+  try {
+    text = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+      ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
+      : responseText(await limitedJson(response));
+  } catch (error) {
+    if (error instanceof Error && /response\.(?:failed|incomplete): (?:internal_server_error|server_error|overloaded_error)|websocket: close 1006|unexpected EOF|error: overloaded_error/iu.test(error.message)) {
+      throw new TransientFullBookPlanModelError(error.message, { cause: error });
+    }
+    throw error;
+  }
   try { return JSON.parse(text) as unknown; }
   catch (error) {
     if (error instanceof Error && /大小限制/u.test(error.message)) throw error;
@@ -190,15 +206,45 @@ async function callAndParse<T>(
   call: (signal: AbortSignal, correction: string | undefined, onActivity: () => void) => Promise<unknown>,
   parse: (value: unknown) => T,
   groupSignal?: AbortSignal,
+  retryDelayMs = FULL_BOOK_PLAN_RETRY_DELAY_MS,
 ) {
-  const raw = await withCancellation(context, (signal, onActivity) => call(signal, undefined, onActivity), groupSignal);
+  const raw = await callWithTransientRetry(context,
+    (signal, onActivity) => call(signal, undefined, onActivity), groupSignal, retryDelayMs);
   try {
     return parse(raw);
   } catch (error) {
     if (!(error instanceof FullBookPlanContractError)) throw error;
-    const corrected = await withCancellation(context,
-      (signal, onActivity) => call(signal, error.message, onActivity), groupSignal);
+    const corrected = await callWithTransientRetry(context,
+      (signal, onActivity) => call(signal, error.message, onActivity), groupSignal, retryDelayMs);
     return parse(corrected);
+  }
+}
+
+async function wait(delayMs: number, signal: AbortSignal) {
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, delayMs);
+    function done() { signal.removeEventListener("abort", abort); resolve(); }
+    function abort() { clearTimeout(timer); reject(signal.reason ?? new DOMException("aborted", "AbortError")); }
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
+async function callWithTransientRetry<T>(
+  context: Parameters<JobHandler>[0],
+  call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+  groupSignal: AbortSignal | undefined,
+  retryDelayMs: number,
+) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await withCancellation(context, call, groupSignal);
+    } catch (error) {
+      if (!(error instanceof TransientFullBookPlanModelError) || attempt >= FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS) throw error;
+      await withCancellation(context,
+        (signal) => wait(retryDelayMs * attempt, signal), groupSignal);
+    }
   }
 }
 
@@ -246,9 +292,20 @@ export function createFullBookPlanJobHandler(
     const task = parsePayload(context.job.payload, config);
     const verified = new Array<VerifiedFullBookPlanInterval>(task.intervals.length);
     const groupController = new AbortController();
+    const pending: number[] = [];
     let completed = 0;
+    for (const [index, request] of task.intervals.entries()) {
+      const checkpoint = context.getCheckpoint("full-book-plan-interval", request.identityHash);
+      if (checkpoint?.inputHash !== request.identityHash || checkpoint.output === undefined) {
+        pending.push(index);
+        continue;
+      }
+      verified[index] = fullBookPlanIntervalResponseParser(request)(checkpoint.output);
+      completed += 1;
+    }
+    if (completed) context.reportProgress(completed / (task.intervals.length + 1));
     await runConcurrent(
-      task.intervals.map((_, index) => index),
+      pending,
       options.database
         ? mappedPipelineJobConcurrency(options.database, context.job.id, "episode_plan")
         : 1,
@@ -261,9 +318,11 @@ export function createFullBookPlanJobHandler(
             (signal, correction, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, correction),
             parse,
             groupController.signal,
+            options.retryDelayMs,
           );
           context.throwIfCancellationRequested();
-          context.commitCheckpoint("full-book-plan-interval", request.identityHash, request.identityHash, () => undefined);
+          context.commitCheckpoint("full-book-plan-interval", request.identityHash, request.identityHash,
+            () => undefined, verified[index]!.content);
           context.reportProgress(++completed / (task.intervals.length + 1));
         } catch (error) {
           groupController.abort(error);
@@ -277,10 +336,17 @@ export function createFullBookPlanJobHandler(
     );
     const finalInput = { kind: "final" as const, request: finalRequest };
     const parseFinal = fullBookPlanFinalResponseParser(finalRequest);
-    const final = await callAndParse(context,
-      (signal, correction, onActivity) => callModel(config, fetchImpl, finalInput, signal, onActivity, correction), parseFinal);
+    const finalCheckpoint = context.getCheckpoint("full-book-plan-final", finalRequest.identityHash);
+    const final = finalCheckpoint?.inputHash === finalRequest.identityHash && finalCheckpoint.output !== undefined
+      ? parseFinal(finalCheckpoint.output)
+      : await callAndParse(context,
+        (signal, correction, onActivity) => callModel(config, fetchImpl, finalInput, signal, onActivity, correction),
+        parseFinal, undefined, options.retryDelayMs);
     context.throwIfCancellationRequested();
-    context.commitCheckpoint("full-book-plan-final", finalRequest.identityHash, finalRequest.identityHash, () => undefined);
+    if (finalCheckpoint?.inputHash !== finalRequest.identityHash || finalCheckpoint.output === undefined) {
+      context.commitCheckpoint("full-book-plan-final", finalRequest.identityHash, finalRequest.identityHash,
+        () => undefined, final.content);
+    }
     context.reportProgress(1);
     return {
       identityHash: finalRequest.identityHash,

@@ -7,6 +7,7 @@ interface CheckpointRow {
   scope_key: string;
   input_hash: string;
   completed_at: number;
+  output_json: string | null;
 }
 
 export interface CheckpointKey {
@@ -19,6 +20,7 @@ export interface CommitCheckpointInput extends CheckpointKey {
   inputHash: string;
   workerId: string;
   now?: number;
+  output?: unknown;
 }
 
 export interface CheckpointRecord {
@@ -27,6 +29,7 @@ export interface CheckpointRecord {
   scopeKey: string;
   inputHash: string;
   completedAt: number;
+  output?: unknown;
 }
 
 export interface CheckpointTransaction {
@@ -54,6 +57,7 @@ function record(row: CheckpointRow): CheckpointRecord {
     scopeKey: row.scope_key,
     inputHash: row.input_hash,
     completedAt: row.completed_at,
+    output: row.output_json === null ? undefined : JSON.parse(row.output_json) as unknown,
   };
 }
 
@@ -69,7 +73,7 @@ function domainDml(sql: string) {
 export function getCheckpoint(database: DatabaseSync, input: CheckpointKey) {
   const key = normalizeKey(input);
   const row = database.prepare(
-    `SELECT job_id, stage, scope_key, input_hash, completed_at
+    `SELECT job_id, stage, scope_key, input_hash, completed_at, output_json
      FROM job_checkpoints WHERE job_id = ? AND stage = ? AND scope_key = ?`,
   ).get(key.jobId, key.stage, key.scopeKey) as CheckpointRow | undefined;
   return row ? record(row) : undefined;
@@ -87,6 +91,11 @@ export function commitCheckpoint(
   const now = input.now ?? Date.now();
   if (!Number.isSafeInteger(now) || now < 0) throw new Error("检查点完成时间无效");
   if (types.isAsyncFunction(writer)) throw new Error("检查点 writer 必须同步完成");
+  const outputJson = input.output === undefined ? undefined : JSON.stringify(input.output);
+  if (input.output !== undefined && outputJson === undefined) throw new Error("检查点输出必须是有限 JSON");
+  if (outputJson !== undefined && Buffer.byteLength(outputJson, "utf8") > 1024 * 1024) {
+    throw new Error("检查点输出超过 1 MiB 上限");
+  }
 
   database.exec("BEGIN IMMEDIATE");
   try {
@@ -98,7 +107,12 @@ export function commitCheckpoint(
     if (!lease) throw new Error("任务租约无效、已过期或已请求取消，不能提交检查点");
 
     const existing = getCheckpoint(database, key);
-    if (existing?.inputHash === inputHash) {
+    if (existing?.inputHash === inputHash && outputJson === undefined) {
+      database.exec("COMMIT");
+      return { checkpoint: existing, created: false, replaced: false };
+    }
+    if (existing?.inputHash === inputHash && existing.output !== undefined) {
+      if (JSON.stringify(existing.output) !== outputJson) throw new Error("同一检查点身份的持久输出冲突");
       database.exec("COMMIT");
       return { checkpoint: existing, created: false, replaced: false };
     }
@@ -125,14 +139,14 @@ export function commitCheckpoint(
     }
     if (existing) {
       database.prepare(
-        `UPDATE job_checkpoints SET input_hash = ?, completed_at = ?
+        `UPDATE job_checkpoints SET input_hash = ?, completed_at = ?, output_json = ?
          WHERE job_id = ? AND stage = ? AND scope_key = ?`,
-      ).run(inputHash, now, key.jobId, key.stage, key.scopeKey);
+      ).run(inputHash, now, outputJson ?? null, key.jobId, key.stage, key.scopeKey);
     } else {
       database.prepare(
-        `INSERT INTO job_checkpoints (job_id, stage, scope_key, input_hash, completed_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(key.jobId, key.stage, key.scopeKey, inputHash, now);
+        `INSERT INTO job_checkpoints (job_id, stage, scope_key, input_hash, completed_at, output_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(key.jobId, key.stage, key.scopeKey, inputHash, now, outputJson ?? null);
     }
     const checkpoint = getCheckpoint(database, key)!;
     database.exec("COMMIT");

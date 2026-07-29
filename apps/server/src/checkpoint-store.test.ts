@@ -50,6 +50,31 @@ test("检查点与 writer 写入在同一事务提交，并在重启后保留", 
   });
 });
 
+test("检查点可耐久保存已验证输出，旧 marker 可原子升级但不可覆盖", async () => {
+  await withDatabase((dataRoot) => {
+    const opened = openDatabase(dataRoot);
+    runningJob(opened.database);
+    const input = {
+      jobId: "job_1", stage: "plan", scopeKey: "interval_1", inputHash: INPUT_HASH_1,
+      workerId: "worker_1", now: 2_000,
+    };
+    commitCheckpoint(opened.database, input, () => undefined);
+    assert.equal(getCheckpoint(opened.database, input)?.output, undefined);
+
+    const upgraded = commitCheckpoint(opened.database, { ...input, now: 3_000, output: { episodes: [1] } },
+      () => undefined);
+    assert.equal(upgraded.replaced, true);
+    assert.deepEqual(getCheckpoint(opened.database, input)?.output, { episodes: [1] });
+    assert.throws(() => commitCheckpoint(opened.database,
+      { ...input, now: 4_000, output: { episodes: [2] } }, () => undefined), /持久输出冲突/);
+    opened.close();
+
+    const reopened = openDatabase(dataRoot);
+    assert.deepEqual(getCheckpoint(reopened.database, input)?.output, { episodes: [1] });
+    reopened.close();
+  });
+});
+
 test("相同输入幂等跳过，输入变化原子替换 checkpoint 与领域结果", async () => {
   await withDatabase((dataRoot) => {
     const opened = openDatabase(dataRoot);

@@ -34,6 +34,7 @@ export interface JobExecutionContext {
     scopeKey: string,
     inputHash: string,
     writer: (transaction: CheckpointTransaction) => undefined,
+    output?: unknown,
   ): { checkpoint: CheckpointRecord; created: boolean; replaced: boolean };
 }
 
@@ -119,12 +120,13 @@ export class JobWorker {
           stage,
           scopeKey,
         }),
-        commitCheckpoint: (stage, scopeKey, inputHash, writer) => commitCheckpoint(this.database, {
+        commitCheckpoint: (stage, scopeKey, inputHash, writer, output) => commitCheckpoint(this.database, {
           jobId: job.id,
           stage,
           scopeKey,
           inputHash,
           workerId: this.workerId,
+          output,
         }, writer),
       };
 

@@ -89,7 +89,7 @@ test("数据库迁移可重复执行并在重启后保留书库数据", async ()
 
     assert.equal(book?.id, "book_sha256");
     assert.equal(book?.title, "测试书");
-    assert.equal(migration?.version, 16);
+    assert.equal(migration?.version, 17);
     assert.equal(chapterCount?.count, 0);
     assert.equal(eventCount?.count, 0);
     assert.equal(sourceCount?.count, 0);
@@ -122,7 +122,7 @@ test("未来迁移版本或版本断层会失败关闭", async () => {
     try {
       openDatabase(dataRoot).close();
       const malformed = new DatabaseSync(databasePath);
-      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (17)").run();
+      if (mode === "future") malformed.prepare("INSERT INTO schema_migrations (version) VALUES (18)").run();
       else malformed.prepare("DELETE FROM schema_migrations WHERE version = 1").run();
       malformed.close();
 
@@ -164,7 +164,7 @@ test("既有 migration v2 数据库可原地升级 checkpoint、章节事件与�
     const eventTable = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_events'")
       .get();
-    assert.equal(migration?.version, 16);
+    assert.equal(migration?.version, 17);
     assert.equal(checkpointTable?.name, "job_checkpoints");
     assert.equal(eventTable?.name, "chapter_events");
     upgraded.close();
@@ -182,6 +182,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
+    current.database.exec("ALTER TABLE job_checkpoints DROP COLUMN output_json");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 6").run();
     current.database.prepare(
       `INSERT INTO books (
@@ -203,7 +204,7 @@ test("既有 migration v5 数据库可升级批准事件且删除分集会完整
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      16,
+      17,
     );
     upgraded.database.prepare(
       `INSERT INTO script_versions (
@@ -239,6 +240,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
+    current.database.exec("ALTER TABLE job_checkpoints DROP COLUMN output_json");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 8").run();
     current.database.prepare(
       `INSERT INTO books (
@@ -265,7 +267,7 @@ test("既有 migration v7 数据库可升级音频段与字幕并约束不可变
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      16,
+      17,
     );
     const audioTables = upgraded.database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'audio_%' ORDER BY name")
@@ -347,6 +349,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     current.database.exec("DROP TABLE subtitle_cues; DROP TABLE audio_segments");
     current.database.exec("DROP TABLE script_approval_events; DROP TABLE script_version_sources; DROP TABLE script_versions");
     current.database.exec("DROP TABLE episode_sources; DROP TABLE episodes; DROP TABLE series_projects");
+    current.database.exec("ALTER TABLE job_checkpoints DROP COLUMN output_json");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 5").run();
     current.database.prepare(
       `INSERT INTO books (
@@ -358,7 +361,7 @@ test("既有 migration v4 数据库可升级 v5 且删除书籍会级联分集�
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      16,
+      17,
     );
     upgraded.database.prepare(
       `INSERT INTO series_projects (id, book_id, title, created_at, updated_at)
@@ -398,6 +401,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
     current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP TABLE asset_candidate_review_events; DROP TABLE asset_candidates; DROP TABLE asset_aliases; DROP TABLE assets");
+    current.database.exec("ALTER TABLE job_checkpoints DROP COLUMN output_json");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 9").run();
     current.database.prepare(
       `INSERT INTO books (
@@ -414,7 +418,7 @@ test("既有 migration v8 数据库可升级资产合同并保持关系约束", 
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      16,
+      17,
     );
     const tables = upgraded.database.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('assets', 'asset_aliases') ORDER BY name",
@@ -552,13 +556,14 @@ test("既有 migration v10 数据库可升级视觉段与显式资产关系", as
     current.database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs");
     current.database.exec("DROP TABLE render_chunks; DROP TABLE visual_segment_assets; DROP TABLE visual_segments");
     current.database.exec("DROP INDEX asset_candidates_id_asset");
+    current.database.exec("ALTER TABLE job_checkpoints DROP COLUMN output_json");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 11").run();
     current.close();
 
     const upgraded = openDatabase(dataRoot);
     assert.equal(
       upgraded.database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version,
-      16,
+      17,
     );
     const tables = upgraded.database.prepare(
       `SELECT name FROM sqlite_master
@@ -601,12 +606,13 @@ test("既有 migration v11 数据库保留数据升级 render_chunks 并执行�
        VALUES ('script_v11', 'episode_v11', 'packaged', 1, '{}', ?, 1)`,
     ).run("2".repeat(64));
     current.database.exec("DROP TABLE render_chunks");
+    current.database.exec("ALTER TABLE job_checkpoints DROP COLUMN output_json");
     current.database.prepare("DELETE FROM schema_migrations WHERE version >= 12").run();
     current.close();
 
     const upgraded = openDatabase(dataRoot);
     const database = upgraded.database;
-    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 16);
+    assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 17);
     assert.equal(database.prepare("SELECT title FROM books WHERE id = 'book_v11'").get()?.title, "旧数据");
     assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='render_chunks'").get()?.name, "render_chunks");
     const insert = database.prepare(
@@ -698,6 +704,7 @@ test("既有 migration v12 数据库升级时保留 Episode 与全部下游外�
       DROP TABLE book_story_bibles;
       DROP TABLE series_pipeline_jobs;
       DROP TABLE series_pipeline_runs;
+      ALTER TABLE job_checkpoints DROP COLUMN output_json;
       DELETE FROM schema_migrations WHERE version>=13;
       PRAGMA foreign_keys=ON;`);
     old.close();
@@ -729,12 +736,12 @@ test("既有 migration v13 数据库升级流水线表并执行 active、约束�
       (id,book_id,chapter_index,title,byte_start,byte_end,char_count,content_hash)
       VALUES ('chapter_1','book_pipeline',0,'第一章',0,1,1,?)`).run("b".repeat(64));
     database.prepare("INSERT INTO series_projects (id,book_id,title,created_at,updated_at) VALUES ('series_pipeline','book_pipeline','系列',1,1)").run();
-    database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs; DELETE FROM schema_migrations WHERE version>=14");
+    database.exec("DROP TABLE book_story_bibles; DROP TABLE series_pipeline_jobs; DROP TABLE series_pipeline_runs; ALTER TABLE job_checkpoints DROP COLUMN output_json; DELETE FROM schema_migrations WHERE version>=14");
     current.close();
 
     const upgraded = openDatabase(dataRoot);
     const db = upgraded.database;
-    assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 16);
+    assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 17);
     const insert = db.prepare(`INSERT INTO series_pipeline_runs
       (id,series_project_id,status,episode_count,target_duration_seconds,source_start_chapter_id,
        source_end_chapter_id,config_hash,created_at,updated_at)

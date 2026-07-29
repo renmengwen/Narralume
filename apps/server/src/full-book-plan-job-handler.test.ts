@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   FULL_BOOK_PLAN_IDLE_TIMEOUT_MS,
   FULL_BOOK_PLAN_JOB_TYPE,
+  FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS,
+  FULL_BOOK_PLAN_RETRY_DELAY_MS,
   FULL_BOOK_PLAN_TIMEOUT_MS,
   FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS,
   createFullBookPlanJobHandler,
@@ -31,6 +33,8 @@ test("全书规划使用有限首事件、空闲与总时限", () => {
   assert.equal(FULL_BOOK_PLAN_TIMEOUT_MS, 180_000);
   assert.equal(FULL_BOOK_PLAN_IDLE_TIMEOUT_MS, 180_000);
   assert.equal(FULL_BOOK_PLAN_TOTAL_TIMEOUT_MS, 900_000);
+  assert.equal(FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS, 3);
+  assert.equal(FULL_BOOK_PLAN_RETRY_DELAY_MS, 1_000);
 });
 
 function payload(): FullBookPlanJobPayload {
@@ -63,7 +67,9 @@ function streamedPlanResponse(value: unknown) {
   });
 }
 
-function context(task: FullBookPlanJobPayload) {
+function context(task: FullBookPlanJobPayload, saved = new Map<string, {
+  jobId: string; stage: string; scopeKey: string; inputHash: string; completedAt: number; output?: unknown;
+}>()) {
   const checkpoints: string[] = [];
   const progress: number[] = [];
   return {
@@ -73,10 +79,12 @@ function context(task: FullBookPlanJobPayload) {
       reportProgress: (value: number) => { progress.push(value); },
       isCancellationRequested: () => false,
       throwIfCancellationRequested: () => undefined,
-      getCheckpoint: () => undefined,
-      commitCheckpoint: (stage: string, scopeKey: string) => {
+      getCheckpoint: (stage: string, scopeKey: string) => saved.get(`${stage}:${scopeKey}`),
+      commitCheckpoint: (stage: string, scopeKey: string, inputHash: string, _writer: unknown, output?: unknown) => {
         checkpoints.push(`${stage}:${scopeKey}`);
-        return { checkpoint: { jobId: "job", stage, scopeKey, inputHash: scopeKey, completedAt: 1 },
+        const checkpoint = { jobId: "job", stage, scopeKey, inputHash, completedAt: 1, output };
+        saved.set(`${stage}:${scopeKey}`, checkpoint);
+        return { checkpoint,
           created: true, replaced: false };
       },
     } as unknown as JobExecutionContext,
@@ -157,6 +165,53 @@ test("全书规划只在流式成功终态后解析", async () => {
   assert.equal(result.plan.episodes.length, 2);
 });
 
+test("瞬时 HTTP 与上游流失败在单区间内有界重试", async () => {
+  const failures = [
+    () => new Response("busy", { status: 524 }),
+    () => new Response('data: {"type":"response.failed","response":{"error":{"code":"internal_server_error","message":"websocket: close 1006 (abnormal closure): unexpected EOF"}}}\n\n',
+      { headers: { "content-type": "text/event-stream" } }),
+  ];
+  for (const failure of failures) {
+    let calls = 0;
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      if (calls < FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS) return failure();
+      const body = JSON.parse(String(init?.body)) as { input: string };
+      const input = JSON.parse(body.input.split("\n").at(-1)!) as {
+        kind: "interval" | "final"; request: { sourceEvents?: Array<{ id: string }> };
+      };
+      const events = input.kind === "final"
+        ? ["event_0", "event_1"]
+        : [input.request.sourceEvents![0]!.id];
+      return Response.json({ output_text: JSON.stringify(plan(events)) });
+    }) as typeof fetch;
+    await createFullBookPlanJobHandler(config, { fetchImpl, retryDelayMs: 0 })(context(payload()).value);
+    assert.equal(calls, FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS + 2);
+  }
+});
+
+test("已验证区间与 final 输出持久后重试不再调用模型", async () => {
+  const task = payload();
+  const saved = new Map<string, {
+    jobId: string; stage: string; scopeKey: string; inputHash: string; completedAt: number; output?: unknown;
+  }>();
+  const responses = [plan(["event_0"]), plan(["event_1"]), plan(["event_0", "event_1"])];
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return Response.json({ output_text: JSON.stringify(responses.shift()) });
+  }) as typeof fetch;
+  await createFullBookPlanJobHandler(config, { fetchImpl })(context(task, saved).value);
+  assert.equal(calls, 3);
+
+  const restored = context(task, saved);
+  const result = await createFullBookPlanJobHandler(config, {
+    fetchImpl: (async () => { throw new Error("不应再调用模型"); }) as typeof fetch,
+  })(restored.value) as { plan: { episodes: unknown[] } };
+  assert.equal(result.plan.episodes.length, 2);
+  assert.deepEqual(restored.progress, [2 / 3, 1]);
+});
+
 test("流式响应无成功终态时不纠错", async () => {
   let calls = 0;
   const fetchImpl = (async () => {
@@ -232,9 +287,9 @@ test("纠错答仍非法时不发起第三次请求", async () => {
   assert.equal(calls, 2);
 });
 
-test("HTTP、非 JSON 与 abort 错误不触发合同纠错", async () => {
+test("非瞬时 HTTP、非 JSON 与 abort 错误不触发合同纠错或重试", async () => {
   const cases: Array<{ fetchImpl: typeof fetch; message: RegExp }> = [
-    { fetchImpl: (async () => new Response("bad gateway", { status: 502 })) as typeof fetch, message: /HTTP 502/u },
+    { fetchImpl: (async () => new Response("bad request", { status: 400 })) as typeof fetch, message: /HTTP 400/u },
     { fetchImpl: (async () => new Response("not json")) as typeof fetch, message: /无效 JSON/u },
     { fetchImpl: (async () => { throw new DOMException("aborted", "AbortError"); }) as typeof fetch, message: /aborted/u },
   ];

@@ -687,6 +687,17 @@ const MIGRATION_16 = `
       CHECK (chapter_concurrency BETWEEN 1 AND 8);
 `;
 
+const MIGRATION_17 = `
+  ALTER TABLE job_checkpoints
+    ADD COLUMN output_json TEXT
+      CHECK (
+        output_json IS NULL OR (
+          json_valid(output_json)
+          AND length(CAST(output_json AS BLOB)) <= 1048576
+        )
+      );
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -697,6 +708,7 @@ const MIGRATIONS = [
   MIGRATION_14,
   MIGRATION_15,
   MIGRATION_16,
+  MIGRATION_17,
 ];
 
 export interface NarralumeDatabase {

@@ -698,6 +698,22 @@ PC-02 当前 checkpoint：
 | 跳过的真实 Gate | 按安全边界未调用正式付费文本/图片/TTS 模型，未执行真实 3–5 beat A/B Canary，未恢复或修改真实 run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b`，未修改 SQLite 绕 Gate，未自动批准稿件/图片/TTS/视觉段或媒体。上述是需用户另行授权/人工判断的验收，不是自动测试失败。 |
 | 恢复入口 | 从 `codex/direct-finished-narration-v6` 业务 HEAD `22f78108da39e8b92fb110c165022931f4008532` 及后续 Ledger 控制提交恢复，工作树应干净。人工验收顺序：新建隔离测试书 → 查看/保存 Book Prompt Profile → 预览并确认连续分集范围 → 用户显式授权后执行 3–5 beat v5/v6 A/B Canary → 人工检查单一成片旁白与逐 beat 恢复 → 人工批准后才进入 TTS/资产候选/视觉/项目包；全书世界观查看只读。不得恢复现有真实生产 run 或自动批准。 |
 
+## 2026-07-30 文本模型生成速度与并发首版优化
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `TEXT-MODEL-THROUGHPUT-V1` / 同时落地三项首版能力：分集规划最小语义模型输入、Responses/Messages 任务级输出 token 上限、专用文本 Worker 池与进程级共享外部请求预算。 |
+| 基线 / 分支 | 从正式 `dev@d8b2214f785259a3bffb0edf6e955914493cfaf9` 的 detached 基线创建 `codex/text-model-throughput-v1`；未在 `main` 开发，未合并或推送。 |
+| 来源与采用 | 按 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 冻结顺序核查：本机缺少前四个仓库；MuseDock `661bc6d1b4a84ecee466657a64f7e26698262190` 的 `scripts/quality-eval/index.js` rolling worker pool、`server/services/ai/aiTextModel.js` Messages `max_tokens`/provider 重试与 `tests/test-ai-text-model.js` 登记为 `reference-only`，未复制其评测或 provider 代码。实现采用 Narralume `internal-port`：复用现有 `JobWorker` handler allowlist、SQLite Job/lease/heartbeat/checkpoint、`textModelRequest`、SSE/Abort/timeout 与各文本 Job handler；无新依赖、队列、Store 或配置中心。 |
+| P0 规划模型视图 | `fullBookPlanInputs()` 从既有 `event_type/payload_json` 真正透传事件语义；服务端冻结 request 继续保留 `contentHash/inputBytes/chapterId/byteRanges`、provider provenance、identity、allowlist 与覆盖证据，模型 interval 仅收到 `kind/chapterRange/episodeCount/sourceEvents[{id,chapterIndex,eventType,payload}]`。全书/局部分集 512 KiB 门禁按该真实模型投影计算。当前 final 自 `43f5cc1` 起为服务端确定性严格归并，本轮保持零模型重发。strict parser 的 ID allowlist、唯一性、顺序、连续章节、完整覆盖、边界字节、区间配额、hash 与冻结校验均保留。 |
+| P0 版本 / 恢复 | Job 合同 `full-book-plan-job-v1 → v2`，Prompt `full-book-plan-prompt-v2 → v3`；`eventType/payload/inputBytes` 进入 `sourceEventsHash`，语义或版本变化产生新 identity/checkpoint key。旧 Job 合同不能被新 handler 静默复用；旧 interval/final checkpoint、暂停、取消、失败局部重试和恢复仍走既有合同。内部 `story_bible` 兼容名未迁移；本轮无新增用户可见“故事圣经”文案。 |
+| P1 双协议 token | 共享 `textModelRequest` 对 `openai-response` 写 `max_output_tokens`，对 `anthropic-message` 写 `max_tokens`，两者保持 `stream:true`；直接解析请求 body 的测试同时断言正确字段与错误字段缺席。现有单任务 `8192` 与多章分析 `32768` 有明确使用边界，首版无证据调整，不新增复杂配置。 |
+| P1 Worker / 共享预算 | 进程拓扑为 `4` 个专用文本 Worker + 既有 `8` 个章节分析 Worker + `1` 个非文本通用 Worker。专用池只领取 `episode_plan_build`、`full_book_plan_build`、`book_story_bible_build`、`episode_scripts_generate`、`episode_sources_recommend`、`asset_prompt_draft_generate`；图片、TTS、FFmpeg、渲染、导出仍仅由通用 Worker 处理。所有七个真实文本 `fetchImpl` 边界共用默认预算 `8` 的 singleton 闸门，覆盖 Responses 与 Messages；用户 run 内 `chapterConcurrency=1..50` 保留不变并与进程预算分层。跨 Episode 稿件仍由流水线逐集入队和 `previousScriptHandoff` 保序。 |
+| 取消 / 收敛 | 闸门 `acquire(signal)` 排队 Abort 会移除 waiter，`run()` 获 permit 后再次检查取消，release 幂等；测试证明预算内最大活动数、排队取消零 fetch/零泄漏、4 个文本 Job 跨 Job 并行、非文本仍单 Worker、`app.close()` 等待运行中通用/文本任务后收敛。全书规划每次真实 HTTP 重试单独持 permit，退避期间不占预算。 |
+| 验证证据 | Coordinator 合并聚焦测试 `180 PASS / 0 FAIL / 0 SKIP`；根 `npm run typecheck` PASS；根 `npm test` PASS：Server `448 pass / 0 fail / 1 skip`、Web `110/110`，唯一 skip 为 Windows `EPERM` 无法创建符号链接测试夹具；根 `npm run build` PASS，Vite 142 modules，仅既有主 JS `514.42 kB` 大小提示；`git diff --check` PASS，仅 LF→CRLF 提示。未调用真实付费模型或默认真实数据根。 |
+| 业务提交 / 状态 | `e2fc030d43abfe9fbf29dc2769653d9f8e76bc7a feat(server): 优化文本模型规划输入与并发`；Requirement `complete`。首版固定安全默认 `4` 个文本 Worker / `8` 个共享外部请求，未做运行时配置中心、自动调参、前端 UI 或内部 `story_bible` 大规模改名。 |
+| 恢复入口 | 从分支 `codex/text-model-throughput-v1` 的业务提交 `e2fc030d43abfe9fbf29dc2769653d9f8e76bc7a` 及其后 Ledger 控制提交恢复；工作树应干净。不得自动恢复、重试或改写真实付费 Job，不得把本分支合并到 `main`；后续若真实压测证明默认预算不足，再以独立 Task 调整固定预算或增加受控配置。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

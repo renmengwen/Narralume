@@ -644,6 +644,16 @@ PC-02 当前 checkpoint：
 | 验证证据 | 聚焦 checkpoint/full-book-plan/database/project-package/asset 回归 `86 PASS / 0 FAIL / 1 Windows 权限 SKIP`；Server 全量 `413 PASS / 0 FAIL / 1 SKIP`，Web `100 PASS / 0 FAIL`；根 `npm run typecheck`、`npm run build`、`git diff --check` 全部 PASS，Vite 137 modules。业务提交 `43c4de3 fix(auto): 持久恢复全书规划区间并重试瞬时故障`。 |
 | 真实运行事实 / 恢复入口 | 默认库已由 v16 安全升级到 v17，`PRAGMA` 列已存在，3101 `/api/health` HTTP 200。原 Job `job_full_book_plan_9c5d…` 仍为 `failed 3/3`，错误时间戳与 `response.failed: internal_server_error: websocket close 1006 / unexpected EOF` 未变；本 Task 没有执行付费 retry。旧 20 个 interval marker 的 `output_json` 均为 NULL，旧输出无法凭空恢复；用户后续通过正式“重试失败章节”入口启动新一轮时，本轮新成功 interval 会立即耐久化并在后续 Job 尝试中复用。 |
 
+## 2026-07-29 全书规划确定性归并与正式 20 集 Gate
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-03-PLAN-FINAL-COMPOSE-01` / 修复正式 1794 章、20 集规划在全部 interval 成功后仍因 final 模型输入与输出硬上限无法原子冻结的问题。 |
+| 真实根因 | 首次正式恢复前，冻结 provider 对 `gpt-5.6-sol` 返回 `503 model_not_found`，新建 provider 的最小 Responses 探针返回 `401 invalid token`；仅通过本机忽略的模型配置复用 MuseDock 已验证调用合同后，同模型最小探针 HTTP 200，未写入代码、提交或 Ledger 密钥。恢复后 20 个 interval 全部严格校验并耐久化；旧 final DTO 为 `6,424,323 bytes`，包含 13,642 条重复来源元数据，真实失败 `context_length_exceeded`。即使输入精简为 `137,823 bytes`，最终计划仍必须携带全部 13,642 个 sourceEventId，约 136 KB，超过现有 8,192 输出 token 的稳定闭包，因此模型 final 本身是多余且不可可靠完成的步骤。 |
+| 最小修复 | 删除 final 模型调用；按冻结 interval 原序拼接其已验证 Episode、全局重编号，再复用现有 `fullBookPlanFinalResponseParser` 对 1..N、全部来源白名单、连续章节、interval quota、hash 与唯一性做完整校验，继续写既有 final checkpoint 并通过既有 `freezeFullBookPlan` 原子冻结。不改 Job/request/interval identity、Store、migration、队列、前端或依赖；20 个 interval checkpoint 原样复用。 |
+| 自动验证 | `full-book-plan-job-handler.test.ts` 12 PASS / 0 FAIL；Server `npm run typecheck` PASS；`git diff --check` PASS。业务提交 `43f5cc1 fix(auto): 确定性归并全书规划分区`。 |
+| 正式恢复 Gate | 先通过正式 pause API 中断无效的第 2 次模型 final，再在后端热重载为 PID `21928`、`/api/health` HTTP 200 后按正式 `retry → resume` 恢复。Job 直接复用 `20/20` 个 interval 输出并确定性归并；约 5 秒内 Run 从 `planning_episodes` 原子进入 `generating_scripts`，`episodePlan=20/20`、Episode 索引 `1..20`、`planHash=52f323a5695d9fcc44ec2815736defd9a5ea279d8a7d6e27b66541153e5cfc05`、失败 0，AUTO-03 正式长书 Gate PASS。第 1 集稿件 Job 已自动运行；无自动批准、无 SQLite 绕过。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

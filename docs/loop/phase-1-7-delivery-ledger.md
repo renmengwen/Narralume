@@ -632,6 +632,18 @@ PC-02 当前 checkpoint：
 | 正式运行事实 | 业务接回 `dev` 后仅 3101 watch 热重载为 PID `27824`，`/api/health` HTTP 200；5174 保持原 PID `36368`。正式 Job `job_full_book_plan_9c5d…` 已在旧串行实现中耗尽 `3/3` 次并终态失败：`handler_failed`，原始错误“全书规划模型请求失败（HTTP 524）”；Run `pipeline_95ade1af…` 保持 `planning_episodes`、`episodePlan=0/20`、`scripts=0/40`、`canRetry=true`。本轮未自动 retry、pause、resume、cancel 或修改 SQLite。 |
 | 业务提交 / 恢复入口 | `f0009b3 perf(auto): 并发规划稿件并展示真实任务进度`。用户可在失败页显式重试；新 Job 执行时会使用该书冻结的 `chapterConcurrency=8` 并显示真实进度。现有 Full Book Plan interval 仍无耐久输出，旧失败重试会重新执行规划 interval；不得把 checkpoint 计数伪装成可恢复产物。 |
 
+## 2026-07-29 全书规划区间耐久恢复与瞬时故障重试
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-03-PLAN-RECOVERY-01` / 修复真实 1794 章、20 集规划在任一 interval 失败后重跑已成功付费请求，并对 `429/502/503/504/524` 及 Responses `response.failed/internal_server_error` WebSocket 1006/EOF 做单次请求边界的有界重试。 |
+| 状态 | `complete`（工程实现、迁移、恢复合同和自动验证完成；真实 20 集产物仍未重试生成） |
+| 来源登记 | 按冻结优先级核查：本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock `661bc6d1b4a84ecee466657a64f7e26698262190` `server/services/ai/aiTextModel.js:238-243,614-674` 提供线性退避和 502/503/504 有界重试参考，登记为 `reference-only`。耐久恢复采用 Narralume `internal-port`：复用 Story Bible “checkpoint identity + 已验证持久输出 + 只请求缺失项”原语，不新增依赖、队列或影子 Job Store。 |
+| 耐久合同 | migration v17 给现有 `job_checkpoints` 增加可选 `output_json`，要求有效 JSON 且 UTF-8 不超过 1 MiB；输出与 checkpoint 在同一 `BEGIN IMMEDIATE` 事务内提交，同 identity 已有输出不得被不同内容覆盖。Full Book Plan 恢复时必须再走 strict parser/hash/source/quota 校验；无输出的旧 marker 不伪装为可恢复产物。interval 与 final 均保存已验证内容，Job 重试只请求缺失项。 |
+| 重试边界 | 每个模型请求最多 3 次（首次 + 2 次退避），仅重试瞬时 HTTP 状态和已确认的上游内部流故障；400、非 JSON、合同输出错误、取消与非瞬时错误不会被退避吞掉。合同纠错仍保持原有最多一次，不与运输重试混为放宽校验。 |
+| 验证证据 | 聚焦 checkpoint/full-book-plan/database/project-package/asset 回归 `86 PASS / 0 FAIL / 1 Windows 权限 SKIP`；Server 全量 `413 PASS / 0 FAIL / 1 SKIP`，Web `100 PASS / 0 FAIL`；根 `npm run typecheck`、`npm run build`、`git diff --check` 全部 PASS，Vite 137 modules。业务提交 `43c4de3 fix(auto): 持久恢复全书规划区间并重试瞬时故障`。 |
+| 真实运行事实 / 恢复入口 | 默认库已由 v16 安全升级到 v17，`PRAGMA` 列已存在，3101 `/api/health` HTTP 200。原 Job `job_full_book_plan_9c5d…` 仍为 `failed 3/3`，错误时间戳与 `response.failed: internal_server_error: websocket close 1006 / unexpected EOF` 未变；本 Task 没有执行付费 retry。旧 20 个 interval marker 的 `output_json` 均为 NULL，旧输出无法凭空恢复；用户后续通过正式“重试失败章节”入口启动新一轮时，本轮新成功 interval 会立即耐久化并在后续 Job 尝试中复用。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

@@ -19,16 +19,6 @@ const PROFILE_FIELDS: Array<[keyof BookPromptProfileContent, string, string]> = 
   ["assetInstructions", "资产 Prompt 要求", "追加人物、场景、道具或剧情插图草稿要求。"],
 ];
 
-const PRODUCT_PROMPT_TITLES: Record<string, string> = {
-  chapterAnalysis: "章节分析",
-  storyBibleInterval: "全书世界观（区间整理）",
-  storyBibleFinal: "全书世界观（全书归一）",
-  episodePlanning: "逐集局部规划",
-  episodeSkeleton: "旁白 Skeleton",
-  finishedNarrationBeat: "成片旁白 Beat",
-  assetPromptDraft: "资产 Prompt 草稿",
-};
-
 export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy, loading, submitting, operation, error, onCreate }: {
   bookId: string;
   seriesId: string;
@@ -151,18 +141,6 @@ export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy
           <button className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={disabled || !setup.dirty} onClick={() => void setup.saveProfile()}>{setup.busy === "profile" ? "正在保存提示词…" : "保存本书专属提示词"}</button>
         </div>
       </section>
-
-      <details className="border border-[var(--border-subtle)] bg-[var(--bg-canvas)]">
-        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]">高级：查看产品级提示词（只读）</summary>
-        <div className="grid gap-4 border-t border-[var(--border-subtle)] p-4">
-          <p className="m-0 font-mono text-xs text-[var(--fg-tertiary)]">{setup.productPrompts?.setVersion ?? "正在读取产品提示词版本…"}</p>
-          {setup.productPrompts ? Object.entries(setup.productPrompts.prompts).map(([key, prompt]) => <section key={key} className="border-t border-[var(--border-subtle)] pt-3">
-            <h4 className="m-0 text-sm font-semibold">{PRODUCT_PROMPT_TITLES[key] ?? key}</h4>
-            <p className="mt-1 font-mono text-[11px] text-[var(--fg-tertiary)]">{setup.productPrompts!.versions[key]}</p>
-            <pre className="mt-3 whitespace-pre-wrap rounded bg-[var(--bg-subtle)] p-3 text-xs leading-6 text-[var(--fg-secondary)]">{prompt}</pre>
-          </section>) : null}
-        </div>
-      </details>
 
       <form className="grid gap-5" onSubmit={submit}>
         <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">

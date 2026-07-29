@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   chapterPagePath,
-  isModelSettingsSearch,
+  isSettingsSearch,
   resolveTheme,
   resolveThemePreference,
   responseJson,
   seriesWorkspaceFromSearch,
   seriesWorkspacePath,
   type ThemePreference,
-  withModelSettingsSearch,
-  withoutModelSettingsSearch,
+  withSettingsSearch,
+  withoutSettingsSearch,
 } from "./client-logic";
 import { ProductionWorkspace } from "./ProductionWorkspace";
 import {
@@ -50,7 +50,7 @@ export function App() {
   const [chapterTotal, setChapterTotal] = useState(0);
   const [selectedBook, setSelectedBook] = useState<string>();
   const [activeSeries, setActiveSeries] = useState<SeriesProject>();
-  const [showModelSettings, setShowModelSettings] = useState(() => isModelSettingsSearch(window.location.search));
+  const [showSettings, setShowSettings] = useState(() => isSettingsSearch(window.location.search));
   const [chapterText, setChapterText] = useState("");
   const [selectedChapterId, setSelectedChapterId] = useState<string>();
   const [pendingBookDelete, setPendingBookDelete] = useState<Book>();
@@ -275,26 +275,26 @@ export function App() {
     setStatus("已返回书库");
   }
 
-  function openModelSettings() {
-    setShowModelSettings(true);
-    window.history.pushState(null, "", `${window.location.pathname}${withModelSettingsSearch(window.location.search)}`);
-    setStatus("已打开模型设置中心");
+  function openSettings() {
+    setShowSettings(true);
+    window.history.pushState(null, "", `${window.location.pathname}${withSettingsSearch(window.location.search)}`);
+    setStatus("已打开设置");
   }
 
-  function closeModelSettings() {
-    setShowModelSettings(false);
-    window.history.pushState(null, "", `${window.location.pathname}${withoutModelSettingsSearch(window.location.search)}`);
+  function closeSettings() {
+    setShowSettings(false);
+    window.history.pushState(null, "", `${window.location.pathname}${withoutSettingsSearch(window.location.search)}`);
     setStatus(activeSeries ? `已返回系列项目：${activeSeries.title}` : "已返回书库");
   }
 
-  if (showModelSettings) return <ModelSettingsPage onBack={closeModelSettings} />;
+  if (showSettings) return <ModelSettingsPage onBack={closeSettings} />;
 
   if (activeSeries) return <ProductionWorkspace
     bookId={activeSeries.bookId}
     series={activeSeries}
     initialStatus={status}
     onLeave={leaveSeriesWorkspace}
-    onOpenSettings={openModelSettings}
+    onOpenSettings={openSettings}
   />;
 
   return (
@@ -337,8 +337,8 @@ export function App() {
                 }}
               />
             </label>
-            <button className="button-secondary" type="button" onClick={openModelSettings}>
-              模型设置
+            <button className="button-secondary" type="button" onClick={openSettings}>
+              设置
             </button>
             <button
               className="button-primary"

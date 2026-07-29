@@ -26,18 +26,19 @@ export function seriesWorkspaceFromSearch(search: string) {
   return bookId && seriesId ? { bookId, seriesId } : undefined;
 }
 
-export function isModelSettingsSearch(search: string) {
-  return new URLSearchParams(search).get("settings") === "models";
+export function isSettingsSearch(search: string) {
+  const section = new URLSearchParams(search).get("settings");
+  return section === "global" || section === "models";
 }
 
-export function withModelSettingsSearch(search: string) {
+export function withSettingsSearch(search: string) {
   const parameters = new URLSearchParams(search);
-  parameters.set("settings", "models");
+  parameters.set("settings", "global");
   const value = parameters.toString();
   return value ? `?${value}` : "";
 }
 
-export function withoutModelSettingsSearch(search: string) {
+export function withoutSettingsSearch(search: string) {
   const parameters = new URLSearchParams(search);
   parameters.delete("settings");
   const value = parameters.toString();

@@ -17,12 +17,6 @@ export interface BookPromptProfile extends BookPromptProfileContent {
   profileHash: string | null;
 }
 
-export interface ProductPromptSet {
-  setVersion: string;
-  versions: Record<string, string>;
-  prompts: Record<string, string>;
-}
-
 export const EMPTY_PROMPT_PROFILE: BookPromptProfileContent = {
   sharedInstructions: "",
   chapterAnalysisInstructions: "",
@@ -36,12 +30,11 @@ export function usePipelineSetup(bookId: string, seriesId: string) {
   const [profile, setProfile] = useState<BookPromptProfileContent>(EMPTY_PROMPT_PROFILE);
   const [savedProfile, setSavedProfile] = useState<BookPromptProfileContent>(EMPTY_PROMPT_PROFILE);
   const [profileRevision, setProfileRevision] = useState(0);
-  const [productPrompts, setProductPrompts] = useState<ProductPromptSet>();
   const [ranges, setRanges] = useState<EpisodeChapterRange[]>();
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState<"loading" | "preview" | "profile" | undefined>("loading");
   const [ready, setReady] = useState(false);
-  const [status, setStatus] = useState("正在读取本书专属提示词与产品级提示词…");
+  const [status, setStatus] = useState("正在读取本书专属提示词…");
   const [error, setError] = useState<string>();
   const loadIdentity = useRef(`${bookId}:${seriesId}`);
   loadIdentity.current = `${bookId}:${seriesId}`;
@@ -54,16 +47,12 @@ export function usePipelineSetup(bookId: string, seriesId: string) {
     setError(undefined);
     setRanges(undefined);
     setConfirmed(false);
-    Promise.all([
-      requestJson<{ profile: BookPromptProfile }>(`/api/books/${encodeURIComponent(bookId)}/prompt-profile`, controller.signal),
-      requestJson<ProductPromptSet>("/api/product-prompts", controller.signal),
-    ]).then(([profileBody, promptBody]) => {
+    requestJson<{ profile: BookPromptProfile }>(`/api/books/${encodeURIComponent(bookId)}/prompt-profile`, controller.signal).then((profileBody) => {
       if (loadIdentity.current !== identity) return;
       const content = profileContent(profileBody.profile);
       setProfile(content);
       setSavedProfile(content);
       setProfileRevision(profileBody.profile.revision);
-      setProductPrompts(promptBody);
       setReady(true);
       setStatus(profileBody.profile.revision
         ? `已读取本书专属提示词第 ${profileBody.profile.revision} 版。`
@@ -134,7 +123,7 @@ export function usePipelineSetup(bookId: string, seriesId: string) {
   }, [bookId, busy, profile]);
 
   return {
-    profile, setProfile, profileRevision, productPrompts, ranges, setRanges, confirmed, setConfirmed,
+    profile, setProfile, profileRevision, ranges, setRanges, confirmed, setConfirmed,
     busy, ready, status, error, dirty: JSON.stringify(profile) !== JSON.stringify(savedProfile), preview, saveProfile,
   };
 }

@@ -24,12 +24,14 @@ import {
   type ModelProvider,
   type ModelType,
 } from "./model-settings";
+import { ProductPromptSettings } from "./ProductPromptSettings";
 
 interface ModelSettingsPageProps {
   onBack: () => void;
 }
 
 export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
+  const [section, setSection] = useState<"models" | "prompts">("models");
   const [config, setConfig] = useState<ModelConfig>();
   const [selectedProviderId, setSelectedProviderId] = useState("edge-tts");
   const [status, setStatus] = useState("正在加载模型配置…");
@@ -152,24 +154,26 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
         <header className="flex min-h-28 items-center justify-between gap-6 border-b border-[var(--border-subtle)] px-7 py-6 max-md:flex-col max-md:items-start max-md:px-4">
           <div>
             <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.17em] text-[var(--accent)]">NARRALUME / 全局设置</p>
-            <h1 className="m-0 text-3xl font-semibold">模型设置中心</h1>
-            <p className="mt-2 text-sm text-[var(--fg-secondary)]">配置分析、图片与语音模型，并指定各能力的默认运行模型。</p>
+            <h1 className="m-0 text-3xl font-semibold">设置</h1>
+            <p className="mt-2 text-sm text-[var(--fg-secondary)]">管理模型、产品级提示词及后续全局配置。</p>
           </div>
           <div className="flex gap-2 max-md:w-full">
             <button className="min-h-11 rounded border border-[var(--border-strong)] px-4 text-sm text-[var(--fg-secondary)] hover:bg-[var(--bg-subtle)] max-md:flex-1" type="button" onClick={back}>返回上一页</button>
-            <button className="min-h-11 rounded bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] disabled:opacity-50 max-md:flex-1" type="button" disabled={!config || loading || saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存模型配置"}</button>
+            {section === "models" ? <button className="min-h-11 rounded bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent-contrast)] disabled:opacity-50 max-md:flex-1" type="button" disabled={!config || loading || saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存模型配置"}</button> : null}
           </div>
         </header>
 
-        <div className={`mx-7 mt-5 rounded border px-4 py-3 text-sm ${statusClasses[statusTone]}`} role={statusTone === "error" ? "alert" : "status"} aria-live="polite">
-          {status}
-        </div>
+        {section === "models" ? <div className={`mx-7 mt-5 rounded border px-4 py-3 text-sm ${statusClasses[statusTone]}`} role={statusTone === "error" ? "alert" : "status"} aria-live="polite">{status}</div> : null}
         <div className="mx-7 mt-3 flex min-h-12 items-center justify-between gap-4 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-2 text-sm text-[var(--fg-secondary)] max-md:flex-col max-md:items-start">
           <span>全局设置由书库与系列工作台共用，不属于七个制作阶段。</span>
-          {dirty ? <span className="font-semibold text-amber-700 dark:text-amber-200">有未保存的修改</span> : <span className="font-mono text-[11px]">入口：顶栏「模型设置」</span>}
+          {dirty ? <span className="font-semibold text-amber-700 dark:text-amber-200">模型配置有未保存的修改</span> : <span className="font-mono text-[11px]">入口：顶栏「设置」</span>}
         </div>
 
-        <section className="grid grid-cols-[240px_minmax(0,1fr)] gap-0 px-7 py-6 max-lg:grid-cols-1 max-md:px-4">
+        <nav className="mx-7 mt-5 flex gap-1 border-b border-[var(--border-subtle)] max-md:mx-4" aria-label="设置分类">
+          {([['models', '模型配置'], ['prompts', '产品级提示词']] as const).map(([id, label]) => <button key={id} type="button" aria-current={section === id ? "page" : undefined} onClick={() => setSection(id)} className={`min-h-11 border-b-2 px-4 text-sm font-semibold ${section === id ? "border-[var(--accent)] text-[var(--fg-primary)]" : "border-transparent text-[var(--fg-secondary)] hover:bg-[var(--bg-subtle)]"}`}>{label}</button>)}
+        </nav>
+
+        {section === "models" ? <section className="grid grid-cols-[240px_minmax(0,1fr)] gap-0 px-7 py-6 max-lg:grid-cols-1 max-md:px-4">
           <aside className="border-r border-[var(--border-subtle)] pr-4 max-lg:border-r-0 max-lg:pr-0">
             <p className="mb-3 font-mono text-[11px] font-semibold tracking-[.17em] text-[var(--fg-tertiary)]">供应商</p>
             <button type="button" disabled={!config || loading || saving} onClick={addProvider} className="mb-3 min-h-10 w-full rounded border border-[var(--border-strong)] bg-[var(--bg-inset)] px-3 text-sm font-semibold hover:bg-[var(--bg-subtle)] disabled:opacity-50">添加供应商</button>
@@ -223,7 +227,7 @@ export function ModelSettingsPage({ onBack }: ModelSettingsPageProps) {
               <div className="border border-[var(--border-subtle)] p-8 text-sm text-[var(--fg-secondary)]">{loading ? "正在读取模型配置…" : "模型配置暂不可用。"}</div>
             )}
           </div>
-        </section>
+        </section> : <div className="px-7 py-6 max-md:px-4"><ProductPromptSettings /></div>}
         <AlertDialog open={!!confirmation} onOpenChange={(open) => { if (!open) setConfirmation(undefined); }}>
           <AlertDialogContent>
             <AlertDialogHeader>

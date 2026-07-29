@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 
 import {
   activeModelLabel,
@@ -10,6 +12,7 @@ import {
   updateProviderModel,
   type ModelConfig,
 } from "../src/settings/model-settings.ts";
+import { ProductPromptList } from "../src/settings/ProductPromptSettings.tsx";
 
 function config(): ModelConfig {
   return {
@@ -91,4 +94,20 @@ test("模型设置复用 MuseDock 的供应商草稿和按模式配置逻辑", (
   assert.equal(fifth.active.image, "provider_1/image");
   assert.equal(sixth.providers.provider_1, undefined);
   assert.equal(sixth.active.image, "");
+});
+
+test("设置页按服务端标题和版本展示只读产品级提示词", () => {
+  const html = renderToString(createElement(ProductPromptList, { promptSet: {
+    setVersion: "product-prompts-v1",
+    titles: { chapterAnalysis: "章节分析" },
+    versions: { chapterAnalysis: "chapter-analysis-v1" },
+    prompts: { chapterAnalysis: "只提取有来源的结构化事件。" },
+  } }));
+
+  assert.match(html, /产品级提示词/);
+  assert.match(html, /所有书籍与系列任务共用/);
+  assert.match(html, /product-prompts-v1/);
+  assert.match(html, /章节分析/);
+  assert.match(html, /chapter-analysis-v1/);
+  assert.match(html, /只提取有来源的结构化事件/);
 });

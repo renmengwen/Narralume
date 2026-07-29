@@ -22,14 +22,14 @@ import {
 } from "../src/production/audio/audio-editor.ts";
 import {
   chapterPagePath,
-  isModelSettingsSearch,
+  isSettingsSearch,
   resolveTheme,
   resolveThemePreference,
   responseJson,
   seriesWorkspaceFromSearch,
   seriesWorkspacePath,
-  withModelSettingsSearch,
-  withoutModelSettingsSearch,
+  withSettingsSearch,
+  withoutSettingsSearch,
 } from "../src/client-logic.ts";
 import {
   assembleImagePrompt,
@@ -102,13 +102,14 @@ test("系列工作台地址可刷新恢复且安全编码", () => {
   assert.equal(seriesWorkspaceFromSearch("?book=book_only"), undefined);
 });
 
-test("模型设置地址可叠加在书库或系列工作台并返回原来源", () => {
-  assert.equal(isModelSettingsSearch("?settings=models"), true);
-  assert.equal(isModelSettingsSearch("?settings=other"), false);
-  assert.equal(withModelSettingsSearch(""), "?settings=models");
-  assert.equal(withModelSettingsSearch("?book=book_1&series=series_1"), "?book=book_1&series=series_1&settings=models");
-  assert.equal(withoutModelSettingsSearch("?book=book_1&series=series_1&settings=models"), "?book=book_1&series=series_1");
-  assert.equal(withoutModelSettingsSearch("?settings=models"), "");
+test("设置地址可叠加在书库或系列工作台并兼容旧模型设置地址", () => {
+  assert.equal(isSettingsSearch("?settings=global"), true);
+  assert.equal(isSettingsSearch("?settings=models"), true);
+  assert.equal(isSettingsSearch("?settings=other"), false);
+  assert.equal(withSettingsSearch(""), "?settings=global");
+  assert.equal(withSettingsSearch("?book=book_1&series=series_1"), "?book=book_1&series=series_1&settings=global");
+  assert.equal(withoutSettingsSearch("?book=book_1&series=series_1&settings=global"), "?book=book_1&series=series_1");
+  assert.equal(withoutSettingsSearch("?settings=global"), "");
 });
 
 test("生产工作台恢复阶段、章节和任务且拒绝坏阶段", () => {

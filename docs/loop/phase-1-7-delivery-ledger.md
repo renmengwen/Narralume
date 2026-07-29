@@ -659,14 +659,15 @@ PC-02 当前 checkpoint：
 | 字段 | 证据 |
 | --- | --- |
 | Task / Requirement | `AUTO-04-SCRIPT-DURATION-UX-01` / 修复目标 20 分钟稿件明显过短仍成功、段落 1 的全部引用来源挤压后续段落，以及“忠实稿 / 包装稿”用户语义不清。 |
-| 状态 | `complete`（工程实现、命名、OpenDesign 与自动验证完成；正式 20 集流水线保持暂停，尚未执行新合同的付费重试） |
+| 状态 | `complete`（工程实现、命名、OpenDesign、自动验证与正式第 1 集 v3 Gate 完成；全本流水线已在第 2 集开跑前沿正式 pause 收口，保持稳定暂停） |
 | 真实根因 | 既有 `characterBudget` 只进入 prompt 并作为结果提示，没有最低字数门禁；旧 v2 成功 Job identity 可在恢复时继续被当前流水线映射消费。稿件编辑器又默认平铺每个段落的全部来源，所以段落 2～20 被段落 1 的长来源列表推到页面下方，并非只生成了一个段落。 |
 | 来源登记 | 按冻结优先级核查：本机缺少 DramaClaw、LumenX、LocalMiniDrama。Toonflow `bc61ec7a1b5df31293b286981a5f4ad4635464ee` 的 `data/skills/production_agent_supervision.md`、`data/skills/script_execution_script.md` 只登记“字数按实测语速反推时长并作为验收”的通用思想，为 `reference-only`，不采用其短剧固定时长、节奏或字数常量。MuseDock `661bc6d1b4a84ecee466657a64f7e26698262190` 的 `server/services/agent/agentRunsFreeformHelpers.js` 仅处理超长压缩，为 `reference-only`。实现采用 Narralume `internal-port`，复用现有动态预算、Job 重试、冻结来源、原子双稿写入和 pipeline mapping。 |
 | 时长合同 | `episode_scripts_generate` 升为合同 v3，预算继续由 `targetDurationSeconds × charactersPerSecond × narrationOccupancy` 动态计算，不写死 20 分钟或 4320 字。原著还原稿与成片旁白稿都必须在预算的 `90%～110%`，按 Unicode code point 计数；当前 1200 秒、4.5 字/秒、0.8 旁白占用率示例为预算 4320、允许 3888～4752 字。任一版本过短或过长都在原子写入前失败，双稿均不落库；provider 明确收到最小、目标、最大字数且不得以摘要代替完整叙事。 |
 | 恢复合同 | 冻结 payload 与 request hash 纳入 `contractVersion: 3`；脚本协调始终按当前 identity 调用既有 enqueue，并只在 Job ID 变化时原子更新 Episode mapping。旧 v2 Job 与稿件保留历史，不删除、不改 SQLite，但第 1～6 集旧成功映射不会继续驱动当前 run，第 7 集也不能沿用旧合同越过新门禁。Episode 之间仍严格串行消费 `scriptHandoff`，不自动批准。 |
 | UI / OpenDesign | 用户可见名称统一为“原著还原稿 / 成片旁白稿”，内部 `faithful / packaged` 枚举不变。每个段落复用现有 Radix/shadcn Accordion：引用来源默认收起，标题显示 `已选 N / M`，展开后 `max-h-80` 局部滚动；Trigger 保持 44px、Enter/Space、焦点环与 Radix aria，关闭显示“展开”、打开显示“收起”。独立 OpenDesign verifier 基于 `narralume-product` 最终 PASS：后续段落恢复正常阅读流，暖中性高密度、细边框和现有语义 token 未回退，无新依赖或页面级 CSS。 |
-| 验证证据 | 定向 Server `70/70 PASS`；定向 Web `73/73 PASS`。最终根 `npm run typecheck` PASS；`npm test` 为 Server `417 PASS / 0 FAIL / 1 既有 Windows 权限 SKIP`、Web `101 PASS / 0 FAIL`；`npm run build` PASS，Vite 137 modules、JS 约 488.20 kB / gzip 145.41 kB；`git diff --check` PASS。Accordion 展开/收起状态新增最小回归断言。 |
-| 业务提交 / 真实恢复入口 | `daa1ea5 fix(auto): 校验旁白时长并优化稿件编辑`。只读复核正式 run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 仍为 `paused`，`resume_status=generating_scripts`，failure 为空；当前映射保留 6 个旧 succeeded 与 1 个 cancelled 脚本 Job。本次业务提交、测试和 OpenDesign 复核均未 resume、未直接写 SQLite。下一步只重启后端并确认 `/api/health` 200、run 仍 paused，再通过正式 retry/resume 生成第 1 集 v3；先验收两版各 3888～4752 字、来源覆盖、父链、当前 mapping 与 0 自动批准，第一集 PASS 后才继续第 2～20 集。 |
+| 验证证据 | 首轮定向 Server `70/70 PASS`、Web `73/73 PASS`。长度纠正新增回归后定向 Server `71/71 PASS`；最终根 `npm run typecheck` PASS，`npm test` 为 Server `418 PASS / 0 FAIL / 1 既有 Windows 权限 SKIP`、Web `101 PASS / 0 FAIL`；`npm run build` PASS，Vite 137 modules、JS 约 488.20 kB / gzip 145.41 kB；`git diff --check` PASS。Accordion 展开/收起与 packaged 仅定向重写一次、faithful 不重跑均有最小回归。 |
+| 正式第 1 集 v3 Gate | 初次正式 resume 后，门禁真实拒绝 packaged 6052 / 6047 字（上限 4752），中间一次为网络 `fetch failed`，双稿均未落库且未进入第 2 集。第一版定向纠正把输出降至 5082 字但仍严格失败；真实证据暴露仅传错误、未传被拒绝稿，模型无法真正定向压缩。根修在唯一纠正请求中附带完整 `previousParagraphs`，保持事实、来源与段落顺序，不增加纠正次数、不重复 faithful、不放宽门禁。最终正式 retry 的第 1 集 Job `job_episode_scripts_8a9b299e…` attempt 1/3 成功：合同 v3、预算 4320、范围 3888～4752，原著还原稿 4744 字、成片旁白稿 4744 字，各 15 段并完整覆盖全部 321 个冻结来源；package v2 父链指向本次 faithful v2，批准事件 0。 |
+| 业务提交 / 当前恢复入口 | `daa1ea5 fix(auto): 校验旁白时长并优化稿件编辑`；`7d62fd4 fix(auto): 定向纠正成片旁白稿长度`。3101 后端已单独热重载且 `/api/health` HTTP 200，5174 PID 始终未变。第 1 集成功后 Coordinator 在同一秒调用正式 pause；第 2 集新 v3 Job 已按取消合同中断，run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 现为稳定 `paused`、`resume_status=generating_scripts`、`canResume=true`，保留可诊断 cancelled failure，未直接写 SQLite。下一步可正式 resume 从第 2 集重试并继续逐集替换旧 v2 mapping；仍不得自动批准或把历史稿冒充 v3 结果。 |
 
 ## 决策与剩余风险
 

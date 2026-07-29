@@ -669,6 +669,16 @@ PC-02 当前 checkpoint：
 | 正式第 1 集 v3 Gate | 初次正式 resume 后，门禁真实拒绝 packaged 6052 / 6047 字（上限 4752），中间一次为网络 `fetch failed`，双稿均未落库且未进入第 2 集。第一版定向纠正把输出降至 5082 字但仍严格失败；真实证据暴露仅传错误、未传被拒绝稿，模型无法真正定向压缩。根修在唯一纠正请求中附带完整 `previousParagraphs`，保持事实、来源与段落顺序，不增加纠正次数、不重复 faithful、不放宽门禁。最终正式 retry 的第 1 集 Job `job_episode_scripts_8a9b299e…` attempt 1/3 成功：合同 v3、预算 4320、范围 3888～4752，原著还原稿 4744 字、成片旁白稿 4744 字，各 15 段并完整覆盖全部 321 个冻结来源；package v2 父链指向本次 faithful v2，批准事件 0。 |
 | 业务提交 / 当前恢复入口 | `daa1ea5 fix(auto): 校验旁白时长并优化稿件编辑`；`7d62fd4 fix(auto): 定向纠正成片旁白稿长度`。3101 后端已单独热重载且 `/api/health` HTTP 200，5174 PID 始终未变。第 1 集成功后 Coordinator 在同一秒调用正式 pause；第 2 集新 v3 Job 已按取消合同中断，run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 现为稳定 `paused`、`resume_status=generating_scripts`、`canResume=true`，保留可诊断 cancelled failure，未直接写 SQLite。下一步可正式 resume 从第 2 集重试并继续逐集替换旧 v2 mapping；仍不得自动批准或把历史稿冒充 v3 结果。 |
 
+## 2026-07-29 两版稿件正文差异门禁
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-04-SCRIPT-DIFFERENCE-01` / 用户在稿件工作台切换到“成片旁白稿”后正文没有变化；要求确认切换链路并修复真实生成结果。 |
+| 真实根因 | 前端 `changeKind → applyKind → scriptDraft` 已正确载入所选类型的最新版本，不是下拉框失效。默认 SQLite 只读核对显示第 1 集原著还原稿 v2 与成片旁白稿 v2 均为 15 段、4744 字，`content_hash=aa733fb8…`，且 `content_json_equal=true`、`texts_equal=true`、`source_indexes_equal=true`；模型把父稿 paragraphs 原样返回，而 v3 只校验长度与来源，没有禁止双稿逐字相同。 |
+| 最小修复 | `episode_scripts_generate` 升为合同 v4，避免旧 v3 成功 mapping 被恢复复用。成片旁白稿解析后统一比较每段正文；若与本次原著还原稿段数和文本逐项完全相同，则与长度越界共用既有唯一一次 packaged 定向纠正，并携带被拒绝的完整 `previousParagraphs`。纠正后仍相同则 Job 失败且双稿不落库；不重复 faithful、不放宽 90%～110% 时长字数、不改变来源父链、不自动批准。Provider 同时明确要求实际调整叙述节奏、段落衔接和口语表达，不得原样返回输入 paragraphs。 |
+| 自动验证 | 聚焦 `episode-script-generation-job.test.ts + series-pipeline-service.test.ts` 为 `73 PASS / 0 FAIL`；根 `npm run typecheck`、`npm test`、`npm run build`、`git diff --check` 全部 PASS，Vite 137 modules。回归覆盖初次原样返回只纠正一次、纠正请求携带 `previousParagraphs`、第二次真实改写后双稿 hash 不同、连续原样返回零落库，以及三集流水线成功替身不再违反新合同。业务提交 `ee3a941 fix(auto): 禁止两版稿件正文完全相同`。 |
+| 正式 Gate / 恢复入口 | 工程修复已完成，正式 v4 第 1 集重生成尚未执行。run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 必须继续保持正式暂停，先推送并确认后端热重载健康，再仅通过正式 resume/retry 从第 1 集替换旧 v3 mapping；第 1 集成功后立即正式 pause。Gate 必须核对 `contractVersion=4`、两稿均在 3888～4752 字、`content_hash/content_json` 不同、`texts_equal=false`、来源完整且只来自 faithful、父链正确、批准事件 0，并由工作台实际切换确认正文变化。不得改 SQLite、删除历史稿件或提前运行第 2～20 集。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

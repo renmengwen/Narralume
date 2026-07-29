@@ -1241,7 +1241,10 @@ test("脚本阶段严格串行消费上一集交接，失败局部重试且暂�
       }
       if (stage.stage === "faithful") return { text: textForBudget(stage.characterBudget, stage.sources[0]!.sourceText) };
       if (failSecond && generatingEpisodeId === "episode_2") throw new Error("第二集暂时失败");
-      return { paragraphs: stage.paragraphs };
+      return { paragraphs: stage.paragraphs.map((paragraph, index) => ({
+        ...paragraph,
+        text: index === 0 ? `旁${[...paragraph.text].slice(1).join("")}` : paragraph.text,
+      })) };
     };
     let worker = new JobWorker(database, {
       [EPISODE_SCRIPT_GENERATION_JOB_TYPE]: createEpisodeScriptGenerationJobHandler(

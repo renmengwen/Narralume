@@ -10,7 +10,7 @@ import { createScriptVersionPair } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
-export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = 3;
+export const EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION = 4;
 export const EPISODE_SCRIPT_MINIMUM_CHARACTER_RATIO = 0.9;
 export const EPISODE_SCRIPT_MAXIMUM_CHARACTER_RATIO = 1.1;
 export const EPISODE_SCRIPT_GENERATION_TIMEOUT_MS = 180_000;
@@ -445,7 +445,7 @@ function scriptCharacterLimits(characterBudget: number) {
   return { minimumCharacterCount, maximumCharacterCount };
 }
 
-class ScriptLengthError extends Error {}
+class CorrectableScriptError extends Error {}
 
 function validateScriptLength(
   label: string,
@@ -454,12 +454,22 @@ function validateScriptLength(
 ) {
   const actualCharacterCount = paragraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0);
   if (actualCharacterCount < limits.minimumCharacterCount) {
-    throw new ScriptLengthError(`${label}字数不足：实际 ${actualCharacterCount} 字，至少需要 ${limits.minimumCharacterCount} 字`);
+    throw new CorrectableScriptError(`${label}字数不足：实际 ${actualCharacterCount} 字，至少需要 ${limits.minimumCharacterCount} 字`);
   }
   if (actualCharacterCount > limits.maximumCharacterCount) {
-    throw new ScriptLengthError(`${label}字数过多：实际 ${actualCharacterCount} 字，最多允许 ${limits.maximumCharacterCount} 字`);
+    throw new CorrectableScriptError(`${label}字数过多：实际 ${actualCharacterCount} 字，最多允许 ${limits.maximumCharacterCount} 字`);
   }
   return actualCharacterCount;
+}
+
+function validatePackagedDifference(
+  faithfulParagraphs: ReadonlyArray<{ text: string }>,
+  packagedParagraphs: ReadonlyArray<{ text: string }>,
+) {
+  if (faithfulParagraphs.length === packagedParagraphs.length &&
+      faithfulParagraphs.every((paragraph, index) => paragraph.text === packagedParagraphs[index]?.text)) {
+    throw new CorrectableScriptError("成片旁白稿与原著还原稿正文完全相同，必须进行面向成片配音的实际改写");
+  }
 }
 
 async function callWithCancellation<T>(
@@ -654,13 +664,15 @@ export function createEpisodeScriptGenerationJobHandler(
     let packagedParagraphs = validatePackagedResult(await generatePackaged(), faithfulSources);
     let actualCharacterCount: number;
     try {
+      validatePackagedDifference(faithfulParagraphs, packagedParagraphs);
       actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
     } catch (error) {
-      if (!(error instanceof ScriptLengthError)) throw error;
+      if (!(error instanceof CorrectableScriptError)) throw error;
       packagedParagraphs = validatePackagedResult(
         await generatePackaged(error.message, packagedParagraphs),
         faithfulSources,
       );
+      validatePackagedDifference(faithfulParagraphs, packagedParagraphs);
       actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
     }
     context.reportProgress(0.9);

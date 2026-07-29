@@ -126,6 +126,7 @@ test("Responses 三阶段请求不发送不兼容的 json_object format", async 
   assert.match(prompts[1]!, /不得用摘要代替完整叙事/u);
   assert.match(prompts[2]!, /360 至 440 字/u);
   assert.match(prompts[2]!, /不得因润色或重组而压缩成摘要/u);
+  assert.match(prompts[2]!, /不得原样返回输入 paragraphs/u);
 });
 
 test("骨架 prompt 注入完整来源 allowlist 与唯一输出 schema", async () => {
@@ -173,6 +174,7 @@ test("Responses SSE 仅在明确成功终态后返回完整骨架", async () => 
 });
 
 test("长稿模型调用使用 180 秒首包与空闲、900 秒总上限", () => {
+  assert.equal(EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION, 4);
   assert.equal(EPISODE_SCRIPT_GENERATION_TIMEOUT_MS, 180_000);
   assert.equal(EPISODE_SCRIPT_GENERATION_IDLE_TIMEOUT_MS, 180_000);
   assert.equal(EPISODE_SCRIPT_GENERATION_TOTAL_TIMEOUT_MS, 900_000);
@@ -239,7 +241,10 @@ function successfulGenerator(observe?: (input: Parameters<GenerateEpisodeScript>
     ] };
     if (input.stage === "faithful") return { text: textForBudget(input.characterBudget,
       input.sources.map((source) => source.sourceText).join("；")) };
-    return { paragraphs: input.paragraphs };
+    return { paragraphs: input.paragraphs.map((paragraph, index) => ({
+      ...paragraph,
+      text: index === 0 ? `旁${[...paragraph.text].slice(1).join("")}` : paragraph.text,
+    })) };
   };
 }
 
@@ -278,7 +283,10 @@ test("流水线稿件按本书配置并发忠实稿 beat，包装稿等待全部
       if (input.stage === "packaged") {
         assert.equal(inFlight, 0);
         assert.equal(completed, 3);
-        return { paragraphs: input.paragraphs };
+        return { paragraphs: input.paragraphs.map((paragraph, index) => ({
+          ...paragraph,
+          text: index === 0 ? `旁${[...paragraph.text].slice(1).join("")}` : paragraph.text,
+        })) };
       }
       inFlight += 1;
       peak = Math.max(peak, inFlight);
@@ -369,6 +377,10 @@ test("原著还原稿与成片旁白稿必须落在动态字符预算区间内�
       ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
       : input.stage === "faithful" ? { text: textForBudget(input.characterBudget) }
         : { paragraphs: [{ text: "长".repeat(input.maximumCharacterCount + 1), sourceIndexes: [0, 1, 2] }] }, /成片旁白稿字数过多/],
+    ["旁白稿未改写", async (input: Parameters<GenerateEpisodeScript>[0]) => input.stage === "skeleton"
+      ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+      : input.stage === "faithful" ? { text: textForBudget(input.characterBudget) }
+        : { paragraphs: input.paragraphs }, /成片旁白稿与原著还原稿正文完全相同/],
   ] as const) await t.test(name, async () => {
     const context = await fixture();
     try {
@@ -402,11 +414,34 @@ test("成片旁白稿长度越界时只定向重写一次且不重复生成原�
     const result = await run(context, generate);
     assert.equal(result.job.status, "succeeded");
     assert.equal(calls, 4);
-    assert.match(prompts[3]!, /上一次完整成片旁白稿被长度合同拒绝/u);
+    assert.match(prompts[3]!, /上一次完整成片旁白稿被生成合同拒绝/u);
     assert.match(prompts[3]!, /实际 477 字，最多允许 476 字/u);
     assert.match(prompts[3]!, /"previousParagraphs":\[\{"text":"长长/u);
     assert.equal(prompts.filter((prompt) => prompt.includes('"stage":"faithful"')).length, 1);
     assert.equal(listScriptVersions(context.database, "episode").length, 2);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("成片旁白稿与原著还原稿完全相同时只定向改写一次", async () => {
+  const context = await fixture();
+  let packagedCalls = 0;
+  try {
+    const result = await run(context, async (input) => {
+      if (input.stage === "skeleton") return { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] };
+      if (input.stage === "faithful") return { text: textForBudget(input.characterBudget, "原著还原稿") };
+      packagedCalls += 1;
+      if (packagedCalls === 1) return { paragraphs: input.paragraphs };
+      assert.match(input.correctionError ?? "", /正文完全相同/u);
+      assert.deepEqual(input.previousParagraphs, input.paragraphs);
+      return { paragraphs: [{ text: textForBudget(input.characterBudget, "成片旁白稿"), sourceIndexes: [0, 1, 2] }] };
+    });
+    assert.equal(result.job.status, "succeeded");
+    assert.equal(packagedCalls, 2);
+    const versions = listScriptVersions(context.database, "episode");
+    assert.notEqual(versions[0]!.contentHash, versions[1]!.contentHash);
   } finally {
     context.connection.close();
     await rm(context.dataRoot, { recursive: true, force: true });

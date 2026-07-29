@@ -694,9 +694,9 @@ PC-02 当前 checkpoint：
 | 全书世界观查看 | `complete`：新增 `GET /api/pipeline-runs/:runId/full-book-worldview`，只按当前 run/series 的 final identity 读取并校验 same-book、final、未失效和 current run，不接受任意 bibleId/路径；工作台按人物、关系、地点、组织、器物、概念、时间线、回忆、情节线、疑难事实、剧透限制、专有名词 12 类结构化只读展示，来源与高级元数据按需展开，查看不产生写入或模型调用。内部 `story_bible`/`book_story_bibles` 合同未改。 |
 | Review / 修复 | 轻量中文 Review 无 P0/P1；发现并修复 2 个 P2：旧 run 可读取未显式失效的非当前 final 全书世界观；Coverage 未锁定 Job `contractVersion` 与 run `scriptContractVersion` 一致。修复后回归覆盖 current-run identity 及 v5/v6 双向合同错配，均拒绝且不自动批准。 |
 | 验证证据 | 修复后根级 `npm run typecheck` PASS；`npm test` PASS：server 441 tests / 440 pass / 0 fail / 1 skip，web 109/109；唯一 skip 为 Windows 当前权限 `EPERM` 无法创建项目包符号链接/Junction 测试夹具。`npm run build` PASS：server tsc、web 141 modules；仅既有 Vite 主 JS 513.09 kB 超过 500 kB 提示。`git diff --check` PASS，仅 LF→CRLF 提示。聚焦：世界观 route 3/3、pipeline service 38/38、合跑 41/41。运行时代码用户旧称“故事圣经”扫描为 0。 |
-| 业务提交 / 状态 | `f5a2fff14ea523d5435c4f35cf5e5d96a559d4fa feat(auto): 落地局部规划、两层提示词与成片旁白 v6`；`6a2ee85593cb1d52f9b924c93770eaa8ddf42258 feat(web): 接入新规划合同与成片旁白工作台`。功能分支 `codex/direct-finished-narration-v6`，Requirement 状态 `complete`；未 push、未合并 main。 |
+| 业务提交 / 状态 | `f5a2fff14ea523d5435c4f35cf5e5d96a559d4fa feat(auto): 落地局部规划、两层提示词与成片旁白 v6`；`6a2ee85593cb1d52f9b924c93770eaa8ddf42258 feat(web): 接入新规划合同与成片旁白工作台`；提交区间 diff-check 发现的两个 EOF 多余空行由 `22f78108da39e8b92fb110c165022931f4008532 style(web): 清理分集设置文件尾空行` 修复，Web 聚焦 2/2、typecheck 与 diff-check PASS。功能分支 `codex/direct-finished-narration-v6`，Requirement 状态 `complete`；未 push、未合并 main。 |
 | 跳过的真实 Gate | 按安全边界未调用正式付费文本/图片/TTS 模型，未执行真实 3–5 beat A/B Canary，未恢复或修改真实 run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b`，未修改 SQLite 绕 Gate，未自动批准稿件/图片/TTS/视觉段或媒体。上述是需用户另行授权/人工判断的验收，不是自动测试失败。 |
-| 恢复入口 | 从 `codex/direct-finished-narration-v6` 业务 HEAD `6a2ee85593cb1d52f9b924c93770eaa8ddf42258` 及后续 Ledger 控制提交恢复，工作树应干净。人工验收顺序：新建隔离测试书 → 查看/保存 Book Prompt Profile → 预览并确认连续分集范围 → 用户显式授权后执行 3–5 beat v5/v6 A/B Canary → 人工检查单一成片旁白与逐 beat 恢复 → 人工批准后才进入 TTS/资产候选/视觉/项目包；全书世界观查看只读。不得恢复现有真实生产 run 或自动批准。 |
+| 恢复入口 | 从 `codex/direct-finished-narration-v6` 业务 HEAD `22f78108da39e8b92fb110c165022931f4008532` 及后续 Ledger 控制提交恢复，工作树应干净。人工验收顺序：新建隔离测试书 → 查看/保存 Book Prompt Profile → 预览并确认连续分集范围 → 用户显式授权后执行 3–5 beat v5/v6 A/B Canary → 人工检查单一成片旁白与逐 beat 恢复 → 人工批准后才进入 TTS/资产候选/视觉/项目包；全书世界观查看只读。不得恢复现有真实生产 run 或自动批准。 |
 
 ## 决策与剩余风险
 

@@ -167,8 +167,8 @@ export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy
             <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～20章；实际批次会按输入安全上限自动缩小。</span>
           </label>
           <label className="grid gap-2 text-sm font-semibold">并发批次数
-            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="8" step="1" inputMode="numeric" disabled={disabled} value={chapterConcurrency} onChange={(event) => setChapterConcurrency(Number(event.target.value))} />
-            <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～8批；并发越高越可能触发供应商限流。</span>
+            <input className="min-h-11 rounded border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-3 font-mono font-normal" type="number" min="1" max="50" step="1" inputMode="numeric" disabled={disabled} value={chapterConcurrency} onChange={(event) => setChapterConcurrency(Number(event.target.value))} />
+            <span className="text-xs font-normal text-[var(--fg-tertiary)]">允许 1～50批；并发越高越可能触发供应商限流。</span>
           </label>
         </div>
 

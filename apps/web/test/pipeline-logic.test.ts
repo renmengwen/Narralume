@@ -65,7 +65,8 @@ test("全本设置只接受连续范围、成片规格和安全的分析批次",
   assert.throws(() => pipelineCreateInput({ ...input, episodeCount: 0 }, chapters, policy), /1～1000/);
   assert.throws(() => pipelineCreateInput({ ...input, targetDurationSeconds: 61 }, chapters, policy), /30 秒递增/);
   assert.throws(() => pipelineCreateInput({ ...input, chapterBatchSize: 21 }, chapters, policy), /1～20/);
-  assert.throws(() => pipelineCreateInput({ ...input, chapterConcurrency: 9 }, chapters, policy), /1～8/);
+  assert.equal(pipelineCreateInput({ ...input, chapterConcurrency: 50 }, chapters, policy).chapterConcurrency, 50);
+  assert.throws(() => pipelineCreateInput({ ...input, chapterConcurrency: 51 }, chapters, policy), /1～50/);
 });
 
 test("全本设置展示默认批次、并发和输入安全说明", () => {
@@ -83,6 +84,7 @@ test("全本设置展示默认批次、并发和输入安全说明", () => {
   assert.match(html, /实际批次会按输入安全上限自动缩小/);
   assert.match(html, /并发批次数/);
   assert.match(html, /value="8"/);
+  assert.match(html, /max="50"/);
   assert.match(html, /并发越高越可能触发供应商限流/);
   assert.match(html, /min-h-11/);
 });

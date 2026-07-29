@@ -167,7 +167,7 @@ export function createSeriesPipelineRun(
     "单集时长",
   );
   const chapterBatchSize = safeInteger(input.chapterBatchSize ?? 10, 1, 20, "每批章节数");
-  const chapterConcurrency = safeInteger(input.chapterConcurrency ?? 8, 1, 8, "并发批次数");
+  const chapterConcurrency = safeInteger(input.chapterConcurrency ?? 8, 1, 50, "并发批次数");
   if ((targetDurationSeconds - EPISODE_DURATION_POLICY.minimumSeconds) % EPISODE_DURATION_POLICY.stepSeconds !== 0) {
     throw new SeriesPipelineError(400, `单集时长必须按 ${EPISODE_DURATION_POLICY.stepSeconds} 秒递增`);
   }

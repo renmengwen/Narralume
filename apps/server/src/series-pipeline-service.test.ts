@@ -337,7 +337,7 @@ test("流水线创建校验连续范围、拒绝重复 active，并隔离另一�
     await seed(dataRoot, "b", connection);
     const database = connection.database;
     const runA = createSeriesPipelineRun(database, input("a"));
-    const runB = createSeriesPipelineRun(database, input("b"));
+    const runB = createSeriesPipelineRun(database, { ...input("b"), chapterConcurrency: 50 });
     assert.equal(runA.status, "configured");
     assert.equal(runA.chapterBatchSize, 10);
     assert.equal(runA.chapterConcurrency, 8);
@@ -347,11 +347,12 @@ test("流水线创建校验连续范围、拒绝重复 active，并隔离另一�
       chapterBatchSize: 10, chapterConcurrency: 8,
     })).digest("hex"));
     assert.equal(runB.seriesProjectId, "series_b");
+    assert.equal(runB.chapterConcurrency, 50);
     assert.throws(() => createSeriesPipelineRun(database, input("a")), (error: unknown) =>
       error instanceof SeriesPipelineError && error.statusCode === 409);
     assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), episodeCount: 0 }), /总集数/);
     assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), chapterBatchSize: 21 }), /每批章节数/);
-    assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), chapterConcurrency: 9 }), /并发批次数/);
+    assert.throws(() => createSeriesPipelineRun(database, { ...input("b"), chapterConcurrency: 51 }), /并发批次数/);
     assert.throws(() => createSeriesPipelineRun(database, {
       ...input("b"), sourceStartChapterId: "chapter_b_2", sourceEndChapterId: "chapter_b_1",
     }), /顺序正确/);

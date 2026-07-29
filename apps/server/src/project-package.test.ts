@@ -26,7 +26,7 @@ const TIMELINE = "a".repeat(64);
 const hash = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
 
 test("项目包恢复兼容版本是显式持久合同", () => {
-  assert.deepEqual(RESTORABLE_PROJECT_SCHEMA_VERSIONS, [13, 14, 15, 16, 17, 18]);
+  assert.deepEqual(RESTORABLE_PROJECT_SCHEMA_VERSIONS, [13, 14, 15, 16, 17, 18, 19]);
 });
 
 async function put(root: string, relativePath: string, content: string | Buffer) {
@@ -263,7 +263,7 @@ test("合法 v14 项目包在私有 staging 升级为 v18 并保留完整产品�
     try {
       assert.deepEqual(
         (restoredDatabase.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map((row) => row.version),
-        Array.from({ length: 18 }, (_, index) => index + 1),
+        Array.from({ length: 19 }, (_, index) => index + 1),
       );
       for (const [table, count] of Object.entries({
         episodes: 1, episode_sources: 1, script_versions: 2, script_version_sources: 2,
@@ -297,7 +297,7 @@ test("合法 v13 封存项目包恢复时升级到 v18", async () => {
     await restoreProjectPackage(packagePath, restored);
     const database = new DatabaseSync(join(restored, "narralume.sqlite3"), { readOnly: true });
     try {
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 18);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 19);
       assert.equal(database.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
     } finally { database.close(); }
   } finally { await cleanup(current); }
@@ -333,7 +333,7 @@ test("合法 v17 项目包恢复时补齐 v18 合同列", async () => {
     await restoreProjectPackage(packagePath, restored);
     const database = new DatabaseSync(join(restored, "narralume.sqlite3"), { readOnly: true });
     try {
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 18);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version, 19);
       assert.equal(database.prepare(
         "SELECT script_contract_version FROM script_versions WHERE id = ?",
       ).get(current.packagedScriptId)?.script_contract_version, 5);
@@ -439,7 +439,7 @@ test("项目包创建仍严格要求 v18，恢复拒绝未来或有缺口的迁�
         { packagePath, finalManifestRelativePath: current.finalManifestRelativePath });
       const database = new DatabaseSync(join(packagePath, "payload", "narralume.sqlite3"));
       try {
-        if (kind === "future") database.prepare("INSERT INTO schema_migrations (version) VALUES (19)").run();
+        if (kind === "future") database.prepare("INSERT INTO schema_migrations (version) VALUES (20)").run();
         else database.prepare("DELETE FROM schema_migrations WHERE version=13").run();
       } finally { database.close(); }
       await refreshPackagedDatabaseIdentity(packagePath);

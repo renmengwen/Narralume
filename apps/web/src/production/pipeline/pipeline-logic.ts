@@ -110,8 +110,8 @@ export function pipelineCreateInput(
   if (!Number.isSafeInteger(input.chapterBatchSize) || input.chapterBatchSize < 1 || input.chapterBatchSize > 20) {
     throw new Error("每批最多章节数必须是 1～20 之间的整数");
   }
-  if (!Number.isSafeInteger(input.chapterConcurrency) || input.chapterConcurrency < 1 || input.chapterConcurrency > 8) {
-    throw new Error("并发批次数必须是 1～8 之间的整数");
+  if (!Number.isSafeInteger(input.chapterConcurrency) || input.chapterConcurrency < 1 || input.chapterConcurrency > 50) {
+    throw new Error("并发批次数必须是 1～50 之间的整数");
   }
   return input;
 }

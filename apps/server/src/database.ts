@@ -736,6 +736,16 @@ const MIGRATION_18 = `
   BEGIN SELECT RAISE(ABORT, 'book prompt profile revisions are immutable'); END;
 `;
 
+const MIGRATION_19 = `
+  ALTER TABLE series_pipeline_runs ADD COLUMN chapter_concurrency_v19 INTEGER;
+  UPDATE series_pipeline_runs SET chapter_concurrency_v19 = chapter_concurrency;
+  ALTER TABLE series_pipeline_runs DROP COLUMN chapter_concurrency;
+  ALTER TABLE series_pipeline_runs ADD COLUMN chapter_concurrency INTEGER NOT NULL DEFAULT 1
+    CHECK (chapter_concurrency BETWEEN 1 AND 50);
+  UPDATE series_pipeline_runs SET chapter_concurrency = chapter_concurrency_v19;
+  ALTER TABLE series_pipeline_runs DROP COLUMN chapter_concurrency_v19;
+`;
+
 const MIGRATIONS = [
   MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8,
   MIGRATION_9,
@@ -748,6 +758,7 @@ const MIGRATIONS = [
   MIGRATION_16,
   MIGRATION_17,
   MIGRATION_18,
+  MIGRATION_19,
 ];
 
 export interface NarralumeDatabase {

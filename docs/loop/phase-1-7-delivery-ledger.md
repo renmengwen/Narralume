@@ -654,6 +654,20 @@ PC-02 当前 checkpoint：
 | 自动验证 | `full-book-plan-job-handler.test.ts` 12 PASS / 0 FAIL；Server `npm run typecheck` PASS；`git diff --check` PASS。业务提交 `43f5cc1 fix(auto): 确定性归并全书规划分区`。 |
 | 正式恢复 Gate | 先通过正式 pause API 中断无效的第 2 次模型 final，再在后端热重载为 PID `21928`、`/api/health` HTTP 200 后按正式 `retry → resume` 恢复。Job 直接复用 `20/20` 个 interval 输出并确定性归并；约 5 秒内 Run 从 `planning_episodes` 原子进入 `generating_scripts`，`episodePlan=20/20`、Episode 索引 `1..20`、`planHash=52f323a5695d9fcc44ec2815736defd9a5ea279d8a7d6e27b66541153e5cfc05`、失败 0，AUTO-03 正式长书 Gate PASS。第 1 集稿件 Job 已自动运行；无自动批准、无 SQLite 绕过。 |
 
+## 2026-07-29 稿件时长门禁与稿件编辑交互
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-04-SCRIPT-DURATION-UX-01` / 修复目标 20 分钟稿件明显过短仍成功、段落 1 的全部引用来源挤压后续段落，以及“忠实稿 / 包装稿”用户语义不清。 |
+| 状态 | `complete`（工程实现、命名、OpenDesign 与自动验证完成；正式 20 集流水线保持暂停，尚未执行新合同的付费重试） |
+| 真实根因 | 既有 `characterBudget` 只进入 prompt 并作为结果提示，没有最低字数门禁；旧 v2 成功 Job identity 可在恢复时继续被当前流水线映射消费。稿件编辑器又默认平铺每个段落的全部来源，所以段落 2～20 被段落 1 的长来源列表推到页面下方，并非只生成了一个段落。 |
+| 来源登记 | 按冻结优先级核查：本机缺少 DramaClaw、LumenX、LocalMiniDrama。Toonflow `bc61ec7a1b5df31293b286981a5f4ad4635464ee` 的 `data/skills/production_agent_supervision.md`、`data/skills/script_execution_script.md` 只登记“字数按实测语速反推时长并作为验收”的通用思想，为 `reference-only`，不采用其短剧固定时长、节奏或字数常量。MuseDock `661bc6d1b4a84ecee466657a64f7e26698262190` 的 `server/services/agent/agentRunsFreeformHelpers.js` 仅处理超长压缩，为 `reference-only`。实现采用 Narralume `internal-port`，复用现有动态预算、Job 重试、冻结来源、原子双稿写入和 pipeline mapping。 |
+| 时长合同 | `episode_scripts_generate` 升为合同 v3，预算继续由 `targetDurationSeconds × charactersPerSecond × narrationOccupancy` 动态计算，不写死 20 分钟或 4320 字。原著还原稿与成片旁白稿都必须在预算的 `90%～110%`，按 Unicode code point 计数；当前 1200 秒、4.5 字/秒、0.8 旁白占用率示例为预算 4320、允许 3888～4752 字。任一版本过短或过长都在原子写入前失败，双稿均不落库；provider 明确收到最小、目标、最大字数且不得以摘要代替完整叙事。 |
+| 恢复合同 | 冻结 payload 与 request hash 纳入 `contractVersion: 3`；脚本协调始终按当前 identity 调用既有 enqueue，并只在 Job ID 变化时原子更新 Episode mapping。旧 v2 Job 与稿件保留历史，不删除、不改 SQLite，但第 1～6 集旧成功映射不会继续驱动当前 run，第 7 集也不能沿用旧合同越过新门禁。Episode 之间仍严格串行消费 `scriptHandoff`，不自动批准。 |
+| UI / OpenDesign | 用户可见名称统一为“原著还原稿 / 成片旁白稿”，内部 `faithful / packaged` 枚举不变。每个段落复用现有 Radix/shadcn Accordion：引用来源默认收起，标题显示 `已选 N / M`，展开后 `max-h-80` 局部滚动；Trigger 保持 44px、Enter/Space、焦点环与 Radix aria，关闭显示“展开”、打开显示“收起”。独立 OpenDesign verifier 基于 `narralume-product` 最终 PASS：后续段落恢复正常阅读流，暖中性高密度、细边框和现有语义 token 未回退，无新依赖或页面级 CSS。 |
+| 验证证据 | 定向 Server `70/70 PASS`；定向 Web `73/73 PASS`。最终根 `npm run typecheck` PASS；`npm test` 为 Server `417 PASS / 0 FAIL / 1 既有 Windows 权限 SKIP`、Web `101 PASS / 0 FAIL`；`npm run build` PASS，Vite 137 modules、JS 约 488.20 kB / gzip 145.41 kB；`git diff --check` PASS。Accordion 展开/收起状态新增最小回归断言。 |
+| 业务提交 / 真实恢复入口 | `daa1ea5 fix(auto): 校验旁白时长并优化稿件编辑`。只读复核正式 run `pipeline_95ade1af-9ab4-4493-a20f-c34f7e37e12b` 仍为 `paused`，`resume_status=generating_scripts`，failure 为空；当前映射保留 6 个旧 succeeded 与 1 个 cancelled 脚本 Job。本次业务提交、测试和 OpenDesign 复核均未 resume、未直接写 SQLite。下一步只重启后端并确认 `/api/health` 200、run 仍 paused，再通过正式 retry/resume 生成第 1 集 v3；先验收两版各 3888～4752 字、来源覆盖、父链、当前 mapping 与 0 自动批准，第一集 PASS 后才继续第 2～20 集。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

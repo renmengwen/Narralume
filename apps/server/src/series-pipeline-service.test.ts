@@ -409,7 +409,8 @@ test("planning contract v2 不调用世界观或局部规划模型并确定性�
         );
         database.prepare(`INSERT INTO chapter_event_sources
           (event_id,source_index,source_byte_start,source_byte_end,source_hash) VALUES (?,0,?,?,?)`)
-          .run(eventId, chapter.byte_start, chapter.byte_end, chapter.content_hash);
+          .run(eventId, chapter.byte_start + (eventIndex ? 0 : 2),
+            chapter.byte_start + (eventIndex ? 1 : 3), chapter.content_hash);
       }
     }
     const run = createSeriesPipelineRun(database, {
@@ -455,10 +456,10 @@ test("planning contract v2 不调用世界观或局部规划模型并确定性�
        FROM episodes episode JOIN episode_sources source ON source.episode_id = episode.id
        ORDER BY episode.episode_index, source.source_index`,
     ).all().map((row) => ({ ...row })), [
-      { episode_index: 1, source_event_id: "event_local_1_0" },
       { episode_index: 1, source_event_id: "event_local_1_1" },
-      { episode_index: 2, source_event_id: "event_local_2_0" },
+      { episode_index: 1, source_event_id: "event_local_1_0" },
       { episode_index: 2, source_event_id: "event_local_2_1" },
+      { episode_index: 2, source_event_id: "event_local_2_0" },
     ]);
   } finally { connection.close(); await rm(dataRoot, { recursive: true, force: true }); }
 });

@@ -792,7 +792,9 @@ export class SeriesPipelineService {
             contentHash: createHash("sha256").update(json).digest("hex"),
             inputBytes: Buffer.byteLength(json),
           };
-        }),
+        }).sort((left, right) =>
+          left.byteRanges.reduce((start, range) => Math.min(start, range.byteStart), Number.MAX_SAFE_INTEGER) -
+          right.byteRanges.reduce((start, range) => Math.min(start, range.byteStart), Number.MAX_SAFE_INTEGER)),
       };
     });
   }

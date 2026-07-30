@@ -26,10 +26,11 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
   };
   const chapter = run.progress.chapterAnalysis;
   const story = run.progress.storyBible;
+  const showStoryBible = run.planningContractVersion !== 2 || Boolean(run.storyBibleId);
   const presentation = pipelineStatusPresentation(run.status, run.planningContractVersion);
   const hasActiveJob = Boolean(run.current && !["succeeded", "failed", "cancelled"].includes(run.current.jobStatus ?? ""));
   const primaryAction = run.actions.canResume ? "resume" : run.actions.canRetry ? "retry" : undefined;
-  const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败章节";
+  const primaryLabel = primaryAction === "resume" ? "继续全本改写" : "重试失败任务";
   const worldviewUnavailable = run.status === "failed"
     ? `全书世界观构建失败${run.failureMessage ? `：${run.failureMessage}` : "，请检查失败项后重试。"}`
     : run.status === "paused" || run.status === "cancelled"
@@ -64,19 +65,19 @@ export function PipelineProgress({ run, chapters, busyAction, operation, error, 
 
       <div className="grid border border-[var(--border-subtle)]" aria-label="全本改写阶段进度">
         <ProgressRow label="章节事件分析" count={`已完成 ${chapter.completed}/${chapter.total} 章`} detail={`复用 ${chapter.reused} 章 · 排队 ${chapter.queued} 章 · 执行中 ${chapter.running} 章 · 失败 ${chapter.failed} 章`} />
-        <ProgressRow label="全书世界观构建" count={story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} />
-        <ProgressRow label={run.planningContractVersion === 2 ? "逐集局部规划" : "全书分集规划"} count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
+        {showStoryBible ? <ProgressRow label="全书世界观构建" count={run.storyBibleId ? "1/1" : story.steps ? `${story.steps.completed}/${story.steps.total}` : `${story.completed}/${story.total}`} detail={stageDetail(run, "storyBible")} /> : null}
+        <ProgressRow label={run.planningContractVersion === 2 ? "分集来源冻结" : "全书分集规划"} count={`${run.progress.episodePlan.completed}/${run.progress.episodePlan.total}`} detail={stageDetail(run, "episodePlan")} />
         <ProgressRow label={run.scriptContractVersion === 6 ? "成片旁白稿" : "原著还原稿与成片旁白稿"} count={`${run.progress.scripts.completed}/${run.progress.scripts.total}`} detail={stageDetail(run, "scripts")} />
       </div>
 
       {run.storyBibleId ? <div className="flex flex-wrap items-center justify-between gap-3 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3">
         <div><strong className="text-sm">全书世界观已可查看</strong><span className="mt-1 block text-xs text-[var(--fg-tertiary)]">展示当前最终结果，不会触发重建或审批。</span></div>
         <button type="button" className="min-h-11 rounded border border-[var(--accent)] px-4 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50" disabled={showWorldview} onClick={() => setShowWorldview(true)}>{showWorldview ? "正在查看全书世界观" : "查看全书世界观"}</button>
-      </div> : <p className="m-0 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-tertiary)]" role={run.status === "failed" ? "alert" : "status"}>{worldviewUnavailable}</p>}
+      </div> : showStoryBible ? <p className="m-0 border border-[var(--border-subtle)] bg-[var(--bg-subtle)] px-4 py-3 text-sm text-[var(--fg-tertiary)]" role={run.status === "failed" ? "alert" : "status"}>{worldviewUnavailable}</p> : null}
       {showWorldview ? <FullBookWorldviewPanel runId={run.id} chapters={chapters} onClose={() => setShowWorldview(false)} /> : null}
 
       {run.failures.length ? <section className="border border-[var(--danger)] bg-[var(--danger-soft)]" aria-labelledby="pipeline-failures-heading">
-        <h3 id="pipeline-failures-heading" className="m-0 border-b border-[var(--danger)] px-4 py-3 text-sm font-semibold text-[var(--danger)]">失败章节 {run.failures.length} 项</h3>
+        <h3 id="pipeline-failures-heading" className="m-0 border-b border-[var(--danger)] px-4 py-3 text-sm font-semibold text-[var(--danger)]">失败任务 {run.failures.length} 项</h3>
         <ul className="m-0 list-none p-0">
           {run.failures.map((failure) => <li className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[color-mix(in_srgb,var(--danger)_35%,transparent)] px-4 py-3 last:border-b-0 max-md:grid-cols-1" key={`${failure.subjectId}:${failure.jobId}`}>
             <span><strong className="block text-sm">{chapterName(failure.subjectId)}</strong><span className="mt-1 block text-xs text-[var(--danger)]">{failure.message}</span></span>
@@ -115,6 +116,7 @@ function ProgressRow({ label, count, detail }: { label: string; count: string; d
 }
 
 function stageDetail(run: SeriesPipelineRun, stage: "storyBible" | "episodePlan" | "scripts") {
+  if (stage === "storyBible" && run.storyBibleId) return "历史结果已保留";
   if (run.status === "paused") return "已暂停；已完成结果保留";
   if (run.status === "cancelled") return "已取消；不再派发任务";
   if (run.status === "failed" || run.failureMessage) return "存在失败项，请检查后重试";

@@ -1,7 +1,7 @@
 export const FULL_BOOK_PLAN_CONTRACT_VERSION = "full-book-plan-v1";
 
 const MAX_EPISODES = 1_000;
-const MAX_SOURCES_PER_EPISODE = 2_000;
+const MAX_SOURCES_PER_EPISODE = 100_000;
 const MAX_ID_LENGTH = 200;
 const MAX_TITLE_LENGTH = 200;
 const MAX_TEXT_LENGTH = 4_000;
@@ -146,8 +146,8 @@ function validateIntervalQuotas(
 
 function sourceOrder(left: ResolvedSourceEvent, right: ResolvedSourceEvent) {
   if (left.chapterIndex > right.chapterIndex ||
-      (left.chapterIndex === right.chapterIndex && left.byteEnd > right.byteStart)) {
-    throw new FullBookPlanContractError("来源事件必须按原文顺序排列且字节范围不能交叉");
+      (left.chapterIndex === right.chapterIndex && left.byteStart > right.byteStart)) {
+    throw new FullBookPlanContractError("来源事件必须按原文顺序排列");
   }
 }
 

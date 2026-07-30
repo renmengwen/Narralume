@@ -591,10 +591,10 @@ export function finishChapterAnalysis(database: DatabaseSync, run: SeriesPipelin
     chapters: chapters.map(({ id, index, contentHash }) => ({ id, index, contentHash })), events: eventRows,
   })).digest("hex");
   database.prepare(
-    `UPDATE series_pipeline_runs SET status = 'building_story_bible', chapter_events_hash = ?,
+    `UPDATE series_pipeline_runs SET status = ?, chapter_events_hash = ?,
        failure_code = NULL, failure_message = NULL, updated_at = ?
      WHERE id = ? AND status = 'analyzing_chapters'`,
-  ).run(hash, now, run.id);
+  ).run(run.planningContractVersion === 2 ? "planning_episodes" : "building_story_bible", hash, now, run.id);
   return getSeriesPipelineRun(database, run.id)!;
 }
 
@@ -635,6 +635,50 @@ function hasOtherActiveOwner(database: DatabaseSync, jobId: string, runId: strin
      WHERE mapping.job_id = ? AND mapping.run_id <> ?
        AND run.status NOT IN ('paused', 'cancelled', 'completed') LIMIT 1`,
   ).get(jobId, runId));
+}
+
+function hasOtherRetainedOwner(database: DatabaseSync, jobId: string, runId: string) {
+  return Boolean(database.prepare(
+    `SELECT 1 FROM series_pipeline_jobs mapping
+     JOIN series_pipeline_runs run ON run.id = mapping.run_id
+     WHERE mapping.job_id = ? AND mapping.run_id <> ?
+       AND run.status NOT IN ('cancelled', 'completed') LIMIT 1`,
+  ).get(jobId, runId));
+}
+
+function detachBypassedModelPlanningJobs(database: DatabaseSync, runId: string, now: number) {
+  const run = getSeriesPipelineRun(database, runId);
+  if (!run || run.planningContractVersion !== 2) return run;
+  const jobIds = database.prepare(
+    `SELECT DISTINCT job_id FROM series_pipeline_jobs
+     WHERE run_id = ? AND stage IN ('story_bible', 'episode_plan')`,
+  ).all(runId) as unknown as Array<{ job_id: string }>;
+  for (const { job_id: jobId } of jobIds) {
+    const job = getJob(database, jobId);
+    const shared = hasOtherRetainedOwner(database, jobId, runId);
+    database.prepare(
+      `DELETE FROM series_pipeline_jobs
+       WHERE run_id = ? AND stage IN ('story_bible', 'episode_plan') AND job_id = ?`,
+    ).run(runId, jobId);
+    if (job && (job.status === "queued" || job.status === "running") && !shared) {
+      requestJobCancellation(database, jobId, now);
+    }
+  }
+  database.prepare(
+    `UPDATE series_pipeline_runs SET status = 'planning_episodes', story_bible_id = NULL,
+       failure_code = NULL, failure_message = NULL, updated_at = ?
+     WHERE id = ? AND status = 'building_story_bible'`,
+  ).run(now, runId);
+  database.prepare(
+    `UPDATE series_pipeline_runs SET resume_status = 'planning_episodes', story_bible_id = NULL,
+       failure_code = NULL, failure_message = NULL, updated_at = ?
+     WHERE id = ? AND status = 'paused' AND resume_status = 'building_story_bible'`,
+  ).run(now, runId);
+  return getSeriesPipelineRun(database, runId);
+}
+
+export function clearBypassedModelPlanningJobs(database: DatabaseSync, runId: string, now = Date.now()) {
+  return immediateTransaction(database, () => detachBypassedModelPlanningJobs(database, runId, now));
 }
 
 export function convergeMappedSingleChapterAnalysisJobs(database: DatabaseSync) {
@@ -752,9 +796,10 @@ export function pauseSeriesPipelineRun(database: DatabaseSync, id: string, now =
 
 export function resumeSeriesPipelineRun(database: DatabaseSync, id: string, now = Date.now()) {
   return immediateTransaction(database, () => {
-    const run = getSeriesPipelineRun(database, id);
+    let run = getSeriesPipelineRun(database, id);
     if (!run) throw new SeriesPipelineError(404, "全本流水线不存在");
     if (run.status !== "paused") return run;
+    run = detachBypassedModelPlanningJobs(database, id, now)!;
     const stopping = database.prepare(
       `SELECT 1 FROM jobs job JOIN series_pipeline_jobs mapping ON mapping.job_id = job.id
        WHERE mapping.run_id = ? AND job.status = 'running' AND job.cancel_requested = 1
@@ -804,7 +849,7 @@ export function cancelSeriesPipelineRun(database: DatabaseSync, id: string, now 
 
 export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now = Date.now()) {
   return immediateTransaction(database, () => {
-    const run = getSeriesPipelineRun(database, id);
+    let run = getSeriesPipelineRun(database, id);
     if (!run) throw new SeriesPipelineError(404, "全本流水线不存在");
     if (run.status === "completed") return run;
     const cancelledStage = run.status === "cancelled" ? database.prepare(
@@ -812,6 +857,7 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
        WHERE mapping.run_id = ?
        ORDER BY mapping.created_at DESC LIMIT 1`,
     ).get(id) as { stage: string } | undefined : undefined;
+    run = detachBypassedModelPlanningJobs(database, id, now)!;
     const book = database.prepare(
       "SELECT book_id FROM series_projects WHERE id = ?",
     ).get(run.seriesProjectId) as { book_id: string } | undefined;
@@ -850,6 +896,8 @@ export function retrySeriesPipelineRun(database: DatabaseSync, id: string, now =
          resume_status = CASE WHEN status = 'cancelled' THEN NULL ELSE resume_status END,
          failure_code = NULL, failure_message = NULL, updated_at = ? WHERE id = ?`,
     ).run(cancelledStage?.stage === "script_generation" ? "generating_scripts"
+      : run.planningContractVersion === 2 && (cancelledStage?.stage === "story_bible" || cancelledStage?.stage === "episode_plan")
+        ? "planning_episodes"
       : cancelledStage?.stage === "episode_plan" ? "planning_episodes"
       : cancelledStage?.stage === "story_bible" ? "building_story_bible" : "analyzing_chapters", now, id);
     return getSeriesPipelineRun(database, id)!;
@@ -989,7 +1037,9 @@ export function seriesPipelineView(database: DatabaseSync, run: SeriesPipelineRu
         running: relevantJobs.filter((item) => item.job.status === "running").length,
         failed: failures.length,
       },
-      storyBible: { completed: run.storyBibleId ? 1 : 0, total: 1, steps: storySteps },
+      storyBible: run.planningContractVersion === 2
+        ? { completed: 0, total: 0, steps: null }
+        : { completed: run.storyBibleId ? 1 : 0, total: 1, steps: storySteps },
       episodePlan: {
         completed: run.planHash ? run.episodeCount
           : Math.min(run.episodeCount, localPlanJobs.filter((item) => item.job.status === "succeeded").length),

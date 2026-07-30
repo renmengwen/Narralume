@@ -65,10 +65,11 @@ export function pipelineStatusPresentation(status: SeriesPipelineStatus, plannin
   stageDetail?: string;
 } {
   const labels: Record<SeriesPipelineStatus, string> = {
-    configured: "已配置", analyzing_chapters: "分析章节", building_story_bible: "构建全书世界观",
-    planning_episodes: planningContractVersion === 2 ? "逐集局部规划" : "规划分集",
-    validating_plan: planningContractVersion === 2 ? "校验局部规划" : "校验计划",
-    freezing_plan: planningContractVersion === 2 ? "冻结分集方案" : "冻结计划",
+    configured: "已配置", analyzing_chapters: "分析章节",
+    building_story_bible: planningContractVersion === 2 ? "准备冻结来源" : "构建全书世界观",
+    planning_episodes: planningContractVersion === 2 ? "冻结分集来源" : "规划分集",
+    validating_plan: planningContractVersion === 2 ? "校验分集来源" : "校验计划",
+    freezing_plan: planningContractVersion === 2 ? "冻结分集来源" : "冻结计划",
     generating_scripts: "生成稿件", checking_coverage: "检查覆盖", awaiting_review: "等待审核",
     paused: "已暂停", failed: "执行失败", cancelled: "已取消", completed: "已完成",
   };
@@ -84,7 +85,7 @@ export function pipelineStatusPresentation(status: SeriesPipelineStatus, plannin
   if (inactiveHeadings[status]) {
     return { heading: inactiveHeadings[status], label: labels[status] };
   }
-  const activeStage = status === "building_story_bible" ? "storyBible"
+  const activeStage = status === "building_story_bible" ? planningContractVersion === 2 ? "episodePlan" : "storyBible"
     : ["planning_episodes", "validating_plan", "freezing_plan"].includes(status) ? "episodePlan"
     : ["generating_scripts", "checking_coverage"].includes(status) ? "scripts"
     : undefined;
@@ -142,10 +143,12 @@ export function pipelineStatusText(run: SeriesPipelineRun) {
       : `章节分析已完成 ${chapter.completed}/${chapter.total} 章，正在等待下一项任务。`;
   }
   if (run.status === "configured") return "全本改写任务已配置，等待开始章节分析。";
-  if (run.status === "building_story_bible") return "章节分析已完成，正在构建全书世界观。";
+  if (run.status === "building_story_bible") return run.planningContractVersion === 2
+    ? "章节分析已完成，正在准备冻结分集来源。"
+    : "章节分析已完成，正在构建全书世界观。";
   if (run.status === "planning_episodes" || run.status === "validating_plan" || run.status === "freezing_plan") {
     return run.planningContractVersion === 2
-      ? "正在逐集生成局部规划，全部校验通过后一次冻结分集方案。"
+      ? "正在按已确认章节范围冻结每集来源事件。"
       : "正在生成并校验全书分集方案。";
   }
   if (run.status === "generating_scripts") return "正在生成全本稿件。";

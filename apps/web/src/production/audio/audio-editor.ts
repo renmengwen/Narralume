@@ -5,7 +5,7 @@ export const REPRESENTATIVE_AUDIO_SEGMENTS = [0, 1, 2, 60, 100, 140, 180, 200, 2
 
 export interface TtsListeningReviewIdentity {
   episodeId: string; scriptVersionId: string; contentHash: string; approvalRevision: number;
-  timelineHash: string; providerId: string; voice: string; rate: number; storyBibleId: string;
+  timelineHash: string; providerId: string; voice: string; rate: number; storyBibleId: string | null;
   storyBibleContentHash: string; properNounsHash: string; representativeHash: string;
 }
 
@@ -62,13 +62,14 @@ export function parseListeningReviewWorkspace(
     episodeId: String(rawIdentity.episodeId ?? ""), scriptVersionId: String(rawIdentity.scriptVersionId ?? ""),
     contentHash: String(rawIdentity.contentHash ?? ""), approvalRevision: integer(rawIdentity.approvalRevision, "批准版本"),
     timelineHash: String(rawIdentity.timelineHash ?? ""), providerId: String(rawIdentity.providerId ?? ""),
-    voice: String(rawIdentity.voice ?? ""), rate: Number(rawIdentity.rate), storyBibleId: String(rawIdentity.storyBibleId ?? ""),
+    voice: String(rawIdentity.voice ?? ""), rate: Number(rawIdentity.rate),
+    storyBibleId: rawIdentity.storyBibleId === null ? null : String(rawIdentity.storyBibleId ?? ""),
     storyBibleContentHash: String(rawIdentity.storyBibleContentHash ?? ""), properNounsHash: String(rawIdentity.properNounsHash ?? ""),
     representativeHash: String(rawIdentity.representativeHash ?? ""),
   };
   if (identity.episodeId !== expected.episodeId || identity.timelineHash !== expected.timelineHash ||
       !identity.scriptVersionId || !HASH.test(identity.contentHash) || !identity.providerId || !identity.voice ||
-      !Number.isInteger(identity.rate) || identity.rate < -10 || identity.rate > 10 || !identity.storyBibleId ||
+      !Number.isInteger(identity.rate) || identity.rate < -10 || identity.rate > 10 || identity.storyBibleId === "" ||
       !HASH.test(identity.storyBibleContentHash) || !HASH.test(identity.properNounsHash) || !HASH.test(identity.representativeHash)) {
     throw new Error("人工听审响应不属于当前分集或时间轴");
   }

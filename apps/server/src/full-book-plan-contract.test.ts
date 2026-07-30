@@ -57,7 +57,7 @@ test("拒绝集数、序号、未知字段、空集、伪造和重复来源", ()
 
   const empty = validPlan();
   empty.episodes[0]!.sourceEventIds = [];
-  assert.throws(() => parseFullBookPlan(empty, options()), /必须包含 1～2000 项/);
+  assert.throws(() => parseFullBookPlan(empty, options()), /必须包含 1～100000 项/);
 
   const forged = validPlan();
   forged.episodes[0]!.sourceEventIds[0] = "event_missing";
@@ -68,7 +68,7 @@ test("拒绝集数、序号、未知字段、空集、伪造和重复来源", ()
   assert.throws(() => parseFullBookPlan(duplicate, options()), /不能跨集或在同集重复/);
 });
 
-test("拒绝来源倒序、章节缺口、集内不连续和边界字节交叉", () => {
+test("拒绝来源倒序、章节缺口和集内不连续，但允许不同语义事件引用重叠原文", () => {
   const reversed = validPlan();
   reversed.episodes[0]!.sourceEventIds.reverse();
   assert.throws(() => parseFullBookPlan(reversed, options()), /按原文顺序/);
@@ -88,7 +88,7 @@ test("拒绝来源倒序、章节缺口、集内不连续和边界字节交叉",
   overlapEvents.set("event_2b", {
     chapterId: "chapter_2", chapterIndex: 2, byteRanges: [{ byteStart: 19, byteEnd: 30 }],
   });
-  assert.throws(() => parseFullBookPlan(validPlan(), overlapOptions), /字节范围不能交叉/);
+  assert.equal(parseFullBookPlan(validPlan(), overlapOptions).episodes[0]!.title, "起程");
 });
 
 test("校验区间配额总和、连续范围和每区间明细数量", () => {

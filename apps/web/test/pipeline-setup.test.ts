@@ -31,7 +31,7 @@ test("调整相邻分集边界仍保持两集非空且重新计算字符数", ()
   assert.throws(() => adjustEpisodeBoundary(ranges, 2, "chapter_6", chapters), /最后一集/);
 });
 
-test("全本设置展示付费前范围确认和六类本书提示词", () => {
+test("全本设置展示付费前范围确认和四类仍被消费的本书提示词", () => {
   const html = renderToString(createElement(PipelineSetup, {
     bookId: "book_1",
     seriesId: "series_1",
@@ -43,9 +43,11 @@ test("全本设置展示付费前范围确认和六类本书提示词", () => {
     operation: "设置已就绪。",
     onCreate: () => undefined,
   }));
-  for (const label of ["全书共同要求", "章节分析要求", "全书世界观要求", "单集规划要求", "成片旁白要求", "资产 Prompt 要求"]) {
+  for (const label of ["全书共同要求", "章节分析要求", "成片旁白要求", "资产 Prompt 要求"]) {
     assert.match(html, new RegExp(label));
   }
+  assert.doesNotMatch(html, /全书世界观要求|单集规划要求|逐集局部规划/);
+  assert.match(html, /冻结已确认的分集来源/);
   assert.match(html, /预览分集范围/);
   assert.match(html, /创建后才会开始可能产生费用的模型分析/);
   assert.doesNotMatch(html, /产品级提示词（只读）/);

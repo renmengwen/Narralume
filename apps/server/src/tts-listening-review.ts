@@ -20,7 +20,7 @@ export interface TtsListeningReviewIdentity {
   providerId: string;
   voice: string;
   rate: number;
-  storyBibleId: string;
+  storyBibleId: string | null;
   storyBibleContentHash: string;
   properNounsHash: string;
   representativeHash: string;
@@ -92,7 +92,27 @@ function sameIdentity(left: TtsListeningReviewIdentity, right: TtsListeningRevie
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function listeningProperNouns(database: DatabaseSync, storyBibleId: string) {
+function listeningProperNouns(database: DatabaseSync, storyBibleId: string | null, seriesId: string) {
+  if (!storyBibleId) {
+    const rows = database.prepare(
+      `SELECT asset.id, asset.canonical_name, alias.alias
+       FROM assets asset LEFT JOIN asset_aliases alias ON alias.asset_id = asset.id
+       WHERE asset.series_project_id = ?
+       ORDER BY asset.canonical_name, asset.id, alias.is_primary DESC, alias.normalized_alias`,
+    ).all(seriesId) as unknown as Array<{ id: string; canonical_name: string; alias: string | null }>;
+    const nouns = new Map<string, { term: string; pronunciation: string; aliases: string[] }>();
+    for (const row of rows) {
+      const current = nouns.get(row.id) ?? {
+        term: row.canonical_name.normalize("NFKC"), pronunciation: "请人工确认", aliases: [],
+      };
+      if (row.alias) current.aliases.push(row.alias.normalize("NFKC"));
+      nouns.set(row.id, current);
+    }
+    const properNouns = [...nouns.values()].map((noun) => ({
+      ...noun, aliases: [...new Set(noun.aliases)].sort(),
+    }));
+    return { contentHash: sha256(JSON.stringify(properNouns)), properNouns };
+  }
   try {
     const finalBible = database.prepare(
       `SELECT book_id, scope, parent_bible_ids_json, content_json, content_hash, invalidated_at
@@ -172,10 +192,8 @@ function currentWorkspace(database: DatabaseSync, episodeId: string, timelineHas
     `SELECT status, story_bible_id FROM series_pipeline_runs
      WHERE series_project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
   ).get(episode.series_project_id) as { status: string; story_bible_id: string | null } | undefined;
-  if (!run?.story_bible_id || run.status === "cancelled") {
-    throw new TtsListeningReviewError(409, "当前系列流水线尚未冻结可用全书世界观");
-  }
-  const bible = listeningProperNouns(database, run.story_bible_id);
+  if (!run || run.status === "cancelled") throw new TtsListeningReviewError(409, "当前系列流水线不可用于听审");
+  const bible = listeningProperNouns(database, run.story_bible_id, episode.series_project_id);
   const properNouns = bible.properNouns;
 
   const requiredProperNouns: RequiredProperNounReview[] = [];

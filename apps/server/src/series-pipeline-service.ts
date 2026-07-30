@@ -34,7 +34,6 @@ import {
   BOOK_STORY_BIBLE_JOB_TYPE,
   storyBibleJobRequestHash,
   type BookStoryBibleJobPayload,
-  type StoryBiblePromptSnapshot,
 } from "./book-story-bible-job-handler.js";
 import {
   FULL_BOOK_PLAN_JOB_CONTRACT_VERSION,
@@ -56,6 +55,7 @@ import { bookPromptInstructions, getBookPromptProfileRevision } from "./book-pro
 import { PRODUCT_PROMPT_SET_VERSION, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 import {
   cancelSeriesPipelineRun,
+  clearBypassedModelPlanningJobs,
   convergeMappedSingleChapterAnalysisJobs,
   createSeriesPipelineRun,
   finishChapterAnalysis,
@@ -358,6 +358,10 @@ export class SeriesPipelineService {
   }
 
   private async reconcileStoryBible(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
+    if (run.planningContractVersion === 2) {
+      clearBypassedModelPlanningJobs(this.options.database, run.id);
+      return;
+    }
     const provider = await this.options.resolveChapterTextProvider();
     if (!provider) {
       setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
@@ -372,26 +376,9 @@ export class SeriesPipelineService {
     const intervals = buildStoryBibleIntervalRequests(bookId, chapters, {
       providerId: provider.providerId, model: provider.model,
     }, limits);
-    let prompt: StoryBiblePromptSnapshot | undefined;
-    if (run.planningContractVersion === 2) {
-      const profile = run.bookPromptProfileRevision
-        ? getBookPromptProfileRevision(this.options.database, bookId, run.bookPromptProfileRevision)
-        : undefined;
-      if (!profile || profile.profileHash !== run.bookPromptProfileHash ||
-          run.productPromptVersion !== PRODUCT_PROMPT_SET_VERSION) {
-        throw new Error("全书世界观缺少有效的冻结提示词身份");
-      }
-      prompt = {
-        intervalProductVersion: PRODUCT_PROMPT_VERSIONS.storyBibleInterval,
-        finalProductVersion: PRODUCT_PROMPT_VERSIONS.storyBibleFinal,
-        profileRevision: profile.revision,
-        profileHash: profile.profileHash,
-        instructions: bookPromptInstructions(profile, "storyBibleInstructions"),
-      };
-    }
     const base: Omit<BookStoryBibleJobPayload, "providerId" | "model" | "requestHash"> = {
       contractVersion: BOOK_STORY_BIBLE_JOB_CONTRACT_VERSION,
-      bookId, intervals, limits, forceRebuild: false, ...(prompt ? { prompt } : {}),
+      bookId, intervals, limits, forceRebuild: false,
     };
     const requestHash = storyBibleJobRequestHash(base);
     const mapping = getMappedStoryBibleJob(this.options.database, run.id);
@@ -458,13 +445,13 @@ export class SeriesPipelineService {
   }
 
   private async reconcileEpisodePlan(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
+    if (run.planningContractVersion === 2) {
+      this.reconcileDeterministicEpisodePlan(run);
+      return;
+    }
     const provider = await this.options.resolveChapterTextProvider();
     if (!provider) {
       setSeriesPipelineFailure(this.options.database, run.id, "text_provider_unavailable", "Narralume 文本模型配置不可用");
-      return;
-    }
-    if (run.planningContractVersion === 2) {
-      await this.reconcileLocalEpisodePlans(run, provider);
       return;
     }
     const bookId = this.bookId(run.seriesProjectId);
@@ -569,6 +556,56 @@ export class SeriesPipelineService {
       throw new Error("全书规划任务 identity 冲突");
     }
     mapSeriesPipelineEpisodePlanJob(this.options.database, run.id, pipelineIdentity, queued.id);
+  }
+
+  private reconcileDeterministicEpisodePlan(run: NonNullable<ReturnType<typeof getSeriesPipelineRun>>) {
+    if (!run.episodeRanges || run.episodeRanges.length !== run.episodeCount) {
+      throw new Error("分集来源冻结缺少已确认的章节范围");
+    }
+    clearBypassedModelPlanningJobs(this.options.database, run.id);
+    const chapters = this.fullBookPlanInputs(run);
+    const sourceEvents = chapters.flatMap((chapter) => chapter.sourceEvents);
+    const planOptions = {
+      startChapterIndex: chapters[0]!.chapterIndex,
+      endChapterIndex: chapters.at(-1)!.chapterIndex,
+      episodeCount: run.episodeCount,
+      allowedSourceEvents: new Map(sourceEvents.map(({ id, chapterId, chapterIndex, byteRanges }) =>
+        [id, { chapterId, chapterIndex, byteRanges }])),
+      intervalQuotas: run.episodeRanges.map((range) => ({
+        startChapterIndex: range.startChapterIndex,
+        endChapterIndex: range.endChapterIndex,
+        episodeCount: 1,
+      })),
+    };
+    const plan = parseFullBookPlan({
+      episodes: run.episodeRanges.map((range) => {
+        const selected = chapters.filter((chapter) => chapter.chapterIndex >= range.startChapterIndex &&
+          chapter.chapterIndex <= range.endChapterIndex);
+        return {
+          index: range.episodeIndex,
+          title: `第 ${range.episodeIndex} 集`,
+          storyArc: `忠实讲述第 ${range.startChapterIndex + 1} 至 ${range.endChapterIndex + 1} 章的已确认来源事件。`,
+          sourceEventIds: selected.flatMap((chapter) => chapter.sourceEvents.map((event) => event.id)),
+          recap: null,
+          nextHook: null,
+        };
+      }),
+    }, planOptions);
+    const planHash = createHash("sha256").update(canonicalFullBookPlanJson(plan)).digest("hex");
+    if (getSeriesPipelineRun(this.options.database, run.id)?.status === "planning_episodes") {
+      setSeriesPipelineStatus(this.options.database, run.id, "planning_episodes", "validating_plan");
+    }
+    if (getSeriesPipelineRun(this.options.database, run.id)?.status === "validating_plan") {
+      setSeriesPipelineStatus(this.options.database, run.id, "validating_plan", "freezing_plan");
+    }
+    const frozen = freezeFullBookPlan(this.options.database, {
+      seriesProjectId: run.seriesProjectId,
+      plan,
+      options: planOptions,
+      targetDurationSeconds: run.targetDurationSeconds,
+    });
+    if (frozen.planHash !== planHash) throw new Error("分集来源冻结 hash 不一致");
+    finishEpisodePlan(this.options.database, run.id, frozen.planHash);
   }
 
   private async reconcileLocalEpisodePlans(

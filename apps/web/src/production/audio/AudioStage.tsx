@@ -107,7 +107,7 @@ export function AudioStage(props: {
                   </label>
                   <button type="button" onClick={() => selectSegment(item.segmentIndex)} className="min-h-11 rounded border border-[var(--border-subtle)] px-3 text-sm font-semibold hover:bg-[var(--bg-subtle)]">试听命中段</button>
                 </div>;
-              }) : <p className="text-sm text-[var(--fg-tertiary)]">当前时间轴没有命中全书世界观专名，无需额外核对。</p>}
+              }) : <p className="text-sm text-[var(--fg-tertiary)]">当前没有可用的专名核对清单；仍需完成代表片段听审。</p>}
             </div>
             <label className="mt-5 grid gap-2 text-sm font-semibold">听审备注（可选）
               <textarea value={state.listeningNotes} disabled={listeningBusy} maxLength={2000} onChange={(event) => state.setListeningNotes(event.target.value)} className="min-h-20 rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 font-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]" placeholder="记录需返修的读音、停连或节奏。" />

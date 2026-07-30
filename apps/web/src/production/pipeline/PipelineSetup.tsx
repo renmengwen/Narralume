@@ -13,8 +13,6 @@ import { usePipelineSetup, type BookPromptProfileContent } from "./use-pipeline-
 const PROFILE_FIELDS: Array<[keyof BookPromptProfileContent, string, string]> = [
   ["sharedInstructions", "全书共同要求", "适用于本书全部阶段的叙事口径、禁区或术语要求。"],
   ["chapterAnalysisInstructions", "章节分析要求", "追加本书的事件提取侧重点。"],
-  ["storyBibleInstructions", "全书世界观要求", "追加人物、关系、地点、器物、时间线、悬念与剧透边界要求。"],
-  ["episodePlanningInstructions", "单集规划要求", "追加标题、故事弧、前情和下集钩子的本书要求。"],
   ["narrationInstructions", "成片旁白要求", "追加讲述距离、语言风格和可朗读性要求。"],
   ["assetInstructions", "资产 Prompt 要求", "追加人物、场景、道具或剧情插图草稿要求。"],
 ];
@@ -108,7 +106,7 @@ export function PipelineSetup({ bookId, seriesId, chapters, chapterTotal, policy
       <div className="max-w-3xl">
         <p className="mb-2 font-mono text-[11px] font-semibold tracking-[.14em] text-[var(--accent)]">全本改写 / 设置</p>
         <h2 id="pipeline-setup-heading" className="m-0 text-2xl font-semibold tracking-[-.02em]">确认范围、提示词与成片规格</h2>
-        <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">新任务将依次完成章节分析、全书世界观、逐集局部规划和单一成片旁白。先预览并确认连续章节分配，确认创建后才会开始可能产生费用的模型分析；稿件与媒体仍由你逐集审核。</p>
+        <p className="mt-3 text-sm leading-7 text-[var(--fg-secondary)]">新任务将依次完成章节分析、冻结已确认的分集来源和生成成片旁白。先预览并确认连续章节分配，确认创建后才会开始可能产生费用的模型分析；稿件与媒体仍由你逐集审核。</p>
       </div>
 
       <div className="grid gap-2">

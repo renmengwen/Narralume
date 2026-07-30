@@ -180,7 +180,7 @@ test("失败且没有活动 Job 时隐藏暂停并保留后端允许的重试与
     onReset: () => undefined,
   }));
   assert.match(html, /全本改写执行失败/);
-  assert.match(html, /重试失败章节/);
+  assert.match(html, /重试失败任务/);
   assert.match(html, /取消全本改写/);
   assert.doesNotMatch(html, /暂停当前任务|固定流水线正在处理全书/);
 });
@@ -298,13 +298,14 @@ test("全书规划保留冻结产物计数并展示当前 Job 真实进度", () 
   assert.match(queuedHtml, /当前任务等待执行；已尝试 2\/3 次/);
 });
 
-test("新合同展示逐集局部规划与单一成片旁白，旧合同保留历史名称", () => {
+test("新合同展示确定性分集来源冻结与单一成片旁白，旧合同保留历史名称", () => {
   const render = (planningContractVersion: 1 | 2, scriptContractVersion: 5 | 6) => renderToString(createElement(PipelineProgress, {
     run: run({ planningContractVersion, scriptContractVersion }), chapters,
     operation: "已恢复全本改写任务。", onControl: () => undefined, onReset: () => undefined,
   }));
   const current = render(2, 6);
-  assert.match(current, /逐集局部规划/);
+  assert.match(current, /分集来源冻结/);
+  assert.doesNotMatch(current, /全书世界观|逐集局部规划/);
   assert.match(current, />成片旁白稿</);
   assert.doesNotMatch(current, /原著还原稿与成片旁白稿/);
   const legacy = render(1, 5);

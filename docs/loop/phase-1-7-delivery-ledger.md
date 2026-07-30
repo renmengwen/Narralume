@@ -747,6 +747,20 @@ PC-02 当前 checkpoint：
 | 明确未执行 | 未发起任何真实模型请求，未重试当前失败的全书世界观 Job，未主动读写默认 SQLite、Run/Job/checkpoint，未自动批准内容或媒体。旧失败任务不会凭本提交自动补出历史模型正文；只有部署本提交后的新调用才会生成诊断。 |
 | 提交 / 恢复入口 | 业务提交 `9ae30caa030378bd3b15633234cd87a69d227bd3 feat(diagnostics): 统一记录文本模型失败证据`；从 `dev` 该提交恢复。后续若用户明确授权付费重试，先确认运行服务已包含该提交，再从现有 Job/Run 正式恢复入口重试，不得直接改 SQLite 或绕过人工门禁。 |
 
+## 2026-07-30 绕过全书世界观与逐集局部规划模型阶段
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `AUTO-06-BYPASS-STORY-BIBLE-LOCAL-PLAN-01` / 用户确认全书世界观与逐集局部规划不值得继续作为独立付费模型阶段，要求先以可回退方式绕过；保留旧表、旧 Job、checkpoint 与历史只读结果，不删除历史数据。 |
+| 状态 / 基线 | `verified`；基线 `dev@216d6b6`，业务提交 `d1a89e7fdb521dd4539628d6f2d2dd502b8f381d`。只对 `planningContractVersion=2` 生效；v1 历史合同继续保留原 Story Bible / 全书规划恢复路径。未 push、未合并 `main`、未启动或重启 3101/5174、未访问默认 SQLite、未操作真实 Run、未调用真实模型。 |
+| 来源与采用 | 复用 2026-07-29 `AUTO-06-DIRECT-FINISHED-NARRATION-V6` 已完成的冻结优先级核查与来源登记；本轮没有复制新的外部业务代码。实现采用 Narralume `internal-port`：复用 `episodeRanges`、`FullBookPlan` 严格合同、`freezeFullBookPlan` 原子冻结、现有 Job owner/cancel、稿件来源与 TTS 听审身份，不新增依赖、表、队列或第二套状态。 |
+| 绕过与恢复合同 | v2 章节分析完成后直接进入 `planning_episodes`；按用户确认的非重叠连续章节范围确定性汇总全部 `chapter_events`，生成稳定标题/占位故事弧，`recap/nextHook=null`，经原校验后一次原子冻结 Episodes 与 `episode_sources`，再进入稿件生成。该路径不解析文本 provider，不创建 Story Bible 或 Episode Plan 模型 Job。升级前 v2 的 story/plan 映射在 retry、resume 和 reconcile 前解除；独占 queued/running Job 请求取消，共享或 paused owner 保留；旧失败 Job 不重置、不重新付费，历史 Job/checkpoint 仍留存审计。 |
+| 来源完整性 | 不再把多个语义事件引用同一段原文误判为跨事件字节交叉；仍拒绝章节/字节起点倒序、未知或重复事件、跨集重复、章节缺口和来源快照漂移。每集来源上限由模型规划时期的 2000 调整为 100000，最终仍受 8 MiB canonical 计划上限约束；回归确认同一原文范围上的 revelation/location 均进入 `episode_sources`。 |
+| TTS 与历史兼容 | 听审继续使用 `tts-listening-review-v1`，已有 `storyBibleId:string` 的批准/拒绝凭证保持精确可恢复。新 v2 使用 `storyBibleId:null`；专名清单从当前系列资产 canonical name 与 aliases 确定性派生，读音标记为“请人工确认”，来源与匹配结果进入既有 hash；即使没有可用专名清单，代表片段仍必须人工听审。 |
+| UI / OpenDesign | 加载 `opendesign/design-systems/narralume-product`；设置页只显示仍被消费的四类本书提示词，流程改为“章节分析 → 分集来源冻结 → 成片旁白”。新 v2 隐藏不存在的世界观阶段与不可用卡片，显示“分集来源冻结”；历史 `storyBibleId` 仍提供只读查看入口并显示 `1/1 / 历史结果已保留`。失败操作统一为“失败任务”，保留中文状态、44px 控件、焦点与非颜色反馈。独立 OpenDesign UI 验收 PASS。 |
+| Review / 验证 | 独立 Code Review 初审发现并关闭：v1 听审凭证失效、paused 共享 owner 误取消、2000 来源上限、无世界观专名缺口；最终无剩余 P1/P2。定向 Server `61/61 PASS`，Web 定向 `26/26 PASS`，前后端 TypeScript PASS。根 `npm test` PASS：Server `482 PASS / 0 FAIL / 1 SKIP`，唯一 SKIP 为既有 Windows 普通文件 symlink 权限；Web `111/111 PASS`。根 `npm run build` PASS，Vite 142 modules，主 JS `514.23 kB`，仅既有 >500 kB warning；`git diff --check` PASS，仅 LF→CRLF 提示。 |
+| 明确未执行 / 恢复入口 | 没有部署或触发用户刚才失败的真实世界观 Run。要让该 Run 实际绕过，必须先让运行中的后端包含 `d1a89e7`，再通过正式 retry/resume API；不得直接改 SQLite。代码已保证旧失败世界观 Job 不会被重新排队，但本提交不自动执行真实控制动作或产生稿件模型费用。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

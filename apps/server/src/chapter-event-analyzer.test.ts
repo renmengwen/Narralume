@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   createOpenAiResponsesChapterBatchAnalyzer,
   createOpenAiResponsesChapterAnalyzer,
+  limitedJson,
+  limitedResponseText,
   MAX_CHAPTER_BATCH_INPUT_BYTES,
   parseChapterBatchAnalysisEvents,
   prepareChapterBatchPrompt,
@@ -12,6 +14,51 @@ import {
   type ChapterEvidenceAtom,
 } from "./chapter-event-analyzer.js";
 import { TEXT_MODEL_REQUEST_CONCURRENCY } from "./text-model-concurrency.js";
+import { TextModelCallError, TextModelStreamError } from "./text-model-stream.js";
+
+test("普通 JSON fallback 失败也保留响应格式、请求 ID 和有界正文", async () => {
+  const response = new Response("{bad-json", {
+    headers: { "content-type": "application/json", "x-request-id": "fallback-request" },
+  });
+  await assert.rejects(() => limitedJson(response, { protocol: "openai-response" }), (error: Error) => {
+    assert.ok(error instanceof TextModelStreamError);
+    assert.equal(error.statistics.responseFormat, "json");
+    assert.equal(error.statistics.requestIds["x-request-id"], "fallback-request");
+    assert.equal(error.partialText, "{bad-json");
+    return true;
+  });
+});
+
+test("普通 JSON fallback 读取中断或缺少正文时保留已获得的证据", async () => {
+  const encoder = new TextEncoder();
+  let first = true;
+  const interrupted = new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (first) {
+        first = false;
+        controller.enqueue(encoder.encode('{"output_text":"partial'));
+      } else {
+        controller.error(new Error("reader failed"));
+      }
+    },
+  }), { headers: { "x-request-id": "reader-request" } });
+  await assert.rejects(() => limitedJson(interrupted), (error: Error) => {
+    assert.ok(error instanceof TextModelStreamError);
+    assert.equal(error.statistics.requestIds["x-request-id"], "reader-request");
+    assert.match(error.partialText, /partial/u);
+    return true;
+  });
+
+  await assert.rejects(() => limitedResponseText(new Response("{}", {
+    headers: { "content-type": "application/json", "x-request-id": "envelope-request" },
+  })), (error: Error) => {
+    assert.ok(error instanceof TextModelStreamError);
+    assert.equal(error.statistics.responseFormat, "json");
+    assert.equal(error.statistics.requestIds["x-request-id"], "envelope-request");
+    assert.equal(error.partialText, "{}");
+    return true;
+  });
+});
 
 test("文本模型请求默认保持非流式，只有显式选择才发送 stream", () => {
   const normal = JSON.parse(textModelRequest({
@@ -108,6 +155,20 @@ test("证据合同错误直接失败且不复制付费请求", async () => {
 
   await assert.rejects(() => analyzer({ chapterId: "chapter", atoms }), /未知证据 ID/);
   assert.equal(calls, 1);
+});
+
+test("章节分析合同错误携带调用阶段和有界模型证据", async () => {
+  const analyzer = createOpenAiResponsesChapterAnalyzer(config, (async () => streamedModelResponse({
+    events: [{ type: "location", payload: { name: "墓道" }, evidenceIds: ["e_missing"] }],
+  })) as typeof fetch);
+  let caught: unknown;
+  try { await analyzer({ chapterId: "chapter-evidence", atoms }); }
+  catch (error) { caught = error; }
+
+  assert.ok(caught instanceof TextModelCallError);
+  assert.equal(caught.stage, "chapter-analysis:chapter-evidence");
+  assert.match(caught.evidence.partialText ?? "", /e_missing/);
+  assert.equal(caught.evidence.statistics?.terminalReceived, true);
 });
 
 test("HTTP 和非 JSON 错误不触发证据纠错请求", async () => {
@@ -237,6 +298,24 @@ test("多章单请求严格校验章节全集并拒绝跨章 evidence", async ()
   assert.equal(calls, 1);
   assert.equal(requestBody?.stream, true);
   assert.deepEqual(result.map((item) => item.chapterId), ["chapter-a", "chapter-b"]);
+});
+
+test("多章分析合同错误携带批次章节身份和模型证据", async () => {
+  const analyzer = createOpenAiResponsesChapterBatchAnalyzer(config, (async () => streamedModelResponse({
+    chapters: [{ chapterId: "chapter-a", events: [] }],
+  })) as typeof fetch);
+  let caught: unknown;
+  try {
+    await analyzer({ chapters: [
+      { chapterId: "chapter-a", atoms: [atoms[0]!] },
+      { chapterId: "chapter-b", atoms: [atoms[1]!] },
+    ] });
+  } catch (error) { caught = error; }
+
+  assert.ok(caught instanceof TextModelCallError);
+  assert.equal(caught.stage, "chapter-analysis-batch:chapter-a,chapter-b");
+  assert.match(caught.evidence.partialText ?? "", /chapter-a/);
+  assert.equal(caught.evidence.statistics?.terminalReceived, true);
 });
 
 test("批次预算使用最终 JSON prompt 的真实 UTF-8 字节数并执行 512 KiB 边界", () => {

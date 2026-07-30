@@ -16,6 +16,7 @@ import {
 import { getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
+import { TextModelCallError } from "./text-model-stream.js";
 
 const config: ChapterTextModelConfig = {
   baseUrl: "https://example.invalid/v1",
@@ -46,6 +47,29 @@ test("分集来源推荐显式请求流式输出并逐块读取 SSE", async (t) 
   }), expected);
   assert.equal(requestBody?.stream, true);
   assert.equal(gateRuns, 1);
+});
+
+test("选材推荐 JSON 错误携带生产阶段和有界模型证据", async () => {
+  const recommend = createOpenAiEpisodeRecommender(config, (async () => {
+    const delta = JSON.stringify({ type: "response.output_text.delta", delta: "not-json" });
+    return new Response(`data: ${delta}\n\ndata: {"type":"response.completed"}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch);
+  let caught: unknown;
+  try {
+    await recommend({
+      targetDurationSeconds: 1200,
+      endingPreference: null,
+      chapters: [],
+      diagnosticStage: "episode-recommendation:series:1",
+    });
+  } catch (error) { caught = error; }
+
+  assert.ok(caught instanceof TextModelCallError);
+  assert.equal(caught.stage, "episode-recommendation:series:1");
+  assert.equal(caught.evidence.partialText, "not-json");
+  assert.equal(caught.evidence.statistics?.terminalReceived, true);
 });
 
 async function fixture(missingSecond = false) {
@@ -93,6 +117,7 @@ test("推荐任务只向模型发送逐章摘要并持久化连续真实事件",
   });
   try {
     assert.equal(context.job.status, "succeeded");
+    assert.equal(received?.diagnosticStage, "episode-recommendation:series:1");
     assert.deepEqual(received?.chapters.map((chapter) => Object.keys(chapter)), [
       ["id", "index", "title", "events"], ["id", "index", "title", "events"], ["id", "index", "title", "events"],
     ]);

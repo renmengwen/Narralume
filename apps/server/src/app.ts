@@ -419,7 +419,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     [FULL_BOOK_PLAN_JOB_TYPE]: async (context: JobExecutionContext) => {
       const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
       if (!provider) throw new Error("全书规划任务对应的模型配置不可用");
-      return createFullBookPlanJobHandler(provider, { database: connection.database })(context);
+      return createFullBookPlanJobHandler(provider, { database: connection.database, dataRoot })(context);
     },
     [ASSET_PROMPT_DRAFT_JOB_TYPE]: async (context: JobExecutionContext) => {
       const provider = await resolveChapterTextProvider(frozenModelIdentity(context.job.payload));
@@ -434,6 +434,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       if (!provider) throw new Error("逐集局部规划任务对应的模型配置不可用");
       return createFullBookPlanJobHandler(provider, {
         database: connection.database,
+        dataRoot,
         jobType: EPISODE_PLAN_JOB_TYPE,
       })(context);
     },
@@ -486,6 +487,7 @@ export function buildApp(options: BuildAppOptions = {}) {
         heartbeatMs: options.jobWorker?.heartbeatMs,
         retryDelayMs: options.jobWorker?.retryDelayMs,
         onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "章节分析 Worker 运行异常")),
+        textModelDiagnosticsRoot: dataRoot,
       },
     ));
     const textJobHandlers = Object.fromEntries(
@@ -500,6 +502,7 @@ export function buildApp(options: BuildAppOptions = {}) {
         heartbeatMs: options.jobWorker?.heartbeatMs,
         retryDelayMs: options.jobWorker?.retryDelayMs,
         onError: options.jobWorker?.onError ?? ((error) => app.log.error(error, "文本模型 Worker 运行异常")),
+        textModelDiagnosticsRoot: dataRoot,
       },
     ));
     const pipelineService = new SeriesPipelineService({

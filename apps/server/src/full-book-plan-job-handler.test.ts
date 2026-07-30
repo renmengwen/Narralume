@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
@@ -101,7 +104,7 @@ function context(task: FullBookPlanJobPayload, saved = new Map<string, {
   return {
     checkpoints, progress,
     value: {
-      job: { id: `job_${task.requestHash}`, type: FULL_BOOK_PLAN_JOB_TYPE, payload: task },
+      job: { id: `job_${task.requestHash}`, type: FULL_BOOK_PLAN_JOB_TYPE, payload: task, attempts: 1 },
       reportProgress: (value: number) => { progress.push(value); },
       isCancellationRequested: () => false,
       throwIfCancellationRequested: () => undefined,
@@ -208,6 +211,7 @@ test("瞬时 HTTP 与上游流失败在单区间内有界重试", async () => {
       { headers: { "content-type": "text/event-stream" } }),
   ];
   for (const failure of failures) {
+    const dataRoot = await mkdtemp(join(tmpdir(), "narralume-plan-retry-"));
     let calls = 0;
     const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
       calls += 1;
@@ -219,8 +223,20 @@ test("瞬时 HTTP 与上游流失败在单区间内有界重试", async () => {
       const events = [input.sourceEvents[0]!.id];
       return Response.json({ output_text: JSON.stringify(plan(events)) });
     }) as typeof fetch;
-    await createFullBookPlanJobHandler(config, { fetchImpl, retryDelayMs: 0 })(context(payload()).value);
-    assert.equal(calls, FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS + 1);
+    try {
+      await createFullBookPlanJobHandler(config, { fetchImpl, retryDelayMs: 0, dataRoot })(context(payload()).value);
+      assert.equal(calls, FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS + 1);
+      const directory = join(dataRoot, "diagnostics", "text-model");
+      const products = await readdir(directory);
+      assert.equal(products.length, FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS - 1);
+      const saved = await Promise.all(products.map(async (name) => JSON.parse(await readFile(join(directory, name), "utf8"))));
+      assert.deepEqual(saved.map((item) => item.stage).sort(), [
+        `${FULL_BOOK_PLAN_JOB_TYPE}:interval:${payload().intervals[0]!.identityHash}:initial:transport-attempt-1`,
+        `${FULL_BOOK_PLAN_JOB_TYPE}:interval:${payload().intervals[0]!.identityHash}:initial:transport-attempt-2`,
+      ]);
+    } finally {
+      await rm(dataRoot, { recursive: true, force: true });
+    }
   }
 });
 

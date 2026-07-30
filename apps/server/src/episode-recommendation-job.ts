@@ -1,12 +1,21 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
+import { limitedResponseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { EPISODE_DURATION_POLICY } from "./episode-policy.js";
 import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-store.js";
 import type { JobHandler } from "./job-worker.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
-import { streamedText } from "./text-model-stream.js";
+import {
+  completedTextModelEvidence,
+  rememberTextModelEvidence,
+  streamedText,
+  TextModelStreamError,
+  textModelCallError,
+  textModelResultError,
+  type TextModelCallEvidence,
+  type TextModelStreamStatistics,
+} from "./text-model-stream.js";
 
 export const EPISODE_RECOMMENDATION_JOB_TYPE = "episode_sources_recommend";
 
@@ -30,6 +39,7 @@ export interface EpisodeRecommendationModelInput {
   endingPreference: string | null;
   chapters: readonly ChapterSummary[];
   signal?: AbortSignal;
+  diagnosticStage?: string;
 }
 
 export type RecommendEpisodeSources = (input: EpisodeRecommendationModelInput) => Promise<{
@@ -159,21 +169,29 @@ export function createEpisodeRecommendationJobHandler(
         endingPreference: task.endingPreference?.trim() || null,
         chapters: source.chapters,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+        diagnosticStage: `episode-recommendation:${task.seriesId}:${task.episodeIndex}`,
       });
     } finally { clearInterval(poll); }
     context.throwIfCancellationRequested();
-    const chapterIds = [...new Set(proposed.chapterIds)];
-    const eventIds = [...new Set(proposed.eventIds)];
-    if (!chapterIds.length || chapterIds.some((id, index) => source.chapters[index]?.id !== id)) {
-      throw new Error("推荐模型返回了伪造或不连续的章节 ID");
-    }
-    const selected = new Set(chapterIds);
-    const events = new Map(source.chapters.flatMap((chapter) => chapter.events.map((event) => [event.id, { ...event, chapterId: chapter.id }] as const)));
-    if (!eventIds.length || eventIds.some((id) => !events.has(id) || !selected.has(events.get(id)!.chapterId))) {
-      throw new Error("推荐模型返回了伪造或越界的事件 ID");
-    }
-    if (!Number.isSafeInteger(proposed.estimatedCharacterCount) || proposed.estimatedCharacterCount < 1 || proposed.estimatedCharacterCount > 1_000_000 ||
-        (proposed.advice !== "保留" && proposed.advice !== "压缩")) throw new Error("推荐模型返回的预算建议无效");
+    const { chapterIds, eventIds, events } = (() => {
+      try {
+        const chapterIds = [...new Set(proposed.chapterIds)];
+        const eventIds = [...new Set(proposed.eventIds)];
+        if (!chapterIds.length || chapterIds.some((id, index) => source.chapters[index]?.id !== id)) {
+          throw new Error("推荐模型返回了伪造或不连续的章节 ID");
+        }
+        const selected = new Set(chapterIds);
+        const events = new Map(source.chapters.flatMap((chapter) => chapter.events.map((event) => [event.id, { ...event, chapterId: chapter.id }] as const)));
+        if (!eventIds.length || eventIds.some((id) => !events.has(id) || !selected.has(events.get(id)!.chapterId))) {
+          throw new Error("推荐模型返回了伪造或越界的事件 ID");
+        }
+        if (!Number.isSafeInteger(proposed.estimatedCharacterCount) || proposed.estimatedCharacterCount < 1 || proposed.estimatedCharacterCount > 1_000_000 ||
+            (proposed.advice !== "保留" && proposed.advice !== "压缩")) throw new Error("推荐模型返回的预算建议无效");
+        return { chapterIds, eventIds, events };
+      } catch (error) {
+        throw textModelResultError(error, `episode-recommendation:${task.seriesId}:${task.episodeIndex}`, proposed);
+      }
+    })();
     context.reportProgress(1);
     return {
       status: "recommended", startChapterId: chapterIds[0], endChapterId: chapterIds.at(-1),
@@ -186,7 +204,8 @@ export function createEpisodeRecommendationJobHandler(
 }
 
 export function createOpenAiEpisodeRecommender(config: ChapterTextModelConfig, fetchImpl: typeof fetch = fetch): RecommendEpisodeSources {
-  return async ({ targetDurationSeconds, endingPreference, chapters, signal }) => {
+  return async ({ targetDurationSeconds, endingPreference, chapters, signal, diagnosticStage }) => {
+    const stage = diagnosticStage ?? "episode-recommendation:direct";
     const input = [
       "基于逐章结构化事件摘要推荐连续章节和真实事件。只输出严格 JSON。",
       "chapterIds 必须从第一章开始连续；eventIds 只能使用输入 ID。advice 只能是保留或压缩。",
@@ -195,7 +214,10 @@ export function createOpenAiEpisodeRecommender(config: ChapterTextModelConfig, f
       '输出：{"chapterIds":[],"eventIds":[],"estimatedCharacterCount":1200,"advice":"保留"}',
     ].join("\n");
     const request = textModelRequest(config, input, 8192, true);
-    const text = await textModelConcurrencyGate.run(signal, async () => {
+    let statistics: TextModelStreamStatistics | undefined;
+    let text: string | undefined;
+    try {
+      text = await textModelConcurrencyGate.run(signal, async () => {
       const response = await fetchImpl(request.endpoint, {
         method: "POST", signal, redirect: "error",
         headers: request.headers,
@@ -203,10 +225,23 @@ export function createOpenAiEpisodeRecommender(config: ChapterTextModelConfig, f
       });
       if (!response.ok) { await response.body?.cancel(); throw new Error(`选材推荐模型请求失败（HTTP ${response.status}）`); }
       return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? streamedText(response, config.protocol ?? "openai-response", { signal })
-        : responseText(await limitedJson(response));
-    });
-    try { return JSON.parse(text) as Awaited<ReturnType<RecommendEpisodeSources>>; }
-    catch { throw new Error("选材推荐模型返回了无效 JSON"); }
+        ? streamedText(response, config.protocol ?? "openai-response", {
+          signal, onStatistics: (value) => { statistics = value; },
+        })
+        : limitedResponseText(response, {
+          protocol: config.protocol ?? "openai-response", signal,
+          onStatistics: (value) => { statistics = value; },
+        });
+      });
+      let result: Awaited<ReturnType<RecommendEpisodeSources>>;
+      try { result = JSON.parse(text) as Awaited<ReturnType<RecommendEpisodeSources>>; }
+      catch { throw new Error("选材推荐模型返回了无效 JSON"); }
+      return rememberTextModelEvidence(result, completedTextModelEvidence(text, statistics));
+    } catch (error) {
+      const evidence: TextModelCallEvidence = error instanceof TextModelStreamError
+        ? { statistics: error.statistics, partialText: error.partialText, partialTextTruncated: error.partialTextTruncated }
+        : text === undefined ? {} : completedTextModelEvidence(text, statistics);
+      throw textModelCallError(error, stage, evidence);
+    }
   };
 }

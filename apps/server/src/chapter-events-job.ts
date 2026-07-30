@@ -491,7 +491,9 @@ export function createChapterEventsAnalysisJobHandler(
       });
     } catch (error) {
       if (context.isCancellationRequested()) throw new JobCancelledError();
-      if (error instanceof Error && error.name === "TimeoutError") throw new Error("章节分析模型请求超时");
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new Error("章节分析模型请求超时", { cause: error });
+      }
       throw error;
     }
     context.throwIfCancellationRequested();

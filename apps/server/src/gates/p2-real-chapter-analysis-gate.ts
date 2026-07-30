@@ -9,6 +9,8 @@ import {
 } from "../chapter-event-analyzer.js";
 import { prepareChapterEvents } from "../chapter-event-store.js";
 import { openDatabase } from "../database.js";
+import { writeTextModelDiagnostic } from "../text-model-diagnostics.js";
+import { TextModelCallError } from "../text-model-stream.js";
 
 const MUSEDOCK_CONFIG = "D:\\code3\\MuseDock\\data\\config\\ai-models.json";
 const DEFAULT_BOOK_ID = "book_6d95e28bde2ba49123a80df990f0c70de7108c38dfc5b47f8db777504c53ba82";
@@ -43,12 +45,14 @@ async function readTextConfig(): Promise<ChapterTextModelConfig> {
 
 const dataRoot = resolve("apps/server/data");
 const connection = openDatabase(dataRoot);
+let modelConfig: ChapterTextModelConfig | undefined;
 try {
   const bookId = process.env.NARRALUME_GATE_BOOK_ID?.trim() || DEFAULT_BOOK_ID;
   const chapterId = process.env.NARRALUME_GATE_CHAPTER_ID?.trim() || DEFAULT_CHAPTER_ID;
   const source = await buildChapterEvidenceAtoms(connection.database, dataRoot, bookId, chapterId);
   console.log(JSON.stringify({ stage: "source-ready", chapterId, atoms: source.atoms.length, sourceCharacters: source.atoms.reduce((total, atom) => total + atom.text.length, 0) }));
-  const analyze = createOpenAiResponsesChapterAnalyzer(await readTextConfig());
+  modelConfig = await readTextConfig();
+  const analyze = createOpenAiResponsesChapterAnalyzer(modelConfig);
   const inputs = await analyze({
     chapterId,
     atoms: source.atoms,
@@ -59,6 +63,23 @@ try {
   assert.equal(prepared.length, inputs.length);
   assert.ok(prepared.every((event) => event.sources.length > 0 && event.sources.every((item) => /^[0-9a-f]{64}$/.test(item.sourceHash))));
   console.log(JSON.stringify({ ok: true, chapterId, atoms: source.atoms.length, events: prepared.length }));
+} catch (error) {
+  if (modelConfig && error instanceof TextModelCallError) {
+    await writeTextModelDiagnostic({
+      dataRoot,
+      jobId: "gate:p2-real-chapter-analysis",
+      attempt: 1,
+      stage: error.stage,
+      providerId: modelConfig.providerId,
+      model: modelConfig.model,
+      protocol: error.evidence.statistics?.protocol ?? modelConfig.protocol ?? "openai-response",
+      error: { name: error.name, message: error.message },
+      statistics: error.evidence.statistics,
+      partialText: error.evidence.partialText,
+      partialTextTruncated: error.evidence.partialTextTruncated,
+    }).catch(() => undefined);
+  }
+  throw error;
 } finally {
   connection.close();
 }

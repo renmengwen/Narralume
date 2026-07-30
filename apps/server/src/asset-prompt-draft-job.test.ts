@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import { openDatabase } from "./database.js";
 import { getJob } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
+import { TextModelCallError } from "./text-model-stream.js";
 
 const config: ChapterTextModelConfig = {
   baseUrl: "https://unused.invalid/v1", apiKey: "unused", model: "fixture-model", providerId: "fixture-provider",
@@ -70,9 +71,54 @@ test("资产 Prompt 草稿模型请求经过共享文本并发闸门", async (t)
     { headers: { "content-type": "application/json" } },
   )) as typeof fetch);
   assert.deepEqual(await generate({
-    prompt: "生成草稿", signal: new AbortController().signal, onActivity: () => undefined,
+    prompt: "生成草稿", stage: "asset-prompt:asset", signal: new AbortController().signal, onActivity: () => undefined,
   }), output);
   assert.equal(gateRuns, 1);
+});
+
+test("资产 Prompt 草稿在成功收流后的 JSON 错误保留调用阶段和响应证据", async () => {
+  const generate = createOpenAiAssetPromptDraftGenerator(config, (async () => new Response([
+    'data: {"type":"response.output_text.delta","delta":"不是 JSON"}\n\n',
+    'data: {"type":"response.completed"}\n\n',
+  ].join(""), { headers: { "content-type": "text/event-stream", "x-request-id": "asset-request" } })) as typeof fetch);
+  const error = await generate({
+    prompt: "生成草稿", stage: "asset-prompt:asset", signal: new AbortController().signal, onActivity: () => undefined,
+  }).then(() => undefined, (reason: unknown) => reason);
+  assert.ok(error instanceof TextModelCallError);
+  assert.equal(error.stage, "asset-prompt:asset");
+  assert.equal(error.evidence.partialText, "不是 JSON");
+  assert.equal(error.evidence.statistics?.terminalReceived, true);
+  assert.equal(error.evidence.statistics?.requestIds["x-request-id"], "asset-request");
+});
+
+test("资产 Prompt 草稿领域合同错误保留成功模型结果证据", async () => {
+  const setup = await fixture();
+  try {
+    const queued = await enqueueAssetPromptDraftJob(setup.db, setup.dataRoot, config, {
+      payload: { episodeId: "episode", assetId: "asset" }, maxAttempts: 1,
+    });
+    const generate = createOpenAiAssetPromptDraftGenerator(config, (async () => new Response([
+      'data: {"type":"response.output_text.delta","delta":"{}"}\n\n',
+      'data: {"type":"response.completed"}\n\n',
+    ].join(""), { headers: { "content-type": "text/event-stream" } })) as typeof fetch);
+    const worker = new JobWorker(setup.db, {
+      [ASSET_PROMPT_DRAFT_JOB_TYPE]: createAssetPromptDraftJobHandler(setup.db, setup.dataRoot, config, generate),
+    }, {
+      workerId: "asset-prompt-contract", leaseMs: 5_000, heartbeatMs: 100,
+      textModelDiagnosticsRoot: setup.dataRoot,
+    });
+    assert.equal(await worker.runOne(), true);
+    const failed = getJob(setup.db, queued.job.id)!;
+    assert.equal(failed.status, "failed");
+    assert.match(failed.errorMessage ?? "", /字段无效/u);
+    const directory = join(setup.dataRoot, "diagnostics", "text-model");
+    const files = await readdir(directory);
+    assert.equal(files.length, 1);
+    const diagnostic = JSON.parse(await readFile(join(directory, files[0]!), "utf8"));
+    assert.equal(diagnostic.stage, "asset-prompt:asset");
+    assert.equal(diagnostic.partialText.content, "{}");
+    assert.equal(diagnostic.statistics.terminalReceived, true);
+  } finally { setup.connection.close(); await rm(setup.dataRoot, { recursive: true, force: true }); }
 });
 
 test("资产 Prompt 草稿只写现有 Job/checkpoint，不创建图片、审核或视觉绑定", async () => {

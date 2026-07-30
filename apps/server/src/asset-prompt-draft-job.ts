@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
+import { limitedResponseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import { getBookPromptProfileRevision, getOrCreateBookPromptProfile, bookPromptInstructions } from "./book-prompt-profile-store.js";
 import { getBookStoryBible } from "./book-story-bible-store.js";
 import { getEpisode } from "./episode-store.js";
@@ -9,7 +9,15 @@ import { createJob, getJob, type CreateJobInput, type JobRecord } from "./job-st
 import { PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS, layeredPrompt } from "./product-prompts.js";
 import { requireApprovedScriptForProduction } from "./script-approval-store.js";
 import { getScriptVersion } from "./script-version-store.js";
-import { streamedText } from "./text-model-stream.js";
+import {
+  completedTextModelEvidence,
+  rememberTextModelEvidence,
+  streamedText,
+  textModelCallError,
+  textModelResultError,
+  TextModelStreamError,
+  type TextModelStreamStatistics,
+} from "./text-model-stream.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 
@@ -28,6 +36,7 @@ export interface AssetPromptDraft {
 
 export interface GenerateAssetPromptDraftInput {
   prompt: string;
+  stage: string;
   signal: AbortSignal;
   onActivity: () => void;
 }
@@ -231,6 +240,7 @@ export function createAssetPromptDraftJobHandler(
     let raw: unknown;
     try {
       raw = await generate({
+        stage: `asset-prompt:${task.assetId}`,
         signal: controller.signal,
         onActivity: () => undefined,
         prompt: layeredPrompt(PRODUCT_PROMPTS.assetPromptDraft, task.bookPromptInstructions, JSON.stringify({
@@ -245,7 +255,14 @@ export function createAssetPromptDraftJobHandler(
       if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
       throw error;
     } finally { clearInterval(poll); }
-    const draft = parseDraft(raw);
+    let draft: AssetPromptDraft;
+    try {
+      draft = parseDraft(raw);
+    } catch (error) {
+      throw raw && typeof raw === "object"
+        ? textModelResultError(error, `asset-prompt:${task.assetId}`, raw)
+        : textModelCallError(error, `asset-prompt:${task.assetId}`);
+    }
     await currentIdentity(database, dataRoot, task);
     context.commitCheckpoint("asset-prompt-draft", task.assetId, task.requestHash, () => undefined, draft);
     return draft;
@@ -253,17 +270,38 @@ export function createAssetPromptDraftJobHandler(
 }
 
 export function createOpenAiAssetPromptDraftGenerator(config: ChapterTextModelConfig, fetchImpl: typeof fetch = fetch): GenerateAssetPromptDraft {
-  return async ({ prompt, signal, onActivity }) => {
+  return async ({ prompt, stage, signal, onActivity }) => {
     const request = textModelRequest(config, `${prompt}\n\n只输出符合 outputSchema �� JSON 对象，不得增加字段或 Markdown。`, 8192, true);
-    const raw = await textModelConcurrencyGate.run(signal, async () => {
-      const response = await fetchImpl(request.endpoint, {
-        method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+    let statistics: TextModelStreamStatistics | undefined;
+    let raw: string;
+    try {
+      raw = await textModelConcurrencyGate.run(signal, async () => {
+        const response = await fetchImpl(request.endpoint, {
+          method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+        });
+        if (!response.ok) { await response.body?.cancel(); throw new Error(`资产 Prompt 草稿模型请求失败（HTTP ${response.status}）`); }
+        return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+          ? streamedText(response, config.protocol ?? "openai-response", {
+              signal,
+              onActivity,
+              onStatistics: (value) => { statistics = value; },
+            })
+          : limitedResponseText(response, {
+            protocol: config.protocol ?? "openai-response", signal, onActivity,
+            onStatistics: (value) => { statistics = value; },
+          });
       });
-      if (!response.ok) { await response.body?.cancel(); throw new Error(`资产 Prompt 草稿模型请求失败（HTTP ${response.status}）`); }
-      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-        : responseText(await limitedJson(response));
-    });
-    try { return JSON.parse(raw) as unknown; } catch { throw new Error("资产 Prompt 草稿模型返回了无效 JSON"); }
+    } catch (error) {
+      throw error instanceof TextModelStreamError
+        ? textModelCallError(error, stage, {
+            statistics: error.statistics,
+            partialText: error.partialText,
+            partialTextTruncated: error.partialTextTruncated,
+          })
+        : textModelCallError(error, stage);
+    }
+    const evidence = completedTextModelEvidence(raw, statistics);
+    try { return rememberTextModelEvidence(JSON.parse(raw) as object, evidence); }
+    catch (error) { throw textModelCallError(new Error("资产 Prompt 草稿模型返回了无效 JSON", { cause: error }), stage, evidence); }
   };
 }

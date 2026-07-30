@@ -9,6 +9,7 @@ import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-conc
 import { createScriptVersionPair, createStandalonePackagedScriptVersion } from "./script-version-store.js";
 import { requireMeasuredTtsCalibration } from "./tts-calibration-job.js";
 import { PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
+import { textModelCallError, textModelResultError } from "./text-model-stream.js";
 
 export const EPISODE_SCRIPT_GENERATION_JOB_TYPE = "episode_scripts_generate";
 export const EPISODE_SCRIPT_GENERATION_LEGACY_CONTRACT_VERSION = 5;
@@ -77,6 +78,7 @@ export interface ScriptBeat {
 
 interface SkeletonInput {
   stage: "skeleton";
+  diagnosticStage?: string;
   episode: {
     id: string;
     storyArc: string;
@@ -102,6 +104,7 @@ interface SkeletonInput {
 
 interface FaithfulInput {
   stage: "faithful";
+  diagnosticStage?: string;
   beat: ScriptBeat;
   characterBudget: number;
   minimumCharacterCount: number;
@@ -121,6 +124,7 @@ interface FinishedInput extends Omit<FaithfulInput, "stage"> {
 
 interface PackagedInput {
   stage: "packaged";
+  diagnosticStage?: string;
   targetDurationSeconds: number;
   characterBudget: number;
   minimumCharacterCount: number;
@@ -551,12 +555,28 @@ async function callWithCancellation<T>(
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (groupSignal?.aborted) throw groupSignal.reason ?? error;
-    if (error instanceof Error && error.name === "TimeoutError") throw new Error("长稿生成模型请求超时");
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error("长稿生成模型请求超时", { cause: error });
+    }
     throw error;
   } finally {
     clearInterval(poll);
     clearTimeout(idle);
     clearTimeout(total);
+  }
+}
+
+async function callTextModel<T>(
+  context: Parameters<JobHandler>[0],
+  stage: string,
+  call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+  groupSignal?: AbortSignal,
+) {
+  try {
+    return await callWithCancellation(context, call, groupSignal);
+  } catch (error) {
+    if (error instanceof JobCancelledError) throw error;
+    throw textModelCallError(error, stage);
   }
 }
 
@@ -643,20 +663,34 @@ export function createEpisodeScriptGenerationJobHandler(
         event: JSON.parse(source.eventPayloadJson) as Record<string, string>,
       })),
     };
-    const generateSkeleton = (correctionError?: string) => callWithCancellation(context, (signal, onActivity) => generate({
-      ...skeletonInput,
-      ...(correctionError ? { correctionError } : {}),
-      signal,
-      onActivity,
-    }));
+    const generateSkeleton = (correctionError?: string) => {
+      const stage = `episode-script.skeleton.${correctionError ? "correction-1" : "initial"}`;
+      return callTextModel(context, stage, (signal, onActivity) => generate({
+        ...skeletonInput,
+        ...(correctionError ? { correctionError } : {}),
+        diagnosticStage: stage,
+        signal,
+        onActivity,
+      }));
+    };
     const skeletonResult = await generateSkeleton();
     let beats: ScriptBeat[];
     try {
       beats = validateBeats((skeletonResult as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
     } catch (error) {
-      if (!(error instanceof EpisodeScriptSkeletonContractError)) throw error;
+      if (!(error instanceof EpisodeScriptSkeletonContractError)) {
+        throw textModelResultError(error, "episode-script.skeleton.initial", skeletonResult as object);
+      }
       const corrected = await generateSkeleton(error.message);
-      beats = validateBeats((corrected as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
+      try {
+        beats = validateBeats((corrected as { beats?: unknown }).beats, task.sources, task.targetDurationSeconds);
+      } catch (correctionError) {
+        throw textModelResultError(
+          correctionError,
+          "episode-script.skeleton.correction-1",
+          corrected as object,
+        );
+      }
     }
     context.reportProgress(0.2);
 
@@ -715,14 +749,17 @@ export function createEpisodeScriptGenerationJobHandler(
             prompt: task.prompt!,
           };
           const generateBeat = (correctionError?: string,
-            previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>) =>
-            callWithCancellation(context, (signal, onActivity) => generate({
+            previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>) => {
+            const stage = `episode-script.finished.beat-${index + 1}.${correctionError ? "correction-1" : "initial"}`;
+            return callTextModel(context, stage, (signal, onActivity) => generate({
               ...base,
               ...(correctionError ? { correctionError } : {}),
               ...(previousParagraphs ? { previousParagraphs } : {}),
+              diagnosticStage: stage,
               signal,
               onActivity,
             }), groupController.signal);
+          };
           try {
             let result = await generateBeat();
             let restored: Array<{ text: string; sourceIndexes: number[] }>;
@@ -734,8 +771,16 @@ export function createEpisodeScriptGenerationJobHandler(
                 try { return validateFinishedBeatResult(result, beat); } catch { return undefined; }
               })();
               result = await generateBeat(error instanceof Error ? error.message : "输出合同无效", previous);
-              restored = validateFinishedBeatResult(result, beat);
-              validateScriptLength(`第 ${index + 1} 个成片旁白 beat`, restored, limits);
+              try {
+                restored = validateFinishedBeatResult(result, beat);
+                validateScriptLength(`第 ${index + 1} 个成片旁白 beat`, restored, limits);
+              } catch (correctionError) {
+                throw textModelResultError(
+                  correctionError,
+                  `episode-script.finished.beat-${index + 1}.correction-1`,
+                  result as object,
+                );
+              }
             }
             paragraphsByBeat[index] = restored;
             context.throwIfCancellationRequested();
@@ -752,7 +797,12 @@ export function createEpisodeScriptGenerationJobHandler(
         },
       );
       const finishedParagraphs = paragraphsByBeat.flatMap((paragraphs) => paragraphs);
-      const actualCharacterCount = validateScriptLength("成片旁白稿", finishedParagraphs, characterLimits);
+      let actualCharacterCount: number;
+      try {
+        actualCharacterCount = validateScriptLength("成片旁白稿", finishedParagraphs, characterLimits);
+      } catch (error) {
+        throw textModelCallError(error, "episode-script.finished.aggregate");
+      }
       await requireCurrentEpisode(database, dataRoot, task);
       context.throwIfCancellationRequested();
       const packaged = createStandalonePackagedScriptVersion(database, task.episodeId, finishedParagraphs, () => {
@@ -788,8 +838,10 @@ export function createEpisodeScriptGenerationJobHandler(
         const beatCharacterBudget = Math.max(1, Math.floor(characterBudget * ((beat.targetDurationSeconds ??
           task.targetDurationSeconds / beats.length) / task.targetDurationSeconds)));
         try {
-          const result = await callWithCancellation(context, (signal, onActivity) => generate({
+          const stage = `episode-script.faithful.beat-${index + 1}.initial`;
+          const result = await callTextModel(context, stage, (signal, onActivity) => generate({
             stage: "faithful",
+            diagnosticStage: stage,
             beat,
             characterBudget: beatCharacterBudget,
             ...scriptCharacterLimits(beatCharacterBudget),
@@ -800,10 +852,14 @@ export function createEpisodeScriptGenerationJobHandler(
             signal,
             onActivity,
           }), groupController.signal);
-          faithfulParagraphs[index] = {
-            text: validateTextResult(result, "原著还原稿正文"),
-            sourceIndexes: beat.sourceIndexes,
-          };
+          try {
+            faithfulParagraphs[index] = {
+              text: validateTextResult(result, "原著还原稿正文"),
+              sourceIndexes: beat.sourceIndexes,
+            };
+          } catch (error) {
+            throw textModelResultError(error, stage, result as object);
+          }
           faithfulCompleted += 1;
           context.reportProgress(0.2 + (faithfulCompleted / beats.length) * 0.4);
         } catch (error) {
@@ -812,7 +868,12 @@ export function createEpisodeScriptGenerationJobHandler(
         }
       },
     );
-    const faithfulCharacterCount = validateScriptLength("原著还原稿", faithfulParagraphs, characterLimits);
+    let faithfulCharacterCount: number;
+    try {
+      faithfulCharacterCount = validateScriptLength("原著还原稿", faithfulParagraphs, characterLimits);
+    } catch (error) {
+      throw textModelCallError(error, "episode-script.faithful.aggregate");
+    }
 
     const faithfulSources = new Set(faithfulParagraphs.flatMap((paragraph) => paragraph.sourceIndexes));
     const packagedInput: Omit<PackagedInput, "signal" | "onActivity" | "correctionError" | "previousParagraphs"> = {
@@ -825,14 +886,25 @@ export function createEpisodeScriptGenerationJobHandler(
     const generatePackaged = (
       correctionError?: string,
       previousParagraphs?: Array<{ text: string; sourceIndexes: number[] }>,
-    ) => callWithCancellation(context, (signal, onActivity) => generate({
-      ...packagedInput,
-      ...(correctionError ? { correctionError } : {}),
-      ...(previousParagraphs ? { previousParagraphs } : {}),
-      signal,
-      onActivity,
-    }));
-    let packagedParagraphs = validatePackagedResult(await generatePackaged(), faithfulSources);
+      correctionAttempt = 0,
+    ) => {
+      const stage = `episode-script.packaged.${correctionAttempt === 0 ? "initial" : `correction-${correctionAttempt}`}`;
+      return callTextModel(context, stage, (signal, onActivity) => generate({
+        ...packagedInput,
+        ...(correctionError ? { correctionError } : {}),
+        ...(previousParagraphs ? { previousParagraphs } : {}),
+        diagnosticStage: stage,
+        signal,
+        onActivity,
+      }));
+    };
+    let packagedResult = await generatePackaged();
+    let packagedParagraphs: Array<{ text: string; sourceIndexes: number[] }>;
+    try {
+      packagedParagraphs = validatePackagedResult(packagedResult, faithfulSources);
+    } catch (error) {
+      throw textModelResultError(error, "episode-script.packaged.initial", packagedResult as object);
+    }
     let actualCharacterCount: number;
     for (let correctionAttempt = 0; ; correctionAttempt += 1) {
       try {
@@ -840,11 +912,21 @@ export function createEpisodeScriptGenerationJobHandler(
         actualCharacterCount = validateScriptLength("成片旁白稿", packagedParagraphs, characterLimits);
         break;
       } catch (error) {
-        if (!(error instanceof CorrectableScriptError) || correctionAttempt >= 2) throw error;
-        packagedParagraphs = validatePackagedResult(
-          await generatePackaged(error.message, packagedParagraphs),
-          faithfulSources,
-        );
+        const stage = `episode-script.packaged.${correctionAttempt === 0 ? "initial" : `correction-${correctionAttempt}`}`;
+        if (!(error instanceof CorrectableScriptError) || correctionAttempt >= 2) {
+          throw textModelResultError(error, stage, packagedResult as object);
+        }
+        const nextAttempt = correctionAttempt + 1;
+        packagedResult = await generatePackaged(error.message, packagedParagraphs, nextAttempt);
+        try {
+          packagedParagraphs = validatePackagedResult(packagedResult, faithfulSources);
+        } catch (correctionError) {
+          throw textModelResultError(
+            correctionError,
+            `episode-script.packaged.correction-${nextAttempt}`,
+            packagedResult as object,
+          );
+        }
       }
     }
     context.reportProgress(0.9);

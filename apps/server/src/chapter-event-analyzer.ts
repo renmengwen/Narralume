@@ -9,7 +9,16 @@ import {
   type ChapterEventInput,
   type ChapterEventType,
 } from "./chapter-event-store.js";
-import { streamedText } from "./text-model-stream.js";
+import {
+  completedTextModelEvidence,
+  rememberTextModelEvidence,
+  streamedText,
+  TextModelStreamError,
+  textModelCallError,
+  textModelJsonStatistics,
+  type TextModelCallEvidence,
+  type TextModelStreamStatistics,
+} from "./text-model-stream.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
 
@@ -163,16 +172,33 @@ function prompt(atoms: readonly ChapterEvidenceAtom[], promptInstructions?: stri
     : layeredPrompt(PRODUCT_PROMPTS.chapterAnalysis, promptInstructions, frozenInput);
 }
 
-export async function limitedJson(response: Response) {
+type LimitedJsonOptions = {
+  protocol?: TextModelStreamStatistics["protocol"];
+  signal?: AbortSignal;
+  onActivity?: () => void;
+  onStatistics?: (statistics: TextModelStreamStatistics) => void;
+  onRawText?: (text: string) => void;
+};
+
+export async function limitedJson(response: Response, options: LimitedJsonOptions = {}) {
+  const protocol = options.protocol ?? "openai-response";
+  let total = 0;
+  let captured = "";
+  let bodyComplete = false;
+  const fail = (message: string, cause?: unknown) => new TextModelStreamError(
+    message,
+    textModelJsonStatistics(response, protocol, total, Buffer.byteLength(captured), bodyComplete),
+    captured,
+    cause === undefined ? undefined : { cause },
+  );
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
     await response.body?.cancel();
-    throw new Error("章节分析模型响应超过大小限制");
+    throw fail("文本模型 JSON 响应超过大小限制");
   }
-  if (!response.body) throw new Error("章节分析模型没有返回内容");
+  if (!response.body) throw fail("文本模型没有返回 JSON 内容");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
-  let total = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -180,16 +206,63 @@ export async function limitedJson(response: Response) {
       total += value.byteLength;
       if (total > MAX_RESPONSE_BYTES) {
         await reader.cancel();
-        throw new Error("章节分析模型响应超过大小限制");
+        captured = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+        throw fail("文本模型 JSON 响应超过大小限制");
       }
       chunks.push(value);
+      if (value.byteLength > 0) options.onActivity?.();
     }
+    bodyComplete = true;
+  } catch (error) {
+    if (error instanceof TextModelStreamError) throw error;
+    captured = new TextDecoder("utf-8").decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+    const diagnostic = fail("文本模型 JSON 响应读取失败", error);
+    if (!options.signal?.aborted) throw diagnostic;
+    const reason = options.signal.reason instanceof Error
+      ? options.signal.reason
+      : new DOMException("aborted", "AbortError");
+    const aborted = new DOMException(reason.message, reason.name);
+    Object.defineProperty(aborted, "cause", { value: diagnostic, configurable: true });
+    throw aborted;
   } finally {
     reader.releaseLock();
   }
   const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total);
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown; }
-  catch { throw new Error("章节分析模型返回了无效 JSON"); }
+  try {
+    captured = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    options.onRawText?.(captured);
+    const statistics = textModelJsonStatistics(response, protocol, total, 0);
+    const result = JSON.parse(captured) as unknown;
+    options.onStatistics?.(statistics);
+    return result;
+  } catch (error) { throw fail("文本模型返回了无效 JSON 响应", error); }
+}
+
+export async function limitedResponseText(response: Response, options: LimitedJsonOptions = {}) {
+  let statistics: TextModelStreamStatistics | undefined;
+  let rawText = "";
+  const body = await limitedJson(response, {
+    ...options,
+    onStatistics: (value) => { statistics = value; options.onStatistics?.(value); },
+    onRawText: (value) => { rawText = value; options.onRawText?.(value); },
+  });
+  try {
+    const text = responseText(body);
+    if (statistics) {
+      statistics = { ...statistics, extractedTextBytes: Buffer.byteLength(text) };
+      options.onStatistics?.(statistics);
+    }
+    return text;
+  }
+  catch (error) {
+    throw new TextModelStreamError(
+      error instanceof Error ? error.message : String(error),
+      statistics ?? textModelJsonStatistics(response, options.protocol ?? "openai-response",
+        Buffer.byteLength(rawText), Buffer.byteLength(rawText)),
+      rawText,
+      { cause: error },
+    );
+  }
 }
 
 export function responseText(body: unknown) {
@@ -330,6 +403,7 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
     throw new Error("章节分析模型配置无效");
   }
   return async ({ chapters, promptInstructions, signal, onActivity }) => {
+    const stage = `chapter-analysis-batch:${chapters.map((chapter) => chapter.chapterId).join(",")}`;
     if (!chapters.length || chapters.length > 20 || new Set(chapters.map((chapter) => chapter.chapterId)).size !== chapters.length) {
       throw new Error("多章分析输入章节集合无效");
     }
@@ -338,7 +412,10 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
       throw new Error("多章分析输入超过服务端安全上限");
     }
     const request = textModelRequest(config, prepared.prompt, 32768, true);
-    const text = await textModelConcurrencyGate.run(signal, async () => {
+    let statistics: TextModelStreamStatistics | undefined;
+    let text: string | undefined;
+    try {
+      text = await textModelConcurrencyGate.run(signal, async () => {
       let response: Response;
       try {
         response = await fetchImpl(request.endpoint, {
@@ -353,10 +430,24 @@ export function createOpenAiResponsesChapterBatchAnalyzer(
         throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
       }
       return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-        : responseText(await limitedJson(response));
-    });
-    return parseChapterBatchAnalysisEvents(text, prepared.chapters);
+        ? streamedText(response, config.protocol ?? "openai-response", {
+          signal, onActivity, onStatistics: (value) => { statistics = value; },
+        })
+        : limitedResponseText(response, {
+          protocol: config.protocol ?? "openai-response", signal, onActivity,
+          onStatistics: (value) => { statistics = value; },
+        });
+      });
+      return rememberTextModelEvidence(
+        parseChapterBatchAnalysisEvents(text, prepared.chapters),
+        completedTextModelEvidence(text, statistics),
+      );
+    } catch (error) {
+      const evidence: TextModelCallEvidence = error instanceof TextModelStreamError
+        ? { statistics: error.statistics, partialText: error.partialText, partialTextTruncated: error.partialTextTruncated }
+        : text === undefined ? {} : completedTextModelEvidence(text, statistics);
+      throw textModelCallError(error, stage, evidence);
+    }
   };
 }
 
@@ -371,10 +462,14 @@ export function createOpenAiResponsesChapterAnalyzer(
       (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")) {
     throw new Error("章节分析模型配置无效");
   }
-  return async ({ atoms, promptInstructions, signal, onActivity }) => {
+  return async ({ chapterId, atoms, promptInstructions, signal, onActivity }) => {
+    const stage = `chapter-analysis:${chapterId}`;
     const requestAtoms = atoms.map((atom, index) => ({ ...atom, id: `e${index + 1}` }));
     const request = textModelRequest(config, prompt(requestAtoms, promptInstructions), 8192, true);
-    const text = await textModelConcurrencyGate.run(signal, async () => {
+    let statistics: TextModelStreamStatistics | undefined;
+    let text: string | undefined;
+    try {
+      text = await textModelConcurrencyGate.run(signal, async () => {
       let response: Response;
       try {
         response = await fetchImpl(request.endpoint, {
@@ -389,10 +484,24 @@ export function createOpenAiResponsesChapterAnalyzer(
         throw new Error(`章节分析模型请求失败（HTTP ${response.status}）`);
       }
       return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-        : responseText(await limitedJson(response));
-    });
-    return assignOccurrences(modelEvents(text, requestAtoms));
+        ? streamedText(response, config.protocol ?? "openai-response", {
+          signal, onActivity, onStatistics: (value) => { statistics = value; },
+        })
+        : limitedResponseText(response, {
+          protocol: config.protocol ?? "openai-response", signal, onActivity,
+          onStatistics: (value) => { statistics = value; },
+        });
+      });
+      return rememberTextModelEvidence(
+        assignOccurrences(modelEvents(text, requestAtoms)),
+        completedTextModelEvidence(text, statistics),
+      );
+    } catch (error) {
+      const evidence: TextModelCallEvidence = error instanceof TextModelStreamError
+        ? { statistics: error.statistics, partialText: error.partialText, partialTextTruncated: error.partialTextTruncated }
+        : text === undefined ? {} : completedTextModelEvidence(text, statistics);
+      throw textModelCallError(error, stage, evidence);
+    }
   };
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,6 +7,7 @@ import test from "node:test";
 import { openDatabase } from "./database.js";
 import { createJob, getJob, requestJobCancellation } from "./job-store.js";
 import { JobWorker } from "./job-worker.js";
+import { TextModelCallError, TextModelStreamError } from "./text-model-stream.js";
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -129,6 +130,64 @@ test("空闲 stop 会立即唤醒轮询且不遗留长计时器", async () => {
     const startedAt = Date.now();
     await worker.stop();
     assert.ok(Date.now() - startedAt < 500);
+  } finally {
+    connection.close();
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("文本 Worker 为流式失败持久化结构化诊断且保留原 Job 错误", async () => {
+  const dataRoot = await mkdtemp(join(tmpdir(), "narralume-worker-diagnostic-"));
+  const connection = openDatabase(dataRoot);
+  try {
+    createJob(connection.database, {
+      id: "job_stream_failure",
+      type: "analyze",
+      payload: { providerId: "provider", model: "model" },
+      maxAttempts: 1,
+    });
+    const failure = new TextModelStreamError("模型流式响应无效：原始响应超过大小限制", {
+      protocol: "openai-response",
+      responseFormat: "sse",
+      rawBytes: 8 * 1024 * 1024 + 1,
+      extractedTextBytes: 7,
+      eventCount: 1,
+      eventTypes: { "response.output_text.delta": 1 },
+      lastEventType: "response.output_text.delta",
+      terminalReceived: false,
+      contentType: "text/event-stream",
+      declaredContentLength: null,
+      requestIds: { "x-request-id": "request-safe" },
+    }, "partial");
+    const callFailure = new TextModelCallError(failure.message, "story-bible:final:hash:initial", {
+      statistics: failure.statistics,
+      partialText: failure.partialText,
+      partialTextTruncated: failure.partialTextTruncated,
+    }, { cause: failure });
+    const worker = new JobWorker(connection.database, {
+      analyze: async () => { throw callFailure; },
+    }, {
+      workerId: "worker",
+      leaseMs: 1_000,
+      heartbeatMs: 100,
+      textModelDiagnosticsRoot: dataRoot,
+    });
+
+    assert.equal(await worker.runOne(), true);
+    assert.equal(getJob(connection.database, "job_stream_failure")?.errorMessage, callFailure.message);
+    const directory = join(dataRoot, "diagnostics", "text-model");
+    const files = await readdir(directory);
+    assert.equal(files.length, 1);
+    const diagnostic = JSON.parse(await readFile(join(directory, files[0]!), "utf8"));
+    assert.equal(diagnostic.jobId, "job_stream_failure");
+    assert.equal(diagnostic.attempt, 1);
+    assert.equal(diagnostic.providerId, "provider");
+    assert.equal(diagnostic.stage, "story-bible:final:hash:initial");
+    assert.equal(diagnostic.error.name, "TextModelStreamError");
+    assert.equal(diagnostic.statistics.rawBytes, 8 * 1024 * 1024 + 1);
+    assert.equal(diagnostic.statistics.requestIds["x-request-id"], "request-safe");
+    assert.equal(diagnostic.partialText.content, "partial");
+    assert.equal(diagnostic.recoveryEligible, false);
   } finally {
     connection.close();
     await rm(dataRoot, { recursive: true, force: true });

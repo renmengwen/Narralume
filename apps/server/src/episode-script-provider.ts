@@ -1,14 +1,22 @@
-import { limitedJson, responseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
+import { limitedResponseText, textModelRequest, type ChapterTextModelConfig } from "./chapter-event-analyzer.js";
 import type { GenerateEpisodeScript } from "./episode-script-generation-job.js";
 import { layeredPrompt, PRODUCT_PROMPTS } from "./product-prompts.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
-import { streamedText } from "./text-model-stream.js";
+import {
+  completedTextModelEvidence,
+  rememberTextModelEvidence,
+  streamedText,
+  textModelCallError,
+  TextModelStreamError,
+  type TextModelStreamStatistics,
+} from "./text-model-stream.js";
 
 export function createOpenAiEpisodeScriptGenerator(
   config: ChapterTextModelConfig,
   fetchImpl: typeof fetch = fetch,
 ): GenerateEpisodeScript {
   return async (input) => {
+    const diagnosticStage = input.diagnosticStage ?? `episode-script:${input.stage}`;
     const allowlist = input.stage === "skeleton"
       ? input.sources.map(({ sourceIndex, sourceEventId }) => ({ sourceIndex, sourceEventId }))
       : null;
@@ -32,13 +40,14 @@ export function createOpenAiEpisodeScriptGenerator(
     const { signal, onActivity } = input;
     const safeInput = input.stage === "skeleton"
       ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError,
-        prompt: _prompt, ...rest }) => rest)(input)
+        prompt: _prompt, diagnosticStage: _diagnosticStage, ...rest }) => rest)(input)
       : input.stage === "finished"
         ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError,
-          prompt: _prompt, paragraphs: _paragraphs, ...rest }) => rest)(input)
+          prompt: _prompt, paragraphs: _paragraphs, diagnosticStage: _diagnosticStage, ...rest }) => rest)(input)
         : input.stage === "packaged"
-          ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError, ...rest }) => rest)(input)
-          : (({ signal: _signal, onActivity: _onActivity, ...rest }) => rest)(input);
+          ? (({ signal: _signal, onActivity: _onActivity, correctionError: _correctionError,
+            diagnosticStage: _diagnosticStage, ...rest }) => rest)(input)
+          : (({ signal: _signal, onActivity: _onActivity, diagnosticStage: _diagnosticStage, ...rest }) => rest)(input);
     const prompt = input.stage === "finished"
       ? `${instructions}\n\n${layeredPrompt(PRODUCT_PROMPTS.finishedNarrationBeat,
         input.prompt.instructions, JSON.stringify(safeInput))}`
@@ -47,19 +56,45 @@ export function createOpenAiEpisodeScriptGenerator(
           input.prompt.instructions, JSON.stringify(safeInput))}`
         : `${instructions}\n${JSON.stringify(safeInput)}`;
     const request = textModelRequest(config, prompt, 8192, true);
-    const raw = await textModelConcurrencyGate.run(signal, async () => {
-      const response = await fetchImpl(request.endpoint, {
-        method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+    let statistics: TextModelStreamStatistics | undefined;
+    let raw: string;
+    try {
+      raw = await textModelConcurrencyGate.run(signal, async () => {
+        const response = await fetchImpl(request.endpoint, {
+          method: "POST", signal, redirect: "error", headers: request.headers, body: request.body,
+        });
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`长稿生成模型请求失败（HTTP ${response.status}）`);
+        }
+        return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+          ? streamedText(response, config.protocol ?? "openai-response", {
+            signal,
+            onActivity,
+            onStatistics: (value) => { statistics = value; },
+          })
+          : limitedResponseText(response, {
+            protocol: config.protocol ?? "openai-response", signal, onActivity,
+            onStatistics: (value) => { statistics = value; },
+          });
       });
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`长稿生成模型请求失败（HTTP ${response.status}）`);
-      }
-      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-        : responseText(await limitedJson(response));
-    });
-    try { return JSON.parse(raw) as Awaited<ReturnType<GenerateEpisodeScript>>; }
-    catch { throw new Error("长稿生成模型返回了无效 JSON"); }
+    } catch (error) {
+      if (signal.aborted) throw error;
+      const evidence = error instanceof TextModelStreamError ? {
+        statistics: error.statistics,
+        partialText: error.partialText,
+        partialTextTruncated: error.partialTextTruncated,
+      } : {};
+      throw textModelCallError(error, diagnosticStage, evidence);
+    }
+    const evidence = completedTextModelEvidence(raw, statistics);
+    try {
+      return rememberTextModelEvidence(
+        JSON.parse(raw) as Awaited<ReturnType<GenerateEpisodeScript>>,
+        evidence,
+      );
+    } catch (error) {
+      throw textModelCallError(new Error("长稿生成模型返回了无效 JSON", { cause: error }), diagnosticStage, evidence);
+    }
   };
 }

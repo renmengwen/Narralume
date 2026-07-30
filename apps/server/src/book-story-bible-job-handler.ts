@@ -7,8 +7,7 @@ import {
   type BookStoryBibleContent,
 } from "./book-story-bible-contract.js";
 import {
-  limitedJson,
-  responseText,
+  limitedResponseText,
   textModelRequest,
   type ChapterTextModelConfig,
 } from "./chapter-event-analyzer.js";
@@ -29,7 +28,14 @@ import {
 import { createBookStoryBible, findBookStoryBibleForJob } from "./book-story-bible-store.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
-import { streamedText } from "./text-model-stream.js";
+import {
+  completedTextModelEvidence,
+  rememberTextModelEvidence,
+  streamedText,
+  textModelCallError,
+  textModelResultError,
+  type TextModelStreamStatistics,
+} from "./text-model-stream.js";
 import { withTextModelTimeout } from "./text-model-timeout.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
@@ -216,6 +222,7 @@ async function callModel(
   promptSnapshot?: StoryBiblePromptSnapshot,
   promptStage: "interval" | "final" = "interval",
   correctionError?: string,
+  diagnosticStage = `story-bible:${promptStage}:${correctionError ? "correction-1" : "initial"}`,
 ) {
   const frozenInput = correctionError
     ? `你是书籍全书世界观汇总器。上一次输出被严格合同拒绝，请只纠正一次并重新输出完整 JSON。\n错误：${correctionError}\n精确输出 schema：\n${OUTPUT_SCHEMA}\ninterval 的 sourceEvents[].id 与 chapterIds 分别是唯一允许的 sourceEventIds 与 chapterIds；final 的 chapterIds 是唯一允许的 chapterIds，且只能使用 intervals[].content 中已有的 sourceEventIds。\n原任务：${canonical(input)}`
@@ -225,21 +232,33 @@ async function callModel(
       promptSnapshot.instructions, frozenInput)
     : frozenInput;
   const request = textModelRequest(config, prompt, 8192, true);
-  const text = await textModelConcurrencyGate.run(signal, async () => {
-    const response = await fetchImpl(request.endpoint, {
-      method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`全书世界观模型请求失败（HTTP ${response.status}）`);
-    }
-    return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-      ? streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-      : responseText(await limitedJson(response));
-  });
+  let statistics: TextModelStreamStatistics | undefined;
+  let text: string | undefined;
   try {
-    return JSON.parse(text) as unknown;
-  } catch { throw new Error("全书世界观模型返回了无效 JSON"); }
+    text = await textModelConcurrencyGate.run(signal, async () => {
+      const response = await fetchImpl(request.endpoint, {
+        method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`全书世界观模型请求失败（HTTP ${response.status}）`);
+      }
+      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+        ? streamedText(response, config.protocol ?? "openai-response", {
+          signal, onActivity, onStatistics: (value) => { statistics = value; },
+        })
+        : limitedResponseText(response, {
+          protocol: config.protocol ?? "openai-response", signal, onActivity,
+          onStatistics: (value) => { statistics = value; },
+        });
+    });
+    const parsed = JSON.parse(text) as unknown;
+    return rememberTextModelEvidence(parsed, completedTextModelEvidence(text, statistics));
+  } catch (error) {
+    if (text === undefined) throw textModelCallError(error, diagnosticStage);
+    throw textModelCallError(new Error("全书世界观模型返回了无效 JSON", { cause: error }), diagnosticStage,
+      completedTextModelEvidence(text, statistics));
+  }
 }
 
 async function callModelAndParse<T>(
@@ -253,21 +272,33 @@ async function callModelAndParse<T>(
   groupSignal?: AbortSignal,
   promptSnapshot?: StoryBiblePromptSnapshot,
   promptStage: "interval" | "final" = "interval",
+  diagnosticStage = `story-bible:${promptStage}`,
 ) {
   const raw = await withCancellation(context,
     (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity,
-      promptSnapshot, promptStage), groupSignal);
+      promptSnapshot, promptStage, undefined, `${diagnosticStage}:initial`), groupSignal);
   try {
     parseModelContent(raw, allowedSourceEventIds, allowedChapterIds);
   } catch (error) {
-    if (!(error instanceof BookStoryBibleContractError)) throw error;
+    if (!(error instanceof BookStoryBibleContractError)) {
+      throw typeof raw === "object" && raw !== null ? textModelResultError(error, `${diagnosticStage}:initial`, raw) : error;
+    }
     const corrected = await withCancellation(context,
       (signal, onActivity) => callModel(config, fetchImpl, input, signal, onActivity,
-        promptSnapshot, promptStage, error.message), groupSignal);
-    parseModelContent(corrected, allowedSourceEventIds, allowedChapterIds);
-    return parse(corrected);
+        promptSnapshot, promptStage, error.message, `${diagnosticStage}:correction-1`), groupSignal);
+    try {
+      parseModelContent(corrected, allowedSourceEventIds, allowedChapterIds);
+      return parse(corrected);
+    } catch (correctedError) {
+      throw typeof corrected === "object" && corrected !== null
+        ? textModelResultError(correctedError, `${diagnosticStage}:correction-1`, corrected)
+        : correctedError;
+    }
   }
-  return parse(raw);
+  try { return parse(raw); }
+  catch (error) {
+    throw typeof raw === "object" && raw !== null ? textModelResultError(error, `${diagnosticStage}:initial`, raw) : error;
+  }
 }
 
 async function withCancellation<T>(
@@ -287,7 +318,9 @@ async function withCancellation<T>(
   } catch (error) {
     if (context.isCancellationRequested()) throw new JobCancelledError();
     if (groupSignal?.aborted) throw groupSignal.reason ?? error;
-    if (error instanceof Error && error.name === "TimeoutError") throw new Error("全书世界观模型请求超时");
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error("全书世界观模型请求超时", { cause: error });
+    }
     throw error;
   }
 }
@@ -337,7 +370,7 @@ export function createBookStoryBibleJobHandler(
           };
           const parsed = await callModelAndParse(context, config, fetchImpl, input, request.sourceEventIds,
             request.chapterIds, (raw) => parseStoryBibleIntervalResponse(request, raw), groupController.signal,
-            task.prompt, "interval");
+            task.prompt, "interval", `story-bible:interval:${request.identityHash}`);
           context.throwIfCancellationRequested();
           const bible = createBible(database, {
             bookId: task.bookId, scope: "interval", sourceStartChapterId: request.chapterIds[0]!,
@@ -395,7 +428,7 @@ export function createBookStoryBibleJobHandler(
               intervals: group.map((node) => ({ content: node.content })),
             }, reductionSourceEventIds, reductionChapterIds,
             (raw) => parseBookStoryBibleContent(raw, new Set(reductionSourceEventIds)), groupController.signal,
-            task.prompt, "final");
+            task.prompt, "final", `story-bible:reduction:${reductionKey}`);
             context.throwIfCancellationRequested();
             const bible = createBible(database, {
               bookId: task.bookId, scope: "interval", sourceStartChapterId: reductionChapterIds[0]!,
@@ -434,7 +467,8 @@ export function createBookStoryBibleJobHandler(
     };
     const final = await callModelAndParse(context, config, fetchImpl, input, finalRequest.sourceEventIds,
       chapterIds,
-      (raw) => parseStoryBibleFinalResponse(finalRequest, raw), undefined, task.prompt, "final");
+      (raw) => parseStoryBibleFinalResponse(finalRequest, raw), undefined, task.prompt, "final",
+      `story-bible:final:${finalRequest.identityHash}`);
     context.throwIfCancellationRequested();
     const bible = createBible(database, {
       bookId: task.bookId, scope: "final", sourceStartChapterId: task.intervals[0]!.chapterIds[0]!,

@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import {
-  limitedJson,
-  responseText,
+  limitedResponseText,
   textModelRequest,
   type ChapterTextModelConfig,
 } from "./chapter-event-analyzer.js";
@@ -21,8 +20,17 @@ import {
 } from "./full-book-plan-job.js";
 import { FullBookPlanContractError } from "./full-book-plan-contract.js";
 import { JobCancelledError, type JobHandler } from "./job-worker.js";
+import { writeTextModelDiagnostic } from "./text-model-diagnostics.js";
 import { mappedPipelineJobConcurrency, runConcurrent } from "./pipeline-job-concurrency.js";
-import { streamedText } from "./text-model-stream.js";
+import {
+  completedTextModelEvidence,
+  rememberTextModelEvidence,
+  streamedText,
+  TextModelCallError,
+  textModelCallError,
+  textModelResultError,
+  type TextModelStreamStatistics,
+} from "./text-model-stream.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
 import { layeredPrompt, PRODUCT_PROMPTS, PRODUCT_PROMPT_VERSIONS } from "./product-prompts.js";
 
@@ -57,6 +65,7 @@ interface HandlerOptions {
   database?: DatabaseSync;
   retryDelayMs?: number;
   jobType?: typeof FULL_BOOK_PLAN_JOB_TYPE | typeof EPISODE_PLAN_JOB_TYPE;
+  dataRoot?: string;
 }
 
 class TransientFullBookPlanModelError extends Error {}
@@ -200,54 +209,80 @@ async function callModel(
   signal: AbortSignal,
   onActivity: () => void,
   correction?: string,
+  diagnosticStage = `full-book-plan:${correction ? "correction-1" : "initial"}`,
 ) {
   const request = textModelRequest(config, [
     modelPrompt(input, correction),
   ].join("\n"), 8192, true);
-  const text = await textModelConcurrencyGate.run(signal, async () => {
-    const response = await fetchImpl(request.endpoint, {
-      method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      const message = `全书规划模型请求失败（HTTP ${response.status}）`;
-      if (TRANSIENT_HTTP_STATUSES.has(response.status)) throw new TransientFullBookPlanModelError(message);
-      throw new Error(message);
-    }
-    try {
-      return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
-        ? await streamedText(response, config.protocol ?? "openai-response", { signal, onActivity })
-        : responseText(await limitedJson(response));
-    } catch (error) {
-      if (error instanceof Error && /response\.(?:failed|incomplete): (?:internal_server_error|server_error|overloaded_error)|websocket: close 1006|unexpected EOF|error: overloaded_error/iu.test(error.message)) {
-        throw new TransientFullBookPlanModelError(error.message, { cause: error });
+  let statistics: TextModelStreamStatistics | undefined;
+  let text: string | undefined;
+  try {
+    text = await textModelConcurrencyGate.run(signal, async () => {
+      const response = await fetchImpl(request.endpoint, {
+        method: "POST", headers: request.headers, body: request.body, signal, redirect: "error",
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        const message = `全书规划模型请求失败（HTTP ${response.status}）`;
+        if (TRANSIENT_HTTP_STATUSES.has(response.status)) throw new TransientFullBookPlanModelError(message);
+        throw new Error(message);
       }
-      throw error;
-    }
-  });
-  try { return JSON.parse(text) as unknown; }
+      try {
+        return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")
+          ? await streamedText(response, config.protocol ?? "openai-response", {
+            signal, onActivity, onStatistics: (value) => { statistics = value; },
+          })
+          : limitedResponseText(response, {
+            protocol: config.protocol ?? "openai-response", signal, onActivity,
+            onStatistics: (value) => { statistics = value; },
+          });
+      } catch (error) {
+        if (error instanceof Error && /response\.(?:failed|incomplete): (?:internal_server_error|server_error|overloaded_error)|websocket: close 1006|unexpected EOF|error: overloaded_error/iu.test(error.message)) {
+          throw new TransientFullBookPlanModelError(error.message, { cause: error });
+        }
+        throw error;
+      }
+    });
+    const parsed = JSON.parse(text) as unknown;
+    return rememberTextModelEvidence(parsed, completedTextModelEvidence(text, statistics));
+  }
   catch (error) {
-    if (error instanceof Error && /大小限制/u.test(error.message)) throw error;
-    throw new Error("全书规划模型返回了无效 JSON");
+    if (text === undefined || (error instanceof Error && /大小限制/u.test(error.message))) {
+      throw textModelCallError(error, diagnosticStage);
+    }
+    throw textModelCallError(new Error("全书规划模型返回了无效 JSON", { cause: error }), diagnosticStage,
+      completedTextModelEvidence(text, statistics));
   }
 }
 
 async function callAndParse<T>(
   context: Parameters<JobHandler>[0],
-  call: (signal: AbortSignal, correction: string | undefined, onActivity: () => void) => Promise<unknown>,
+  call: (signal: AbortSignal, correction: string | undefined, onActivity: () => void,
+    diagnosticStage: string) => Promise<unknown>,
   parse: (value: unknown) => T,
+  diagnosticStage: string,
   groupSignal?: AbortSignal,
   retryDelayMs = FULL_BOOK_PLAN_RETRY_DELAY_MS,
+  onTransientError?: (error: unknown) => Promise<void>,
 ) {
   const raw = await callWithTransientRetry(context,
-    (signal, onActivity) => call(signal, undefined, onActivity), groupSignal, retryDelayMs);
+    (signal, onActivity, attempt) => call(signal, undefined, onActivity,
+      `${diagnosticStage}:initial:transport-attempt-${attempt}`), groupSignal, retryDelayMs, onTransientError);
   try {
     return parse(raw);
   } catch (error) {
-    if (!(error instanceof FullBookPlanContractError)) throw error;
+    if (!(error instanceof FullBookPlanContractError)) {
+      throw typeof raw === "object" && raw !== null ? textModelResultError(error, `${diagnosticStage}:initial`, raw) : error;
+    }
     const corrected = await callWithTransientRetry(context,
-      (signal, onActivity) => call(signal, error.message, onActivity), groupSignal, retryDelayMs);
-    return parse(corrected);
+      (signal, onActivity, attempt) => call(signal, error.message, onActivity,
+        `${diagnosticStage}:correction-1:transport-attempt-${attempt}`), groupSignal, retryDelayMs, onTransientError);
+    try { return parse(corrected); }
+    catch (correctedError) {
+      throw typeof corrected === "object" && corrected !== null
+        ? textModelResultError(correctedError, `${diagnosticStage}:correction-1`, corrected)
+        : correctedError;
+    }
   }
 }
 
@@ -264,15 +299,23 @@ async function wait(delayMs: number, signal: AbortSignal) {
 
 async function callWithTransientRetry<T>(
   context: Parameters<JobHandler>[0],
-  call: (signal: AbortSignal, onActivity: () => void) => Promise<T>,
+  call: (signal: AbortSignal, onActivity: () => void, attempt: number) => Promise<T>,
   groupSignal: AbortSignal | undefined,
   retryDelayMs: number,
+  onTransientError?: (error: unknown) => Promise<void>,
 ) {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await withCancellation(context, call, groupSignal);
+      return await withCancellation(context, (signal, onActivity) => call(signal, onActivity, attempt), groupSignal);
     } catch (error) {
-      if (!(error instanceof TransientFullBookPlanModelError) || attempt >= FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS) throw error;
+      let current: unknown = error;
+      const seen = new Set<unknown>();
+      while (current && !seen.has(current) && !(current instanceof TransientFullBookPlanModelError)) {
+        seen.add(current);
+        current = current instanceof Error ? current.cause : undefined;
+      }
+      if (!(current instanceof TransientFullBookPlanModelError) || attempt >= FULL_BOOK_PLAN_MODEL_MAX_ATTEMPTS) throw error;
+      await onTransientError?.(error);
       await withCancellation(context,
         (signal) => wait(retryDelayMs * attempt, signal), groupSignal);
     }
@@ -308,7 +351,9 @@ async function withCancellation<T>(
   } catch (error) {
     if (controller.signal.aborted || context.isCancellationRequested()) throw new JobCancelledError();
     if (groupSignal?.aborted) throw groupSignal.reason ?? error;
-    if (error instanceof Error && error.name === "TimeoutError") throw new Error("全书规划模型请求超时");
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error("全书规划模型请求超时", { cause: error });
+    }
     throw error;
   } finally { clearInterval(poll); clearTimeout(idle); clearTimeout(total); }
 }
@@ -326,6 +371,24 @@ export function createFullBookPlanJobHandler(
     const groupController = new AbortController();
     const pending: number[] = [];
     let completed = 0;
+    const recordTransientError = async (error: unknown) => {
+      if (!options.dataRoot || !(error instanceof TextModelCallError)) return;
+      const cause = error.cause instanceof Error ? error.cause : error;
+      const code = (cause as Error & { code?: unknown }).code;
+      await writeTextModelDiagnostic({
+        dataRoot: options.dataRoot,
+        jobId: context.job.id,
+        attempt: context.job.attempts,
+        stage: error.stage,
+        providerId: config.providerId,
+        model: config.model,
+        protocol: error.evidence.statistics?.protocol ?? config.protocol ?? "openai-response",
+        error: { name: cause.name, message: error.message, code: typeof code === "string" ? code : null },
+        statistics: error.evidence.statistics,
+        partialText: error.evidence.partialText,
+        partialTextTruncated: error.evidence.partialTextTruncated,
+      }).catch(() => undefined);
+    };
     for (const [index, request] of task.intervals.entries()) {
       const checkpoint = context.getCheckpoint("full-book-plan-interval", request.identityHash);
       if (checkpoint?.inputHash !== request.identityHash || checkpoint.output === undefined) {
@@ -347,10 +410,13 @@ export function createFullBookPlanJobHandler(
           const input = { kind: "interval" as const, request, ...(task.prompt ? { prompt: task.prompt } : {}) };
           const parse = fullBookPlanIntervalResponseParser(request);
           verified[index] = await callAndParse(context,
-            (signal, correction, onActivity) => callModel(config, fetchImpl, input, signal, onActivity, correction),
+            (signal, correction, onActivity, diagnosticStage) => callModel(config, fetchImpl, input, signal,
+              onActivity, correction, diagnosticStage),
             parse,
+            `${context.job.type}:interval:${request.identityHash}`,
             groupController.signal,
             options.retryDelayMs,
+            recordTransientError,
           );
           context.throwIfCancellationRequested();
           context.commitCheckpoint("full-book-plan-interval", request.identityHash, request.identityHash,

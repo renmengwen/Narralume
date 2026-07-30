@@ -16,6 +16,8 @@ import {
   updateJobProgress,
   type JobRecord,
 } from "./job-store.js";
+import { writeTextModelDiagnostic } from "./text-model-diagnostics.js";
+import { TextModelCallError, TextModelStreamError } from "./text-model-stream.js";
 
 export class JobCancelledError extends Error {
   constructor() {
@@ -46,6 +48,42 @@ export interface JobWorkerOptions {
   heartbeatMs?: number;
   retryDelayMs?: number;
   onError?: (error: unknown) => void;
+  textModelDiagnosticsRoot?: string;
+}
+
+function textModelError(value: unknown) {
+  const seen = new Set<unknown>();
+  let current = value;
+  for (let depth = 0; depth < 8 && current && !seen.has(current); depth += 1) {
+    if (current instanceof TextModelCallError || current instanceof TextModelStreamError) return current;
+    seen.add(current);
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}
+
+function diagnosticErrorIdentity(value: unknown) {
+  const seen = new Set<unknown>();
+  let current = value;
+  let root = value instanceof Error ? value : new Error(String(value));
+  let code: string | null = null;
+  for (let depth = 0; depth < 8 && current && !seen.has(current); depth += 1) {
+    seen.add(current);
+    if (current instanceof Error) root = current;
+    const candidate = (current as { code?: unknown }).code;
+    if (code === null && typeof candidate === "string") code = candidate;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return { name: root.name, code };
+}
+
+function frozenModel(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { providerId: "unknown", model: "unknown" };
+  const value = payload as { providerId?: unknown; model?: unknown };
+  return {
+    providerId: typeof value.providerId === "string" ? value.providerId : "unknown",
+    model: typeof value.model === "string" ? value.model : "unknown",
+  };
 }
 
 export class JobWorker {
@@ -54,6 +92,7 @@ export class JobWorker {
   readonly heartbeatMs: number;
   readonly retryDelayMs: number;
   readonly onError: (error: unknown) => void;
+  readonly textModelDiagnosticsRoot: string | undefined;
   #active = false;
   #stopRequested = false;
   #loop: Promise<void> | undefined;
@@ -70,6 +109,7 @@ export class JobWorker {
     this.heartbeatMs = options.heartbeatMs ?? Math.max(1_000, Math.floor(this.leaseMs / 3));
     this.retryDelayMs = options.retryDelayMs ?? 1_000;
     this.onError = options.onError ?? (() => undefined);
+    this.textModelDiagnosticsRoot = options.textModelDiagnosticsRoot;
     this.#jobTypes = Object.keys(handlers);
     if (!this.workerId) throw new Error("Worker ID 不能为空");
     if (!Number.isSafeInteger(this.leaseMs) || !Number.isSafeInteger(this.heartbeatMs) ||
@@ -148,6 +188,39 @@ export class JobWorker {
             error instanceof Error ? error.message : String(error),
             this.retryDelayMs,
           );
+          if (this.textModelDiagnosticsRoot) {
+            const diagnostic = textModelError(error);
+            const stream = diagnostic instanceof TextModelCallError
+              ? diagnostic.evidence
+              : diagnostic === undefined ? undefined : {
+                statistics: diagnostic.statistics,
+                partialText: diagnostic.partialText,
+                partialTextTruncated: diagnostic.partialTextTruncated,
+              };
+            const model = frozenModel(job.payload);
+            const identity = diagnosticErrorIdentity(error);
+            try {
+              await writeTextModelDiagnostic({
+                dataRoot: this.textModelDiagnosticsRoot,
+                jobId: job.id,
+                attempt: job.attempts,
+                stage: diagnostic instanceof TextModelCallError ? diagnostic.stage : job.type,
+                providerId: model.providerId,
+                model: model.model,
+                protocol: stream?.statistics?.protocol ?? "unknown",
+                error: {
+                  name: identity.name,
+                  message: error instanceof Error ? error.message : String(error),
+                  code: identity.code,
+                },
+                statistics: stream?.statistics,
+                partialText: stream?.partialText,
+                partialTextTruncated: stream?.partialTextTruncated,
+              });
+            } catch (diagnosticError) {
+              try { this.onError(diagnosticError); } catch { /* 诊断失败不得覆盖原 Job 错误。 */ }
+            }
+          }
         }
       }
       return true;

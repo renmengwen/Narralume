@@ -27,6 +27,7 @@ import { getScriptApproval, requireApprovedScriptForProduction } from "./script-
 import { createSeriesPipelineRun, mapSeriesPipelineScriptJob } from "./series-pipeline-store.js";
 import { listScriptVersions } from "./script-version-store.js";
 import { textModelConcurrencyGate } from "./text-model-concurrency.js";
+import { rememberTextModelEvidence, TextModelCallError } from "./text-model-stream.js";
 
 const config: ChapterTextModelConfig = {
   baseUrl: "https://example.invalid/v1",
@@ -180,6 +181,38 @@ test("Responses SSE 仅在明确成功终态后返回完整骨架", async () => 
   assert.deepEqual(result, { beats: [{ intent: "完整", sourceIndexes: [0] }] });
 });
 
+test("长稿 SSE 的 JSON 解析错误保留调用阶段、流统计与有界正文", async () => {
+  const generate = createOpenAiEpisodeScriptGenerator(config, (async () => new Response(
+    `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "not-json" })}\n\n` +
+      `data: ${JSON.stringify({ type: "response.completed" })}\n\n`,
+    { headers: { "content-type": "text/event-stream", "x-request-id": "req-script" } },
+  )) as typeof fetch);
+  let caught: unknown;
+  try {
+    await generate({
+      stage: "skeleton",
+      diagnosticStage: "episode-script.skeleton.initial",
+      episode: { id: "episode", storyArc: "进入墓道", recap: null, nextHook: null, targetDurationSeconds: 120 },
+      characterBudget: 400,
+      calibration: { identity: "provisional" },
+      sources: [],
+      signal: new AbortController().signal,
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.ok(caught instanceof TextModelCallError);
+  assert.equal(caught.stage, "episode-script.skeleton.initial");
+  assert.match(caught.message, /无效 JSON/u);
+  assert.equal(caught.evidence.partialText, "not-json");
+  assert.equal(caught.evidence.partialTextTruncated, false);
+  assert.equal(caught.evidence.statistics?.responseFormat, "sse");
+  assert.equal(caught.evidence.statistics?.eventCount, 2);
+  assert.equal(caught.evidence.statistics?.terminalReceived, true);
+  assert.deepEqual(caught.evidence.statistics?.requestIds, { "x-request-id": "req-script" });
+});
+
 test("长稿模型调用使用 180 秒首包与空闲、900 秒总上限", () => {
   assert.equal(EPISODE_SCRIPT_GENERATION_CONTRACT_VERSION, 5);
   assert.equal(EPISODE_SCRIPT_GENERATION_TIMEOUT_MS, 180_000);
@@ -255,6 +288,94 @@ function successfulGenerator(observe?: (input: Parameters<GenerateEpisodeScript>
     })) };
   };
 }
+
+async function directHandlerError(
+  context: Awaited<ReturnType<typeof fixture>>,
+  generate: GenerateEpisodeScript,
+  contract?: Parameters<typeof enqueueEpisodeScriptGenerationJob>[5],
+) {
+  const queued = await enqueueEpisodeScriptGenerationJob(context.database, context.dataRoot, config, {
+    payload: request,
+    maxAttempts: 1,
+  }, undefined, contract);
+  const handler = createEpisodeScriptGenerationJobHandler(context.database, context.dataRoot, config, generate);
+  let caught: unknown;
+  try {
+    await handler({
+      job: queued.job,
+      reportProgress() {},
+      isCancellationRequested: () => false,
+      throwIfCancellationRequested() {},
+      getCheckpoint: () => undefined,
+      commitCheckpoint() { throw new Error("测试未预期写入 checkpoint"); },
+    });
+  } catch (error) {
+    caught = error;
+  }
+  return caught;
+}
+
+test("长稿各阶段合同错误携带具体 beat 与 initial/correction 调用阶段", async (t) => {
+  const evidence = { partialText: "model-result", partialTextTruncated: false };
+  const prompt = {
+    skeletonProductVersion: "episode-skeleton-product-v1" as const,
+    beatProductVersion: "finished-narration-beat-product-v1" as const,
+    profileRevision: 1,
+    profileHash: "a".repeat(64),
+    instructions: "保持第一人称。",
+  };
+  const cases: Array<{
+    name: string;
+    expectedStage: string;
+    contract?: Parameters<typeof enqueueEpisodeScriptGenerationJob>[5];
+    generate: GenerateEpisodeScript;
+  }> = [
+    {
+      name: "skeleton correction",
+      expectedStage: "episode-script.skeleton.correction-1",
+      generate: async () => rememberTextModelEvidence({
+        beats: [{ intent: "遗漏来源", sourceIndexes: [0] }],
+      }, evidence),
+    },
+    {
+      name: "faithful beat",
+      expectedStage: "episode-script.faithful.beat-1.initial",
+      generate: async (input) => input.stage === "skeleton"
+        ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+        : rememberTextModelEvidence({ text: "" }, evidence),
+    },
+    {
+      name: "packaged initial",
+      expectedStage: "episode-script.packaged.initial",
+      generate: async (input) => input.stage === "skeleton"
+        ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+        : input.stage === "faithful"
+          ? { text: textForBudget(input.characterBudget, "原著还原稿") }
+          : rememberTextModelEvidence({ paragraphs: [] }, evidence),
+    },
+    {
+      name: "finished correction",
+      expectedStage: "episode-script.finished.beat-1.correction-1",
+      contract: { version: EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION, prompt },
+      generate: async (input) => input.stage === "skeleton"
+        ? { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] }
+        : rememberTextModelEvidence({ paragraphs: [] }, evidence),
+    },
+  ];
+
+  for (const item of cases) await t.test(item.name, async () => {
+    const context = await fixture();
+    try {
+      const caught = await directHandlerError(context, item.generate, item.contract);
+      assert.ok(caught instanceof TextModelCallError);
+      assert.equal(caught.stage, item.expectedStage);
+      assert.equal(caught.evidence.partialText, "model-result");
+    } finally {
+      context.connection.close();
+      await rm(context.dataRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 test("v6 逐 beat 持久恢复并只创建 standalone 成片旁白", async () => {
   const context = await fixture();

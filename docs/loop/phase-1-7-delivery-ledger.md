@@ -729,6 +729,24 @@ PC-02 当前 checkpoint：
 | 业务提交 / 租约 | `4a1b85c664ec8c2ba64388d160c9cc5d3280ab1b fix(auto): 改为单章分析并修复失败投影`；14 个业务/测试文件与本 Ledger 控制提交分离。后端、前端与只读 Review 租约均已释放；未 stage/commit/push 任何 Worker 变更。 |
 | 恢复入口 | 从分支 `codex/chapter-events-single-request` 的业务提交 `4a1b85c664ec8c2ba64388d160c9cc5d3280ab1b` 及其后本 Ledger 控制提交恢复；不得自动操作真实 Run `pipeline_ed769ca2-d96d-41c3-a2db-aaef99c7380e`，不得读写默认数据库或启动 3101/5174，不得推送或合并 `dev/main`。 |
 
+## 2026-07-30 全文本分析模型流式失败诊断
+
+| 字段 | 证据 |
+| --- | --- |
+| Task / Requirement | `TEXT-MODEL-STREAM-DIAGNOSTICS-01` / 所有调用分析文本模型的路径统一增加结构化流式统计；失败时持久化受限、无密钥、不可作为业务恢复输入的本地诊断，使原始字节、提取文本字节、SSE 事件类型、终止状态与供应商请求 ID 可定位。 |
+| 状态 / 基线 | `verified`；基线 `dev@c842b8b`，业务提交 `9ae30caa030378bd3b15633234cd87a69d227bd3`。用户明确授权立即实现，但未授权重试当前真实付费世界观 Job；本轮未调用真实模型、未修改默认 SQLite、未重启 3101/5174、未合并 `main`、未推送。 |
+| 来源与采用 | 按 `DramaClaw → Toonflow → LumenX → LocalMiniDrama → MuseDock` 冻结顺序核查，本机仍只有 MuseDock；MuseDock `661bc6d1b4a84ecee466657a64f7e26698262190` 未发现可直接复制的文本 SSE 结构化统计/受限失败正文闭包，登记为 `reference-only`。实现采用 Narralume `internal-port`：复用 `text-model-stream.ts`、现有七个文本模型调用边界、Job identity/data root 和 Node 标准库；不新增依赖、数据库表、队列或第二套业务状态。 |
+| 流式统计写租约 | `stream_stats_worker`：仅 `apps/server/src/text-model-stream.ts`、`apps/server/src/text-model-stream.test.ts`；实现协议无关的有界统计/类型化错误与最小回归，排除调用点、诊断存储、Ledger、默认数据根、端口、package/lock、Git index。 |
+| 诊断存储写租约 | `diagnostic_store_worker`：仅新增 `apps/server/src/text-model-diagnostics.ts`、`apps/server/src/text-model-diagnostics.test.ts`；本地原子写、固定目录/安全文件名、最多 1 MiB 部分提取文本、Hash/截断/统计，不接收或持久化 API Key/Authorization/完整 Prompt，排除调用点、Ledger、默认数据根、端口、package/lock、Git index。 |
+| 调用点审计租约 | `model_callsite_auditor`：只读审计所有 `textModelConcurrencyGate.run` / `streamedText` / 非 SSE fallback，列出七个真实调用边界、可用 jobId/attempt/stage/dataRoot、集成缺口与最小测试；不得写文件、读取密钥/默认数据库、调用模型或操作 Git index。 |
+| Coordinator 集成租约 | 主窗口保留七个现有调用文件、必要的 handler/app 参数接线与既有测试、Ledger、验证、Review 和 Git index；待并行产物完成后统一集成，确保 SSE 与非 SSE 错误都产生同一有界诊断，成功路径不落失败正文，诊断不参与 checkpoint/业务恢复/项目包。 |
+| 实现证据 | `text-model-stream.ts` 统一记录 `sse/json` 响应格式、raw/extracted bytes、固定事件类型、明确终态、Content-Type/Length 与 request ID 白名单；SSE/JSON reader、超限、Abort/Timeout、合法 envelope 缺正文、成功返回后 JSON/领域合同失败均携带最多 1 MiB UTF-8 完整正文。七个生产 HTTP 调用点与 P2 real gate 全部接入具体调用阶段；全书规划每次可继续的 transient transport retry 也独立落盘。 |
+| 存储与隔离 | 诊断固定写入 `<dataRoot>/diagnostics/text-model`，随机唯一文件名、同目录临时文件原子发布、`realpath` 边界拒绝 symlink/junction 逃逸；所有文件标记 `untrusted`、`recoveryEligible: false`、`containsPotentiallySensitiveContent: true`、`confidentialityBoundary: data-root`。不接收请求 Prompt/API Key/Authorization，响应头只保留固定请求 ID 白名单；诊断失败不覆盖原 Job 状态、错误或 checkpoint。Windows 权限继承 data root ACL，不宣称 `0o600` 提供独占 ACL。 |
+| Review | Spec Review `PASS`；Security Review `PASS`；Code Quality Review `PASS`。已关闭 `traceparent` 丢失、超时 cause 截断、成功收流后合同失败无证据、阶段过粗、JSON fallback reader/envelope 盲区、重复文件覆盖、目录链接逃逸、敏感标记假阴性、重试尝试丢失和根错误类型退化。 |
+| 验证 | 聚焦诊断/调用链回归最终 PASS；Server TypeScript PASS；Server 全量 `481 PASS / 0 FAIL / 1 SKIP`，唯一 SKIP 为既有 Windows 普通文件 symlink 权限门禁；Web 全量 `111/111 PASS`；根 build PASS（Vite 142 modules，主 JS `514.20 kB`，仅既有大包 warning）；`git diff --check` PASS，仅 LF→CRLF 提示。 |
+| 明确未执行 | 未发起任何真实模型请求，未重试当前失败的全书世界观 Job，未主动读写默认 SQLite、Run/Job/checkpoint，未自动批准内容或媒体。旧失败任务不会凭本提交自动补出历史模型正文；只有部署本提交后的新调用才会生成诊断。 |
+| 提交 / 恢复入口 | 业务提交 `9ae30caa030378bd3b15633234cd87a69d227bd3 feat(diagnostics): 统一记录文本模型失败证据`；从 `dev` 该提交恢复。后续若用户明确授权付费重试，先确认运行服务已包含该提交，再从现有 Job/Run 正式恢复入口重试，不得直接改 SQLite 或绕过人工门禁。 |
+
 ## 决策与剩余风险
 
 - 2026-07-29：`AUTO-03/04-CONCURRENCY-PROGRESS-01` 来源与实施边界：按冻结顺序核查，本机缺少 DramaClaw、Toonflow、LumenX、LocalMiniDrama；MuseDock 当前 checkout 仅将 `scripts/quality-eval/index.js` 的 rolling worker pool 与 `frontend-react/src/components/creative/creativeProgress.js` 的并发上限文案登记为 `reference-only`，不复制其评测脚本或 Creative UI。实现采用 Narralume `internal-port`：复用 `book-story-bible-job-handler.ts` 已验证的有界 worker pool、`series_pipeline_runs.chapter_concurrency`、现有 Job progress、Run API 三秒轮询和 OpenDesign `narralume-product` 进度行。全书规划 interval 可按本书冻结并发执行，final 仍等待全部 interval；同集 faithful beats 可并发，skeleton 与 packaged 维持前后依赖；跨 Episode 必须保留 `scriptHandoff` 顺序，不并发。Run API 透传当前 Job 的真实 progress/attempts，Web 同时保留已冻结 Episode 与已持久双稿计数，不把中间步骤伪装成完成产物；不新增依赖、队列、Store、migration 或模型 token 进度。

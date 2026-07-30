@@ -442,6 +442,37 @@ test("v6 逐 beat 持久恢复并只创建 standalone 成片旁白", async () =>
   }
 });
 
+test("v6 beat 纠正稿仅因句末标点超限时确定性收敛", async () => {
+  const context = await fixture();
+  const prompt = {
+    skeletonProductVersion: "episode-skeleton-product-v1" as const,
+    beatProductVersion: "finished-narration-beat-product-v1" as const,
+    profileRevision: 1,
+    profileHash: "a".repeat(64),
+    instructions: "保持第一人称。",
+  };
+  let finishedCalls = 0;
+  try {
+    const result = await run(context, async (input) => {
+      if (input.stage === "skeleton") return { beats: [{ intent: "完整", sourceIndexes: [0, 1, 2] }] };
+      assert.equal(input.stage, "finished");
+      finishedCalls += 1;
+      return { paragraphs: [{
+        text: `${"旁".repeat(input.maximumCharacterCount)}。`,
+        sourceIndexes: input.beat.sourceIndexes,
+      }] };
+    }, 1, { version: EPISODE_SCRIPT_GENERATION_V6_CONTRACT_VERSION, prompt });
+    assert.equal(result.job.status, "succeeded");
+    assert.equal(finishedCalls, 2);
+    const version = listScriptVersions(context.database, "episode")[0]!;
+    assert.equal([...version.paragraphs[0]!.text].length, 476);
+    assert.equal(version.paragraphs[0]!.text.endsWith("。"), false);
+  } finally {
+    context.connection.close();
+    await rm(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("流水线稿件按本书配置并发忠实稿 beat，包装稿等待全部忠实稿", async () => {
   const context = await fixture();
   try {

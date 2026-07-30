@@ -516,6 +516,22 @@ function validateScriptLength(
   return actualCharacterCount;
 }
 
+function trimTrailingPunctuationToLimit<T extends { text: string }>(paragraphs: T[], maximumCharacterCount: number) {
+  let overflow = paragraphs.reduce((sum, paragraph) => sum + [...paragraph.text].length, 0) - maximumCharacterCount;
+  if (overflow <= 0) return paragraphs;
+  const trimmed = paragraphs.map((paragraph) => ({ ...paragraph }));
+  for (let index = trimmed.length - 1; index >= 0 && overflow > 0; index -= 1) {
+    const characters = [...trimmed[index]!.text];
+    // ponytail: only discard trailing non-spoken punctuation; add another model correction only if real prose overflows recur.
+    while (overflow > 0 && characters.length > 1 && /[\p{P}\p{Z}]/u.test(characters.at(-1)!)) {
+      characters.pop();
+      overflow -= 1;
+    }
+    trimmed[index]!.text = characters.join("");
+  }
+  return overflow === 0 ? trimmed : paragraphs;
+}
+
 function validatePackagedDifference(
   faithfulParagraphs: ReadonlyArray<{ text: string }>,
   packagedParagraphs: ReadonlyArray<{ text: string }>,
@@ -773,6 +789,7 @@ export function createEpisodeScriptGenerationJobHandler(
               result = await generateBeat(error instanceof Error ? error.message : "输出合同无效", previous);
               try {
                 restored = validateFinishedBeatResult(result, beat);
+                restored = trimTrailingPunctuationToLimit(restored, limits.maximumCharacterCount);
                 validateScriptLength(`第 ${index + 1} 个成片旁白 beat`, restored, limits);
               } catch (correctionError) {
                 throw textModelResultError(
